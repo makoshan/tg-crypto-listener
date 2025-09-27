@@ -46,6 +46,7 @@ class TelegramListener:
             "ai_processed": 0,
             "ai_actions": 0,
             "ai_errors": 0,
+            "ai_skipped": 0,
             "translations": 0,
             "translation_errors": 0,
             "start_time": datetime.now(),
@@ -211,8 +212,34 @@ class TelegramListener:
                 if signal_result:
                     self._update_ai_stats(signal_result)
 
+            should_skip_forward = False
+            if (
+                self.config.AI_SKIP_NEUTRAL_FORWARD
+                and signal_result
+                and signal_result.status == "skip"
+                and signal_result.summary != "AI disabled"
+            ):
+                should_skip_forward = True
+                self.stats["ai_skipped"] += 1
+                logger.info(
+                    "🤖 AI 评估为低优先级，跳过转发: source=%s action=%s confidence=%.2f",
+                    source_name,
+                    signal_result.action,
+                    signal_result.confidence,
+                )
+
             if translated_text and translated_text != message_text:
                 display_text = f"{translated_text}\n\n—— 原文 ——\n{message_text}"
+
+            if should_skip_forward:
+                await self._persist_event(
+                    source_name,
+                    message_text,
+                    translated_text,
+                    signal_result,
+                    False,
+                )
+                return
 
             ai_kwargs = self._build_ai_kwargs(signal_result)
 
@@ -300,7 +327,7 @@ class TelegramListener:
             await asyncio.sleep(300)
             runtime = datetime.now() - self.stats["start_time"]
             logger.info(
-                "\n📊 **运行统计** (运行时间: %s)\n   • 总接收: %s\n   • 已转发: %s\n   • 关键词过滤: %s\n   • 重复消息: %s\n   • 错误次数: %s\n   • 翻译成功: %s\n   • 翻译错误: %s\n   • AI 已处理: %s\n   • AI 行动: %s\n   • AI 错误: %s\n",
+                "\n📊 **运行统计** (运行时间: %s)\n   • 总接收: %s\n   • 已转发: %s\n   • 关键词过滤: %s\n   • 重复消息: %s\n   • 错误次数: %s\n   • 翻译成功: %s\n   • 翻译错误: %s\n   • AI 已处理: %s\n   • AI 行动: %s\n   • AI 跳过: %s\n   • AI 错误: %s\n",
                 str(runtime).split(".")[0],
                 self.stats["total_received"],
                 self.stats["forwarded"],
@@ -311,6 +338,7 @@ class TelegramListener:
                 self.stats["translation_errors"],
                 self.stats["ai_processed"],
                 self.stats["ai_actions"],
+                self.stats["ai_skipped"],
                 self.stats["ai_errors"],
             )
 

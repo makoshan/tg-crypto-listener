@@ -79,6 +79,27 @@ def contains_keywords(text: str, keywords: Set[str]) -> bool:
     return any(keyword in text_lower for keyword in keywords)
 
 
+ACTION_LABELS = {
+    "buy": "买入",
+    "sell": "卖出",
+    "observe": "观望",
+}
+
+STRENGTH_LABELS = {
+    "low": "低",
+    "medium": "中",
+    "high": "高",
+}
+
+RISK_FLAG_LABELS = {
+    "price_volatility": "价格波动",
+    "liquidity_risk": "流动性风险",
+    "regulation_risk": "合规风险",
+    "confidence_low": "置信度低",
+    "data_incomplete": "信息不完整",
+}
+
+
 def format_forwarded_message(
     original_text: str,
     source_channel: str,
@@ -103,26 +124,29 @@ def format_forwarded_message(
     ]
 
     if ai_summary:
+        action_value = ACTION_LABELS.get(ai_action or "observe", ai_action or "observe")
         confidence_text = (
-            f"置信度 {ai_confidence:.2f}"
-            if ai_confidence is not None
-            else "置信度未知"
+            f"{ai_confidence:.2f}" if ai_confidence is not None else "未知"
         )
-        strength_text = f"强度 {ai_strength}" if ai_strength else ""
-        meta = " / ".join(filter(None, [confidence_text, strength_text]))
-        action_text = f"建议动作: {ai_action}" if ai_action else "建议动作: 观察"
-        action_line = f"{action_text} ({meta})" if meta else action_text
+        meta_text = [f"置信度 {confidence_text}"]
+        if ai_strength:
+            strength_cn = STRENGTH_LABELS.get(ai_strength, ai_strength)
+            meta_text.append(f"强度 {strength_cn}")
+        action_line = f"建议动作: {action_value}（{' / '.join(meta_text)}）"
         parts.extend(
             [
                 "🤖 **AI 信号**:\n",
-                f"{ai_summary}\n",
+                f"AI 摘要: {ai_summary}\n",
                 f"{action_line}\n",
             ]
         )
         if ai_notes:
-            parts.append(f"说明: {ai_notes}\n")
+            parts.append(f"理由: {ai_notes}\n")
         if ai_risk_flags:
-            parts.append(f"风险提示: {', '.join(ai_risk_flags)}\n")
+            localized_flags = [
+                RISK_FLAG_LABELS.get(flag, flag) for flag in ai_risk_flags
+            ]
+            parts.append(f"风险提示: {', '.join(localized_flags)}\n")
         parts.append("\n")
 
     return "".join(parts)
