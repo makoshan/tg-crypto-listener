@@ -1,0 +1,15 @@
+{
+  "name": "tg-crypto-listener",
+  "version": "1.0.0",
+  "description": "Telegram crypto news listener",
+  "scripts": {
+    "start": "pm2 start ecosystem.config.js",
+    "stop": "pm2 stop tg-listener",
+    "restart": "pm2 restart tg-listener",
+    "status": "pm2 status",
+    "logs": "pm2 logs tg-listener",
+    "monitor": "pm2 monit"
+  },
+  "dependencies": {},
+  "devDependencies": {}
+}

@@ -1,0 +1,77 @@
+"""Configuration loader for Telegram listener."""
+
+from __future__ import annotations
+
+import os
+from typing import List, Set
+
+from dotenv import load_dotenv
+
+load_dotenv()
+
+
+def _as_bool(value: str, default: bool = False) -> bool:
+    if value is None:
+        return default
+    return value.lower() in {"1", "true", "yes", "on"}
+
+
+class Config:
+    """Application configuration loaded from .env."""
+
+    TG_API_ID: int = int(os.getenv("TG_API_ID", "0"))
+    TG_API_HASH: str = os.getenv("TG_API_HASH", "")
+    TG_PHONE: str = os.getenv("TG_PHONE", "")
+
+    TARGET_CHAT_ID: str = os.getenv("TARGET_CHAT_ID", "")
+    TARGET_CHAT_ID_BACKUP: str = os.getenv("TARGET_CHAT_ID_BACKUP", "")
+
+    SOURCE_CHANNELS: List[str] = [
+        channel.strip()
+        for channel in os.getenv("SOURCE_CHANNELS", "").split(",")
+        if channel.strip()
+    ]
+
+    FILTER_KEYWORDS: Set[str] = {
+        keyword.strip().lower()
+        for keyword in os.getenv("FILTER_KEYWORDS", "").split(",")
+        if keyword.strip()
+    }
+
+    DEDUP_WINDOW_HOURS: int = int(os.getenv("DEDUP_WINDOW_HOURS", "24"))
+
+    LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
+
+    SESSION_PATH: str = "./session/tg_session"
+
+    # AI configuration
+    AI_ENABLED: bool = _as_bool(os.getenv("AI_ENABLED", "false"))
+    GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
+    AI_MODEL_NAME: str = os.getenv("AI_MODEL_NAME", "gemini-2.5-flash-lite")
+    AI_SIGNAL_THRESHOLD: float = float(os.getenv("AI_SIGNAL_THRESHOLD", "0.6"))
+    AI_TIMEOUT_SECONDS: float = float(os.getenv("AI_TIMEOUT_SECONDS", "8"))
+    AI_MAX_CONCURRENCY: int = int(os.getenv("AI_MAX_CONCURRENCY", "2"))
+
+    TRANSLATION_ENABLED: bool = _as_bool(os.getenv("TRANSLATION_ENABLED", "true"))
+    TRANSLATION_TIMEOUT_SECONDS: float = float(os.getenv("TRANSLATION_TIMEOUT_SECONDS", "6"))
+    DEEPL_API_KEY: str = os.getenv("DEEPL_API_KEY", "")
+    DEEPL_API_URL: str = os.getenv("DEEPL_API_URL", "https://api.deepl.com/v2/translate")
+
+    @classmethod
+    def validate(cls) -> bool:
+        """Ensure required config values exist."""
+        required_values = [
+            ("TG_API_ID", cls.TG_API_ID),
+            ("TG_API_HASH", cls.TG_API_HASH),
+            ("TG_PHONE", cls.TG_PHONE),
+            ("TARGET_CHAT_ID", cls.TARGET_CHAT_ID),
+        ]
+
+        missing = [name for name, value in required_values if not value]
+        if missing:
+            print(f"❌ 缺少必需配置: {', '.join(missing)}")
+            return False
+
+        if cls.AI_ENABLED and not cls.GEMINI_API_KEY:
+            print("⚠️ 已启用 AI，但 GEMINI_API_KEY 未配置，将自动降级为传统模式")
+        return True
