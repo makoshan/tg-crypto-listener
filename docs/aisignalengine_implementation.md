@@ -36,7 +36,7 @@ src/
   - 暴露 `async def generate_signal(payload: GeminiRequest) -> GeminiResponse`。
 - 内部处理：请求构建、超时控制、错误重试、HTTP 429 退避。
   - 当前实现内置指数退避：超时或临时网络错误会按 `AI_RETRY_ATTEMPTS` 进行重试。
-  - 示例：`pip install -q -U google-genai` 后即可使用 `from google import genai`。
+  - 示例：`uv pip install --upgrade google-genai` 后即可使用 `from google import genai`。
 - 错误处理：
   - 超时/异常 → 抛出自定义 `AiServiceError`。
   - 日志记录请求上下文（脱敏后）。
@@ -113,7 +113,7 @@ class AiSignalEngine:
 - 在 TG 通知中呈现行动矩阵指标，方便人工复核。
 - 结合事件-收益统计自动调节 `AI_SIGNAL_THRESHOLD`。\n
 ## 12. 依赖与部署注意
-- 在 `requirements.txt` 添加：`google-genai`, `httpx`, `pydantic`（用于请求/响应校验）。
+- 在 `requirements.txt` 添加：`google-genai`, `httpx`, `pydantic`（用于请求/响应校验），并使用 `uv pip sync requirements.txt` 快速拉取依赖。
 - `.env` 新增 AI 配置项，并在 PM2 `env` 中暴露 `GEMINI_API_KEY`。
 - 网络受限环境需配置代理或允许出站访问 Google API。
 
@@ -127,5 +127,4 @@ class AiSignalEngine:
 
 
 # 如何执行代码
-python3 -m venv .venv && source .venv/bin/activate
-python -m src.listener
+uvx --with-requirements requirements.txt python -m src.listener
