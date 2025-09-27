@@ -23,6 +23,8 @@ src/
 - `AI_SIGNAL_THRESHOLD` (0-1)
 - `AI_TIMEOUT_SECONDS`
 - `AI_MAX_CONCURRENCY` (速率限制)
+- `AI_RETRY_ATTEMPTS` (重试次数，默认 1 次额外尝试)
+- `AI_RETRY_BACKOFF_SECONDS` (指数退避起始等待秒数)
 
 在 `.env` 中同步新增注释示例，并在 `Config.validate` 中当 `AI_ENABLED` 为 True 时检查必填字段。
 
@@ -32,7 +34,8 @@ src/
   - 通过 `GEMINI_API_KEY` 初始化。
   - 内部创建 `genai.Client(api_key=...)` 并调用 `client.models.generate_content`。
   - 暴露 `async def generate_signal(payload: GeminiRequest) -> GeminiResponse`。
-  - 内部处理：请求构建、超时控制、错误重试、HTTP 429 退避。
+- 内部处理：请求构建、超时控制、错误重试、HTTP 429 退避。
+  - 当前实现内置指数退避：超时或临时网络错误会按 `AI_RETRY_ATTEMPTS` 进行重试。
   - 示例：`pip install -q -U google-genai` 后即可使用 `from google import genai`。
 - 错误处理：
   - 超时/异常 → 抛出自定义 `AiServiceError`。
@@ -121,3 +124,8 @@ class AiSignalEngine:
 - `AiSignalEngine.from_config` 在初始化失败时记录日志，保持消息链路可用。
 - `_build_ai_kwargs` 将 AI 结果插入 `format_forwarded_message`，确保最终输出统一走 TG。
 - `_persist_event` 方法作为 Supabase 扩展点，后续可在此写入事件与交易记录。
+
+
+# 如何执行代码
+python3 -m venv .venv && source .venv/bin/activate
+python -m src.listener

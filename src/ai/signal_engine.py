@@ -91,6 +91,8 @@ class AiSignalEngine:
                 api_key=getattr(config, "GEMINI_API_KEY", ""),
                 model_name=getattr(config, "AI_MODEL_NAME", "gemini-2.5-flash-lite"),
                 timeout=getattr(config, "AI_TIMEOUT_SECONDS", 8.0),
+                max_retries=getattr(config, "AI_RETRY_ATTEMPTS", 1),
+                retry_backoff_seconds=getattr(config, "AI_RETRY_BACKOFF_SECONDS", 1.5),
             )
         except AiServiceError as exc:
             logger.warning("AI 初始化失败，将以降级模式运行: %s", exc, exc_info=True)
@@ -117,7 +119,12 @@ class AiSignalEngine:
             try:
                 response = await self._client.generate_signal(prompt)
             except AiServiceError as exc:
-                logger.warning("AI 调用失败: %s", exc, exc_info=True)
+                is_temporary = getattr(exc, "temporary", False)
+                logger.warning(
+                    "AI 调用失败: %s",
+                    exc,
+                    exc_info=not is_temporary,
+                )
                 return SignalResult(status="error", error=str(exc))
 
         logger.debug("AI 返回长度: %d", len(response.text))

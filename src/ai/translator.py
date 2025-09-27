@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import re
 from dataclasses import dataclass
 
-import httpx
-
 from .gemini_client import AiServiceError
+
+try:  # pragma: no cover - optional dependency
+    import deepl
+except ImportError:  # pragma: no cover - runtime fallback
+    deepl = None  # type: ignore
 
 HAN_REGEX = re.compile(r"[\u4e00-\u9fff]")
 HANGUL_REGEX = re.compile(r"[\uac00-\ud7af]")
@@ -37,6 +39,12 @@ class Translator:
         self._timeout = timeout
         self._api_key = api_key
         self._api_url = api_url
+        self._client: "deepl.DeepLClient | None" = None
+
+        if self.enabled:
+            if deepl is None:
+                raise AiServiceError("deepl SDK 未安装，请先在环境中安装该依赖")
+            self._client = self._init_client(api_key, api_url)
 
     async def translate(self, text: str) -> TranslationResult:
         if not text.strip():
@@ -65,21 +73,55 @@ class Translator:
         )
 
     async def _call_deepl(self, text: str) -> str:
-        async with httpx.AsyncClient(timeout=self._timeout) as client:
-            response = await client.post(
-                self._api_url,
-                data={
-                    "auth_key": self._api_key,
-                    "text": text,
-                    "target_lang": "ZH",
-                },
-            )
-            response.raise_for_status()
-            payload = response.json()
-            translations = payload.get("translations")
-            if not translations:
-                raise AiServiceError("DeepL 未返回翻译结果")
-            return translations[0].get("text", text)
+        if not self._client:
+            raise AiServiceError("DeepL 客户端未初始化")
+        return await asyncio.to_thread(self._translate_sync, text)
+
+    def _translate_sync(self, text: str) -> str:
+        if not self._client:
+            raise AiServiceError("DeepL 客户端未初始化")
+        try:
+            result = self._client.translate_text(text, target_lang="ZH")
+        except Exception as exc:  # pragma: no cover - SDK raises runtime errors
+            deepl_exc = getattr(deepl, "DeepLException", tuple())
+            if deepl is not None and isinstance(exc, deepl_exc):
+                raise AiServiceError(str(exc)) from exc
+            raise AiServiceError(str(exc)) from exc
+
+        translated_text = self._extract_text(result)
+        if not translated_text.strip():
+            raise AiServiceError("DeepL 未返回翻译结果")
+        return translated_text
+
+    def _init_client(self, api_key: str, api_url: str) -> "deepl.DeepLClient":
+        client_kwargs: dict[str, str] = {}
+        client_cls = getattr(deepl, "DeepLClient", None)
+        if client_cls is None:  # pragma: no cover - legacy SDK fallback
+            raise AiServiceError("当前 deepl SDK 版本缺少 DeepLClient 类，请升级到官方最新版 deepl")
+        normalized_url = (api_url or "").strip()
+        if normalized_url:
+            normalized_url = normalized_url.rstrip("/")
+            if normalized_url.endswith("/v2/translate"):
+                normalized_url = normalized_url[: -len("/v2/translate")]
+            if normalized_url:
+                client_kwargs["server_url"] = normalized_url
+
+        try:
+            return client_cls(api_key, **client_kwargs)
+        except TypeError:
+            client_kwargs.pop("server_url", None)
+            return client_cls(api_key)
+        except Exception as exc:  # pragma: no cover - SDK initialisation issues
+            raise AiServiceError(str(exc)) from exc
+
+    @staticmethod
+    def _extract_text(result: object) -> str:
+        if isinstance(result, str):
+            return result
+        if isinstance(result, (list, tuple)) and result:
+            return Translator._extract_text(result[0])
+        return str(getattr(result, "text", ""))
+
 
 
 def detect_language(text: str) -> str:
