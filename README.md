@@ -33,6 +33,23 @@ pip install -r requirements.txt
 python -m src.listener
 ```
 
+### 使用 PM2 常驻（推荐生产环境）
+项目附带 `ecosystem.config.js` 和 `package.json` 中的脚本，可通过 npm + PM2 管理进程。配置使用 `uvx --with-requirements requirements.txt python -m src.listener` 自动拉起依赖：
+
+```bash
+# 一次性安装依赖并启动
+npm install
+npm run start
+
+# 停止 / 重启 / 查看状态 / 查看日志
+npm run stop
+npm run restart
+npm run status
+npm run logs
+```
+
+PM2 会读取 `.env`，守护进程并在崩溃后自动拉起，也可配合 `pm2 monit` 查看实时资源占用。
+
 ## 关键配置（`.env`）
 | 变量 | 说明 |
 | --- | --- |

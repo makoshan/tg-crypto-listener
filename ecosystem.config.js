@@ -1,10 +1,9 @@
 module.exports = {
   apps: [{
     name: 'tg-listener',
-    script: 'python',
-    args: ['-m', 'src.listener'],
+    script: 'uvx',
+    args: ['--with-requirements', 'requirements.txt', 'python', '-m', 'src.listener'],
     cwd: '/Users/thursday/Documents/project/MyTG_Bot/tg-crypto-listener',
-    interpreter: '/Users/thursday/Documents/project/MyTG_Bot/tg-crypto-listener/.venv/bin/python',
 
     // 重启策略
     autorestart: true,
