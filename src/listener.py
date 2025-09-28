@@ -279,6 +279,9 @@ class TelegramListener:
         return {
             "ai_summary": signal_result.summary,
             "ai_action": signal_result.action,
+            "ai_direction": signal_result.direction,
+            "ai_event_type": signal_result.event_type,
+            "ai_asset": signal_result.asset,
             "ai_confidence": signal_result.confidence,
             "ai_strength": signal_result.strength,
             "ai_risk_flags": signal_result.risk_flags,

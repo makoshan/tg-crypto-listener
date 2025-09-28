@@ -17,6 +17,22 @@ logger = setup_logger(__name__)
 ALLOWED_ACTIONS = {"buy", "sell", "observe"}
 ALLOWED_DIRECTIONS = {"long", "short", "neutral"}
 ALLOWED_STRENGTH = {"low", "medium", "high"}
+ALLOWED_EVENT_TYPES = {
+    "listing",
+    "delisting",
+    "hack",
+    "regulation",
+    "funding",
+    "whale",
+    "liquidation",
+    "partnership",
+    "product_launch",
+    "governance",
+    "macro",
+    "celebrity",
+    "airdrop",
+    "other",
+}
 ALLOWED_RISK_FLAGS = {
     "price_volatility",
     "liquidity_risk",
@@ -46,6 +62,8 @@ class SignalResult:
 
     status: str
     summary: str = ""
+    event_type: str = "other"
+    asset: str = ""
     action: str = "observe"
     direction: str = "neutral"
     confidence: float = 0.0
@@ -132,15 +150,19 @@ class AiSignalEngine:
 
     def _parse_response(self, response: GeminiResponse) -> SignalResult:
         raw_text = response.text.strip()
+        normalized_text = self._prepare_json_text(raw_text)
 
+        asset = ""
         try:
-            data = json.loads(raw_text)
+            data = json.loads(normalized_text)
             logger.debug(
                 "AI JSON 解析成功: action=%s confidence=%.2f",
                 data.get("action"),
                 float(data.get("confidence", 0.0)),
             )
             summary = str(data.get("summary", "")).strip()
+            event_type = str(data.get("event_type", "other")).lower()
+            asset_field = data.get("asset", "")
             action = str(data.get("action", "observe")).lower()
             direction = str(data.get("direction", "neutral")).lower()
             strength = str(data.get("strength", "low")).lower()
@@ -149,24 +171,32 @@ class AiSignalEngine:
             if not isinstance(risk_flags, list):
                 risk_flags = [str(risk_flags)]
             notes = str(data.get("notes", "")).strip()
+            if isinstance(asset_field, (list, tuple)):
+                asset = ",".join(str(item).strip() for item in asset_field if str(item).strip())
+            else:
+                asset = str(asset_field).strip()
         except json.JSONDecodeError:
             logger.debug(
                 "AI 返回无法解析为 JSON，使用纯文本摘要: %s",
-                raw_text[:120].replace("\n", " "),
+                normalized_text[:120].replace("\n", " "),
             )
-            summary = raw_text
+            summary = "AI 返回格式异常，已忽略原始内容"
+            event_type = "other"
+            asset = ""
             action = "observe"
             direction = "neutral"
             strength = "low"
             confidence = 0.0
-            risk_flags = []
+            risk_flags = ["confidence_low"]
             notes = ""
 
+        event_type = event_type if event_type in ALLOWED_EVENT_TYPES else "other"
         action = action if action in ALLOWED_ACTIONS else "observe"
         direction = direction if direction in ALLOWED_DIRECTIONS else "neutral"
         if strength not in ALLOWED_STRENGTH:
             strength = "low"
 
+        asset = asset.upper().strip()
         confidence = max(0.0, min(1.0, round(confidence, 2)))
         filtered_flags = []
         for flag in risk_flags:
@@ -183,6 +213,8 @@ class AiSignalEngine:
         return SignalResult(
             status=status,
             summary=summary,
+            event_type=event_type,
+            asset=asset,
             action=action,
             direction=direction,
             confidence=confidence,
@@ -191,6 +223,21 @@ class AiSignalEngine:
             raw_response=raw_text,
             notes=notes,
         )
+
+    @staticmethod
+    def _prepare_json_text(text: str) -> str:
+        """Strip Markdown/code fences and return best-effort JSON payload."""
+        candidate = text.strip()
+        if candidate.startswith("```") and candidate.endswith("```"):
+            candidate = candidate[3:-3].strip()
+        if candidate.lower().startswith("json"):
+            candidate = candidate[4:].strip("\n :")
+        if candidate.lower().startswith("python"):
+            candidate = candidate[6:].strip("\n :")
+        candidate = candidate.lstrip()
+        if candidate.startswith("{") or candidate.startswith("["):
+            return candidate
+        return candidate
 
 
 def build_signal_prompt(payload: EventPayload) -> str:
@@ -211,11 +258,12 @@ def build_signal_prompt(payload: EventPayload) -> str:
         "你是加密交易台的分析师，需从多语种快讯中快速提炼可交易信号。"
         "请基于给定 JSON 分析资讯重点，如包含多条信息，请综合判断后给出最具操作性的建议。"
         "输出要求：仅返回 JSON 字符串，不得添加 `json`、Markdown 或解释性文字。"
-        "JSON 字段：summary, event_type(listing|delisting|hack|regulation|funding|whale|liquidation|other),"
+        "JSON 字段：summary, event_type(listing|delisting|hack|regulation|funding|whale|liquidation|partnership|product_launch|governance|macro|celebrity|airdrop|other),"
+        "asset(主要受影响/需操作的币种，使用大写代码，多个用逗号分隔),"
         "action(buy|sell|observe), direction(long|short|neutral), confidence(0-1 保留两位小数),"
         "strength(low|medium|high), risk_flags(数组，枚举 price_volatility/liquidity_risk/regulation_risk/confidence_low/data_incomplete),"
         "notes(一句中文给出操作理由或关注点，可留空)。"
-        "字段规范：summary 最多 50 个汉字且不得包含换行；action 为 observe 时需说明原因；notes 避免与 summary 重复；confidence 与 strength 应匹配：<0.3 为 low、0.3-0.69 为 medium、≥0.7 为 high。"
+        "字段规范：summary 最多 50 个汉字且不得包含换行；asset 仅填写币种代码（如 BTC、ETH、SOL），多个标的用逗号分隔；action 为 observe 时需说明原因；notes 避免与 summary 重复；confidence 与 strength 应匹配：<0.3 为 low、0.3-0.69 为 medium、≥0.7 为 high。"
         "策略提示：优先评估消息对价格的潜在驱动，若存在正面/负面催化、交易所上线、巨额转账、政策变化等，请倾向给出 buy/sell 并说明依据。"
         "当资讯模糊或缺乏量化数据时可选择 observe，但需在 notes 给出补充信息或疑点。"
         "如 historical_reference 提供对比，请结合判断是否显著并在 notes 点明结论。"

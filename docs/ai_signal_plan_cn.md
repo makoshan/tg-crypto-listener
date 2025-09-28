@@ -18,7 +18,8 @@
   - 信息经济学：专注高价值新闻，控制处理成本；
   - 行为金融：市场反应滞后/过度，存在短期套利窗口。
 - 事件本体化（Event Ontology）：
-  - MVP：围绕上所/下架、黑客、监管、融资、巨鲸五类事件，使用行动矩阵映射交易指令；
+- MVP：围绕上所/下架、黑客、监管、融资、巨鲸、清算等核心快讯事件；
+- 扩展：补充合作集成、产品发布、治理提案、宏观动向、名人言论、空投激励等场景，使用行动矩阵映射交易指令；
   - 进阶：叠加轻确认层（盘口/成交量），最终演进为多模态权重。
 
 ## 4. 成熟度范围（Scope）
@@ -69,10 +70,11 @@
  - **输出格式**：要求模型仅返回 JSON 字符串，不得加 `json` 前缀或 Markdown 代码块。字段定义：
      ```json
      {
-       "summary": "一句话中文结论",
-       "event_type": "listing|delisting|hack|regulation|funding|whale|liquidation|other",
-       "action": "buy|sell|observe",
-       "direction": "long|short|neutral",
+      "summary": "一句话中文结论",
+      "event_type": "listing|delisting|hack|regulation|funding|whale|liquidation|partnership|product_launch|governance|macro|celebrity|airdrop|other",
+      "asset": "受影响的币种代码，多个用逗号分隔",
+      "action": "buy|sell|observe",
+      "direction": "long|short|neutral",
        "confidence": 0.0,
        "strength": "low|medium|high",
        "risk_flags": [""],

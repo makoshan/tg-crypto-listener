@@ -91,6 +91,29 @@ STRENGTH_LABELS = {
     "high": "高",
 }
 
+DIRECTION_LABELS = {
+    "long": "做多",
+    "short": "做空",
+    "neutral": "中性",
+}
+
+EVENT_TYPE_LABELS = {
+    "listing": "上线/挂牌",
+    "delisting": "下架/退市",
+    "hack": "安全/攻击",
+    "regulation": "监管/政策",
+    "funding": "融资/募资",
+    "whale": "巨鲸动向",
+    "liquidation": "清算/爆仓",
+    "partnership": "合作/集成",
+    "product_launch": "产品发布/主网",
+    "governance": "治理提案",
+    "macro": "宏观动向",
+    "celebrity": "名人言论",
+    "airdrop": "空投激励",
+    "other": "其他",
+}
+
 RISK_FLAG_LABELS = {
     "price_volatility": "价格波动",
     "liquidity_risk": "流动性风险",
@@ -106,6 +129,9 @@ def format_forwarded_message(
     timestamp: datetime,
     ai_summary: str | None = None,
     ai_action: str | None = None,
+    ai_direction: str | None = None,
+    ai_event_type: str | None = None,
+    ai_asset: str | None = None,
     ai_confidence: float | None = None,
     ai_strength: str | None = None,
     ai_risk_flags: list[str] | None = None,
@@ -114,13 +140,14 @@ def format_forwarded_message(
     """Return formatted message ready for forwarding."""
     ai_risk_flags = ai_risk_flags or []
     ai_notes = (ai_notes or "").strip()
+    ai_asset = (ai_asset or "").strip()
 
     parts = [
         "🔔 **加密新闻监听**\n\n",
-        f"📺 **来源**: {source_channel}\n",
-        f"⏰ **时间**: {timestamp.strftime('%Y-%m-%d %H:%M:%S')}\n\n",
-        "📝 **内容**:\n",
-        f"{original_text}\n\n",
+        f"📡 **来源**: {source_channel}\n",
+        f"🕒 **时间**: {timestamp.strftime('%Y-%m-%d %H:%M:%S')}\n\n",
+        "📝 **内容**\n",
+        f"{original_text.strip()}\n",
     ]
 
     if ai_summary:
@@ -128,25 +155,37 @@ def format_forwarded_message(
         confidence_text = (
             f"{ai_confidence:.2f}" if ai_confidence is not None else "未知"
         )
-        meta_text = [f"置信度 {confidence_text}"]
+        meta_lines: list[str] = []
+        if ai_event_type:
+            event_cn = EVENT_TYPE_LABELS.get(ai_event_type, ai_event_type)
+            meta_lines.append(f"• 类型: {event_cn}")
+        if ai_asset:
+            meta_lines.append(f"• 标的: {ai_asset}")
+        meta_lines.append(f"• 动作: {action_value}")
+        if ai_direction:
+            direction_cn = DIRECTION_LABELS.get(ai_direction, ai_direction)
+            meta_lines.append(f"• 方向: {direction_cn}")
+        meta_lines.append(f"• 置信度: {confidence_text}")
         if ai_strength:
             strength_cn = STRENGTH_LABELS.get(ai_strength, ai_strength)
-            meta_text.append(f"强度 {strength_cn}")
-        action_line = f"建议动作: {action_value}（{' / '.join(meta_text)}）"
+            meta_lines.append(f"• 强度: {strength_cn}")
+
+        localized_flags = [
+            RISK_FLAG_LABELS.get(flag, flag) for flag in ai_risk_flags
+        ]
+        if localized_flags:
+            meta_lines.append(f"• 风险: {'、'.join(localized_flags)}")
+
+        if ai_notes:
+            meta_lines.append(f"• 备注: {ai_notes}")
+
         parts.extend(
             [
-                "🤖 **AI 信号**:\n",
-                f"AI 摘要: {ai_summary}\n",
-                f"{action_line}\n",
+                "\n🤖 **AI 信号**\n",
+                f"• 摘要: {ai_summary}\n",
+                "\n".join(meta_lines) + "\n",
+                "\n",
             ]
         )
-        if ai_notes:
-            parts.append(f"理由: {ai_notes}\n")
-        if ai_risk_flags:
-            localized_flags = [
-                RISK_FLAG_LABELS.get(flag, flag) for flag in ai_risk_flags
-            ]
-            parts.append(f"风险提示: {', '.join(localized_flags)}\n")
-        parts.append("\n")
 
     return "".join(parts)

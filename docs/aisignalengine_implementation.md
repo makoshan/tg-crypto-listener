@@ -48,7 +48,8 @@ src/
     ```json
     {
       "summary": "",
-      "event_type": "listing|hack|regulation|funding|whale|other",
+      "event_type": "listing|delisting|hack|regulation|funding|whale|liquidation|partnership|product_launch|governance|macro|celebrity|airdrop|other",
+      "asset": "主要涉及的币种，用大写代码，多个以逗号分隔",
       "action": "buy|sell|observe",
       "direction": "long|short|neutral",
       "confidence": 0.0,
