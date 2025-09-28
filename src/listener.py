@@ -213,20 +213,22 @@ class TelegramListener:
                     self._update_ai_stats(signal_result)
 
             should_skip_forward = False
-            if (
-                self.config.AI_SKIP_NEUTRAL_FORWARD
-                and signal_result
-                and signal_result.status == "skip"
-                and signal_result.summary != "AI disabled"
-            ):
-                should_skip_forward = True
-                self.stats["ai_skipped"] += 1
-                logger.info(
-                    "🤖 AI 评估为低优先级，跳过转发: source=%s action=%s confidence=%.2f",
-                    source_name,
-                    signal_result.action,
-                    signal_result.confidence,
+            if signal_result and signal_result.status != "error":
+                low_confidence_skip = signal_result.confidence < 0.6
+                neutral_skip = (
+                    self.config.AI_SKIP_NEUTRAL_FORWARD
+                    and signal_result.status == "skip"
+                    and signal_result.summary != "AI disabled"
                 )
+                if low_confidence_skip or neutral_skip:
+                    should_skip_forward = True
+                    self.stats["ai_skipped"] += 1
+                    logger.info(
+                        "🤖 AI 评估为低优先级，跳过转发: source=%s action=%s confidence=%.2f",
+                        source_name,
+                        signal_result.action,
+                        signal_result.confidence,
+                    )
 
             if translated_text and translated_text != message_text:
                 display_text = f"{translated_text}\n\n—— 原文 ——\n{message_text}"
@@ -273,6 +275,8 @@ class TelegramListener:
         if not signal_result:
             return {}
         if signal_result.status == "error":
+            return {}
+        if signal_result.status != "success":
             return {}
         if not signal_result.summary:
             return {}
