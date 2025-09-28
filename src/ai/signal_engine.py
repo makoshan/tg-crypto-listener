@@ -54,6 +54,7 @@ class EventPayload:
     translation_confidence: float = 0.0
     keywords_hit: list[str] = field(default_factory=list)
     historical_reference: Dict[str, Any] = field(default_factory=dict)
+    media: list[Dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass
@@ -252,6 +253,7 @@ def build_signal_prompt(payload: EventPayload) -> str:
         "translated_text": payload.translated_text or payload.text,
         "keywords_hit": payload.keywords_hit,
         "historical_reference": payload.historical_reference,
+        "media_attachments": payload.media,
     }
 
     context_json = json.dumps(context, ensure_ascii=False)
@@ -269,6 +271,7 @@ def build_signal_prompt(payload: EventPayload) -> str:
         "策略提示：优先评估消息对价格的潜在驱动，若存在正面/负面催化、交易所上线、巨额转账、政策变化等，请倾向给出 buy/sell 并说明依据。"
         "当资讯模糊或缺乏量化数据时可选择 observe，但需在 notes 给出补充信息或疑点。"
         "如 historical_reference 提供对比，请结合判断是否显著并在 notes 点明结论。"
+        "media_attachments (如有) 提供 base64 编码的图片或多媒体，请结合图像内容辅助分析。"
         "输出必须为简体中文，数值保留两位小数，字符串去除首尾空格。"
         "输入 JSON："
         f"{context_json}"

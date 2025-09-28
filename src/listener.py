@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import signal
 import sys
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 from telethon import TelegramClient, events
 from telethon.errors import PhoneCodeInvalidError, SessionPasswordNeededError
@@ -24,6 +26,8 @@ from .utils import (
 )
 
 logger = setup_logger(__name__)
+
+MAX_INLINE_MEDIA_BYTES = 1_000_000
 
 
 class TelegramListener:
@@ -198,6 +202,7 @@ class TelegramListener:
             display_text = message_text
             signal_result: SignalResult | None = None
             if self.ai_engine:
+                media_payload = await self._extract_media(event.message)
                 payload = EventPayload(
                     text=message_text,
                     source=source_name,
@@ -207,6 +212,7 @@ class TelegramListener:
                     translation_confidence=translation_confidence,
                     keywords_hit=keywords_hit,
                     historical_reference={},
+                    media=media_payload,
                 )
                 signal_result = await self.ai_engine.analyse(payload)
                 if signal_result:
@@ -328,6 +334,74 @@ class TelegramListener:
                     hits.append(keyword)
                     break
         return hits
+
+    async def _extract_media(self, message) -> list[dict[str, Any]]:
+        """Download image-like media as base64 for AI prompt consumption."""
+        media_payload: list[dict[str, Any]] = []
+        if not message or not getattr(message, "media", None):
+            return media_payload
+
+        try:
+            if getattr(message, "photo", None):
+                media_bytes = await message.download_media(bytes)
+                if media_bytes and len(media_bytes) <= MAX_INLINE_MEDIA_BYTES:
+                    media_payload.append(
+                        {
+                            "type": "photo",
+                            "mime_type": "image/jpeg",
+                            "size_bytes": len(media_bytes),
+                            "base64": base64.b64encode(media_bytes).decode("ascii"),
+                        }
+                    )
+                elif media_bytes:
+                    media_payload.append(
+                        {
+                            "type": "photo_reference",
+                            "mime_type": "image/jpeg",
+                            "size_bytes": len(media_bytes),
+                            "note": "image too large to inline",
+                        }
+                    )
+
+            document = getattr(message, "document", None)
+            if document:
+                mime_type = getattr(document, "mime_type", "") or ""
+                if mime_type.startswith("image/"):
+                    media_bytes = await message.download_media(bytes)
+                    if media_bytes and len(media_bytes) <= MAX_INLINE_MEDIA_BYTES:
+                        file_name = None
+                        for attribute in getattr(document, "attributes", []) or []:
+                            file_name = getattr(attribute, "file_name", None) or file_name
+                        media_payload.append(
+                            {
+                                "type": "image_document",
+                                "mime_type": mime_type,
+                                "size_bytes": len(media_bytes),
+                                "file_name": file_name,
+                                "base64": base64.b64encode(media_bytes).decode("ascii"),
+                            }
+                        )
+                    elif media_bytes:
+                        media_payload.append(
+                            {
+                                "type": "image_document_reference",
+                                "mime_type": mime_type,
+                                "size_bytes": len(media_bytes),
+                                "note": "image too large to inline",
+                            }
+                        )
+                else:
+                    media_payload.append(
+                        {
+                            "type": "document_reference",
+                            "mime_type": mime_type,
+                            "size_bytes": getattr(document, "size", None),
+                        }
+                    )
+        except Exception as exc:  # pragma: no cover - network/file issues
+            logger.warning("媒体提取失败，将跳过附件: %s", exc)
+
+        return media_payload
 
     async def _stats_reporter(self) -> None:
         while self.running:
