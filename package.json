@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "description": "Telegram crypto news listener",
   "scripts": {
+    "prestart": "mkdir -p logs",
     "start": "pm2 start ecosystem.config.js",
     "stop": "pm2 stop tg-listener",
     "restart": "pm2 restart tg-listener",

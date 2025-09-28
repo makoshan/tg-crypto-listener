@@ -3,8 +3,7 @@ module.exports = {
     name: 'tg-listener',
     script: 'uvx',
     args: ['--with-requirements', 'requirements.txt', 'python', '-m', 'src.listener'],
-    cwd: '/Users/thursday/Documents/project/MyTG_Bot/tg-crypto-listener',
-
+    cwd: __dirname,
     // 重启策略
     autorestart: true,
     watch: false,
