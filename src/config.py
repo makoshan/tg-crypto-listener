@@ -47,6 +47,10 @@ class Config:
     # AI configuration
     AI_ENABLED: bool = _as_bool(os.getenv("AI_ENABLED", "false"))
     GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
+    AI_API_KEY: str = os.getenv("AI_API_KEY", "") or GEMINI_API_KEY
+    AI_PROVIDER: str = os.getenv("AI_PROVIDER", "gemini")
+    AI_BASE_URL: str = os.getenv("AI_BASE_URL", "")
+    AI_EXTRA_HEADERS: str = os.getenv("AI_EXTRA_HEADERS", "")
     AI_MODEL_NAME: str = os.getenv("AI_MODEL_NAME", "gemini-2.5-flash-lite")
     AI_SIGNAL_THRESHOLD: float = float(os.getenv("AI_SIGNAL_THRESHOLD", "0.6"))
     AI_TIMEOUT_SECONDS: float = float(os.getenv("AI_TIMEOUT_SECONDS", "8"))
@@ -75,6 +79,6 @@ class Config:
             print(f"❌ 缺少必需配置: {', '.join(missing)}")
             return False
 
-        if cls.AI_ENABLED and not cls.GEMINI_API_KEY:
-            print("⚠️ 已启用 AI，但 GEMINI_API_KEY 未配置，将自动降级为传统模式")
+        if cls.AI_ENABLED and not cls.AI_API_KEY:
+            print("⚠️ 已启用 AI，但 AI_API_KEY/GEMINI_API_KEY 未配置，将自动降级为传统模式")
         return True

@@ -1,4 +1,4 @@
-"""AI Signal Engine orchestrating Gemini inference."""
+"""AI Signal Engine orchestrating OpenAI-compatible inference."""
 
 from __future__ import annotations
 
@@ -7,10 +7,15 @@ import json
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Sequence
 
 from ..utils import setup_logger
-from .gemini_client import AiServiceError, GeminiClient, GeminiResponse
+from .gemini_client import AiServiceError
+
+try:  # pragma: no cover - optional dependency
+    import httpx
+except ImportError:  # pragma: no cover - runtime fallback
+    httpx = None  # type: ignore
 
 logger = setup_logger(__name__)
 
@@ -82,13 +87,148 @@ class SignalResult:
         )
 
 
+@dataclass
+class OpenAIChatResponse:
+    """Structured response returned by OpenAI-compatible models."""
+
+    text: str
+
+
+class OpenAIChatClient:
+    """Generic client for OpenAI-compatible chat completion APIs."""
+
+    def __init__(
+        self,
+        api_key: str,
+        model_name: str,
+        *,
+        base_url: str,
+        timeout: float,
+        max_retries: int,
+        retry_backoff_seconds: float,
+        extra_headers: Optional[Dict[str, str]] = None,
+    ) -> None:
+        if not api_key:
+            raise AiServiceError("AI API key is required")
+        if httpx is None:
+            raise AiServiceError("httpx 未安装，请先在环境中安装该依赖")
+
+        normalized_base = (base_url or "").strip()
+        if not normalized_base:
+            normalized_base = "https://api.openai.com/v1"
+        self._endpoint = normalized_base.rstrip("/") + "/chat/completions"
+        self._api_key = api_key
+        self._model = model_name
+        self._timeout = float(timeout)
+        self._max_retries = max(0, int(max_retries))
+        self._retry_backoff = max(0.0, float(retry_backoff_seconds))
+        self._headers: Dict[str, str] = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        }
+        if extra_headers:
+            for key, value in extra_headers.items():
+                if key and value is not None:
+                    self._headers[str(key)] = str(value)
+
+    async def generate_signal(self, messages: Sequence[Dict[str, str]]) -> OpenAIChatResponse:
+        """Execute prompt against OpenAI-compatible API and return text."""
+
+        if not messages:
+            raise AiServiceError("消息列表不能为空")
+
+        payload = {
+            "model": self._model,
+            "messages": list(messages),
+        }
+
+        last_exc: Exception | None = None
+        last_error_message = "AI 调用失败"
+        last_error_temporary = False
+
+        for attempt in range(self._max_retries + 1):
+            try:
+                async with httpx.AsyncClient(timeout=self._timeout) as client:
+                    response = await client.post(
+                        self._endpoint,
+                        headers=self._headers,
+                        json=payload,
+                    )
+                response.raise_for_status()
+            except asyncio.CancelledError:
+                raise
+            except httpx.TimeoutException as exc:  # type: ignore[attr-defined]
+                last_exc = exc
+                last_error_message = "AI 请求超时"
+                last_error_temporary = True
+                logger.warning(
+                    "AI 请求超时 (attempt %s/%s)",
+                    attempt + 1,
+                    self._max_retries + 1,
+                )
+            except httpx.HTTPStatusError as exc:  # type: ignore[attr-defined]
+                last_exc = exc
+                status_code = exc.response.status_code
+                last_error_message = f"AI 服务端返回错误状态码: {status_code}"
+                last_error_temporary = status_code == 429 or 500 <= status_code < 600
+                logger.warning(
+                    "AI HTTP 状态错误 (attempt %s/%s): %s",
+                    attempt + 1,
+                    self._max_retries + 1,
+                    last_error_message,
+                )
+                logger.debug("AI 响应内容: %s", exc.response.text)
+            except httpx.RequestError as exc:  # type: ignore[attr-defined]
+                last_exc = exc
+                last_error_message = "AI 网络连接异常"
+                last_error_temporary = True
+                logger.warning(
+                    "AI 网络异常 (attempt %s/%s): %s",
+                    attempt + 1,
+                    self._max_retries + 1,
+                    exc,
+                )
+            else:
+                try:
+                    data = response.json()
+                except json.JSONDecodeError as exc:
+                    raise AiServiceError("AI 返回非 JSON 内容") from exc
+
+                choices = data.get("choices", [])
+                if not choices:
+                    raise AiServiceError("AI 返回缺少 choices 字段")
+                first_choice = choices[0] or {}
+                message = first_choice.get("message") or {}
+                content = message.get("content")
+                if isinstance(content, list):
+                    content = "".join(
+                        part.get("text", "") if isinstance(part, dict) else str(part)
+                        for part in content
+                    )
+                if not content:
+                    raise AiServiceError("AI 返回空内容")
+                return OpenAIChatResponse(text=str(content))
+
+            if attempt < self._max_retries and self._retry_backoff > 0:
+                backoff = self._retry_backoff * (2 ** attempt)
+                logger.debug(
+                    "AI 将在 %.2f 秒后重试 (attempt %s/%s)",
+                    backoff,
+                    attempt + 1,
+                    self._max_retries + 1,
+                )
+                await asyncio.sleep(backoff)
+
+        raise AiServiceError(last_error_message, temporary=last_error_temporary) from last_exc
+
+
 class AiSignalEngine:
     """Coordinate optional AI powered signal generation."""
 
     def __init__(
         self,
         enabled: bool,
-        client: Optional[GeminiClient],
+        client: Optional[OpenAIChatClient],
         threshold: float,
         semaphore: asyncio.Semaphore,
     ) -> None:
@@ -105,13 +245,62 @@ class AiSignalEngine:
             logger.debug("配置关闭 AI 功能，采用传统转发流程")
             return cls(False, None, getattr(config, "AI_SIGNAL_THRESHOLD", 0.0), asyncio.Semaphore(1))
 
+        provider_raw = str(getattr(config, "AI_PROVIDER", "gemini")).strip().lower()
+        provider_alias = {
+            "chatgpt": "openai",
+            "gpt": "openai",
+            "openai": "openai",
+            "deepseek": "deepseek",
+            "qwen": "qwen",
+            "千问": "qwen",
+            "qianwen": "qwen",
+            "gemini": "gemini",
+        }
+        provider = provider_alias.get(provider_raw, provider_raw or "gemini")
+
+        api_key = (
+            getattr(config, "AI_API_KEY", None)
+            or getattr(config, "GEMINI_API_KEY", None)
+            or ""
+        )
+
+        if not api_key:
+            logger.warning("AI 已启用但未提供 API Key，自动降级为跳过 AI 分析")
+            return cls(False, None, getattr(config, "AI_SIGNAL_THRESHOLD", 0.0), asyncio.Semaphore(1))
+
+        base_url = getattr(config, "AI_BASE_URL", "").strip()
+        if not base_url:
+            base_url = {
+                "openai": "https://api.openai.com/v1",
+                "deepseek": "https://api.deepseek.com",
+                "qwen": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+                "gemini": "https://generativelanguage.googleapis.com/v1beta/openai",
+            }.get(provider, "https://api.openai.com/v1")
+
+        extra_headers: Dict[str, str] = {}
+        raw_headers = getattr(config, "AI_EXTRA_HEADERS", "")
+        if raw_headers:
+            try:
+                parsed = json.loads(raw_headers)
+            except (TypeError, ValueError):
+                logger.warning("AI_EXTRA_HEADERS 不是有效的 JSON，将忽略该配置")
+            else:
+                if isinstance(parsed, dict):
+                    extra_headers = {
+                        str(key): str(value)
+                        for key, value in parsed.items()
+                        if value is not None
+                    }
+
         try:
-            client = GeminiClient(
-                api_key=getattr(config, "GEMINI_API_KEY", ""),
-                model_name=getattr(config, "AI_MODEL_NAME", "gemini-2.5-flash-lite"),
+            client = OpenAIChatClient(
+                api_key=str(api_key),
+                model_name=getattr(config, "AI_MODEL_NAME", "gpt-4o-mini"),
+                base_url=base_url,
                 timeout=getattr(config, "AI_TIMEOUT_SECONDS", 8.0),
                 max_retries=getattr(config, "AI_RETRY_ATTEMPTS", 1),
                 retry_backoff_seconds=getattr(config, "AI_RETRY_BACKOFF_SECONDS", 1.5),
+                extra_headers=extra_headers or None,
             )
         except AiServiceError as exc:
             logger.warning("AI 初始化失败，将以降级模式运行: %s", exc, exc_info=True)
@@ -125,7 +314,7 @@ class AiSignalEngine:
             logger.debug("AI 已禁用，source=%s 的消息直接跳过", payload.source)
             return SignalResult(status="skip", summary="AI disabled")
 
-        prompt = build_signal_prompt(payload)
+        messages = build_signal_prompt(payload)
         logger.debug(
             "AI 分析开始: source=%s len=%d lang=%s preview=%s",
             payload.source,
@@ -136,7 +325,7 @@ class AiSignalEngine:
 
         async with self._semaphore:
             try:
-                response = await self._client.generate_signal(prompt)
+                response = await self._client.generate_signal(messages)
             except AiServiceError as exc:
                 is_temporary = getattr(exc, "temporary", False)
                 logger.warning(
@@ -149,7 +338,7 @@ class AiSignalEngine:
         logger.debug("AI 返回长度: %d", len(response.text))
         return self._parse_response(response)
 
-    def _parse_response(self, response: GeminiResponse) -> SignalResult:
+    def _parse_response(self, response: OpenAIChatResponse) -> SignalResult:
         raw_text = response.text.strip()
         normalized_text = self._prepare_json_text(raw_text)
 
@@ -243,7 +432,7 @@ class AiSignalEngine:
         return candidate
 
 
-def build_signal_prompt(payload: EventPayload) -> str:
+def build_signal_prompt(payload: EventPayload) -> list[dict[str, str]]:
     context = {
         "source": payload.source,
         "timestamp": payload.timestamp.isoformat(),
@@ -258,21 +447,24 @@ def build_signal_prompt(payload: EventPayload) -> str:
 
     context_json = json.dumps(context, ensure_ascii=False)
 
-    return (
-        "你是加密交易台的分析师，需从多语种快讯中快速提炼可交易信号。"
-        "请基于给定 JSON 分析资讯重点，如包含多条信息，请综合判断后给出最具操作性的建议。"
-        "输出要求：仅返回 JSON 字符串，不得添加 `json`、Markdown 或解释性文字。"
-        "JSON 字段：summary, event_type(listing|delisting|hack|regulation|funding|whale|liquidation|partnership|product_launch|governance|macro|celebrity|airdrop|other),"
-        "asset(主要受影响/需操作的币种，使用大写代码，多个用逗号分隔),"
-        "action(buy|sell|observe), direction(long|short|neutral), confidence(0-1 保留两位小数),"
-        "strength(low|medium|high), risk_flags(数组，枚举 price_volatility/liquidity_risk/regulation_risk/confidence_low/data_incomplete),"
-        "notes(一句中文给出操作理由或关注点，可留空)。"
-        "字段规范：summary 最多 50 个汉字且不得包含换行；asset 仅填写币种代码（如 BTC、ETH、SOL），多个标的用逗号分隔；action 为 observe 时需说明原因；notes 避免与 summary 重复；confidence 与 strength 应匹配：<0.3 为 low、0.3-0.69 为 medium、≥0.7 为 high。"
-        "策略提示：优先评估消息对价格的潜在驱动，若存在正面/负面催化、交易所上线、巨额转账、政策变化等，请倾向给出 buy/sell 并说明依据。"
-        "当资讯模糊或缺乏量化数据时可选择 observe，但需在 notes 给出补充信息或疑点。"
-        "如 historical_reference 提供对比，请结合判断是否显著并在 notes 点明结论。"
-        "media_attachments (如有) 提供 base64 编码的图片或多媒体，请结合图像内容辅助分析。"
-        "输出必须为简体中文，数值保留两位小数，字符串去除首尾空格。"
-        "输入 JSON："
-        f"{context_json}"
+    system_prompt = (
+        "你是加密交易台的资深分析师。"
+        "需从多语种快讯中快速提炼可交易信号，并严格使用 JSON 结构输出结果。"
+        "输出字段固定为 summary、event_type、asset、action、direction、confidence、strength、risk_flags、notes。"
+        "event_type 仅能取 listing、delisting、hack、regulation、funding、whale、liquidation、partnership、product_launch、governance、macro、celebrity、airdrop、other。"
+        "action 为 buy、sell 或 observe；direction 为 long、short 或 neutral。"
+        "confidence 范围 0-1，保留两位小数，并与 high/medium/low 的 strength 保持一致性。"
+        "risk_flags 为数组，枚举 price_volatility、liquidity_risk、regulation_risk、confidence_low、data_incomplete。"
+        "所有字符串输出使用简体中文，禁止返回 Markdown、额外文本或解释。"
     )
+
+    user_prompt = (
+        "请结合以下事件上下文给出最具操作性的建议，若包含多条信息需综合判断：\n"
+        f"```json\n{context_json}\n```\n"
+        "返回仅包含上述字段的 JSON 字符串，必要时在 notes 中说明原因或疑点。"
+    )
+
+    return [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_prompt},
+    ]
