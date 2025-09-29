@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Dict, Optional, Sequence
@@ -22,7 +23,32 @@ logger = setup_logger(__name__)
 ALLOWED_ACTIONS = {"buy", "sell", "observe"}
 ALLOWED_DIRECTIONS = {"long", "short", "neutral"}
 ALLOWED_STRENGTH = {"low", "medium", "high"}
-NO_ASSET_TOKENS = {"", "NONE", "无", "NA", "N/A"}
+NO_ASSET_TOKENS = {
+    "",
+    "NONE",
+    "无",
+    "NA",
+    "N/A",
+    "GENERAL",
+    "GENERAL_CRYPTO",
+    "CRYPTO",
+    "MARKET",
+    "MACRO",
+}
+FORBIDDEN_ASSET_PREFIXES = {"SP", "DJ", "ND", "HSI", "CSI", "FTSE"}
+FORBIDDEN_ASSET_CODES = {
+    "SPX",
+    "SP500",
+    "S&P500",
+    "TSLA",
+    "AAPL",
+    "MSFT",
+    "META",
+    "AMZN",
+    "NVDA",
+    "BABA",
+}
+ASSET_CODE_REGEX = re.compile(r"^[A-Z0-9]{2,10}$")
 ALLOWED_EVENT_TYPES = {
     "listing",
     "delisting",
@@ -403,7 +429,17 @@ class AiSignalEngine:
 
         asset = asset.upper().strip()
         asset_tokens = [token.strip() for token in asset.split(",") if token.strip()]
-        normalized_assets = [token for token in asset_tokens if token not in NO_ASSET_TOKENS]
+        normalized_assets = []
+        for token in asset_tokens:
+            if token in NO_ASSET_TOKENS:
+                continue
+            if not ASSET_CODE_REGEX.match(token):
+                continue
+            if any(token.startswith(prefix) for prefix in FORBIDDEN_ASSET_PREFIXES):
+                continue
+            if token in FORBIDDEN_ASSET_CODES:
+                continue
+            normalized_assets.append(token)
         if asset_names:
             canonical_name = asset_names.strip()
             upper_name = canonical_name.upper()
@@ -490,14 +526,14 @@ def build_signal_prompt(payload: EventPayload) -> list[dict[str, str]]:
         "action 为 buy、sell 或 observe；direction 为 long、short 或 neutral。"
         "confidence 范围 0-1，保留两位小数，并与 high/medium/low 的 strength 保持一致性。"
         "risk_flags 为数组，枚举 price_volatility、liquidity_risk、regulation_risk、confidence_low、data_incomplete。"
-        "当事件直接涉及加密货币（由你判断，常见示例包括 BTC、ETH、SOL、BNB、XRP 等）时，输出对应的代币代码；若无法确认与加密资产有直接关联，请将 asset 设置为 NONE 并在 notes 中说明原因。"
+        "仅当事件直接涉及可识别的加密货币或代币（通常为 2-10 位大写字母/数字的代码，如 BTC、ETH、SOL、BNB、XRP 等）时，输出准确的币种代码；若提及股票、股指、ETF（如特斯拉、S&P500、纳指、恒生指数等）或无法确定具体加密资产，请将 asset 设置为 NONE 并在 notes 中说明原因，禁止返回 GENERAL、CRYPTO、MARKET 等泛化词。"
         "所有字符串输出使用简体中文，禁止返回 Markdown、额外文本或解释。"
     )
 
     user_prompt = (
         "请结合以下事件上下文给出最具操作性的建议，若包含多条信息需综合判断：\n"
         f"```json\n{context_json}\n```\n"
-        "返回仅包含上述字段的 JSON 字符串，必要时在 notes 中说明原因或疑点；当事件与加密货币无关或标的不明确时请设置 asset 为 NONE、asset_name 为 无，并解释原因。"
+        "返回仅包含上述字段的 JSON 字符串，必要时在 notes 中说明原因或疑点；当事件与加密货币无关或标的不明确时请设置 asset 为 NONE、asset_name 为 无，并解释原因，严禁输出泛化标签或非币种名称。"
     )
 
     return [
