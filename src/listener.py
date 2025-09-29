@@ -220,7 +220,7 @@ class TelegramListener:
 
             should_skip_forward = False
             if signal_result and signal_result.status != "error":
-                low_confidence_skip = signal_result.confidence < 0.6
+                low_confidence_skip = signal_result.confidence < 0.4
                 neutral_skip = (
                     self.config.AI_SKIP_NEUTRAL_FORWARD
                     and signal_result.status == "skip"
@@ -250,6 +250,21 @@ class TelegramListener:
                 return
 
             ai_kwargs = self._build_ai_kwargs(signal_result)
+            if not ai_kwargs:
+                # 强制要求每条推送包含 AI 摘要，若缺失则跳过
+                self.stats["ai_skipped"] += 1
+                logger.info(
+                    "🤖 缺少 AI 摘要，跳过转发: source=%s",
+                    source_name,
+                )
+                await self._persist_event(
+                    source_name,
+                    message_text,
+                    translated_text,
+                    signal_result,
+                    False,
+                )
+                return
 
             formatted_message = format_forwarded_message(
                 display_text,

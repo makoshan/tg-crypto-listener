@@ -398,9 +398,9 @@ class AiSignalEngine:
         if not filtered_flags and confidence < 0.3:
             filtered_flags.append("confidence_low")
 
-        # Enforce a 60% floor even if configuration threshold is lower
-        effective_threshold = max(self._threshold, 0.6)
-        status = "success" if (confidence >= effective_threshold and action in {"buy", "sell"}) else "skip"
+        # 保证所有推送附带摘要，但置信度低于 0.4 会被上层过滤
+        effective_threshold = max(self._threshold, 0.4)
+        status = "success" if confidence >= effective_threshold else "skip"
 
         return SignalResult(
             status=status,
