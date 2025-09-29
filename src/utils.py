@@ -132,6 +132,7 @@ def format_forwarded_message(
     ai_direction: str | None = None,
     ai_event_type: str | None = None,
     ai_asset: str | None = None,
+    ai_asset_names: str | None = None,
     ai_confidence: float | None = None,
     ai_strength: str | None = None,
     ai_risk_flags: list[str] | None = None,
@@ -141,6 +142,7 @@ def format_forwarded_message(
     ai_risk_flags = ai_risk_flags or []
     ai_notes = (ai_notes or "").strip()
     ai_asset = (ai_asset or "").strip()
+    ai_asset_names = (ai_asset_names or "").strip()
 
     parts = [
         "🔔 **加密新闻监听**\n\n",
@@ -159,8 +161,13 @@ def format_forwarded_message(
         if ai_event_type:
             event_cn = EVENT_TYPE_LABELS.get(ai_event_type, ai_event_type)
             meta_lines.append(f"• 类型: {event_cn}")
-        if ai_asset:
-            meta_lines.append(f"• 标的: {ai_asset}")
+        if ai_asset or ai_asset_names:
+            asset_line = ai_asset
+            if ai_asset_names and ai_asset:
+                asset_line = f"{ai_asset_names} ({ai_asset})"
+            elif ai_asset_names:
+                asset_line = ai_asset_names
+            meta_lines.append(f"• 标的: {asset_line}")
         meta_lines.append(f"• 动作: {action_value}")
         if ai_direction:
             direction_cn = DIRECTION_LABELS.get(ai_direction, ai_direction)

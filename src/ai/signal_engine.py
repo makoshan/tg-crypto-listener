@@ -22,6 +22,7 @@ logger = setup_logger(__name__)
 ALLOWED_ACTIONS = {"buy", "sell", "observe"}
 ALLOWED_DIRECTIONS = {"long", "short", "neutral"}
 ALLOWED_STRENGTH = {"low", "medium", "high"}
+NO_ASSET_TOKENS = {"", "NONE", "无", "NA", "N/A"}
 ALLOWED_EVENT_TYPES = {
     "listing",
     "delisting",
@@ -70,6 +71,7 @@ class SignalResult:
     summary: str = ""
     event_type: str = "other"
     asset: str = ""
+    asset_names: str = ""
     action: str = "observe"
     direction: str = "neutral"
     confidence: float = 0.0
@@ -353,6 +355,12 @@ class AiSignalEngine:
             summary = str(data.get("summary", "")).strip()
             event_type = str(data.get("event_type", "other")).lower()
             asset_field = data.get("asset", "")
+            asset_name_field = (
+                data.get("asset_name")
+                or data.get("asset_names")
+                or data.get("asset_display")
+                or ""
+            )
             action = str(data.get("action", "observe")).lower()
             direction = str(data.get("direction", "neutral")).lower()
             strength = str(data.get("strength", "low")).lower()
@@ -365,6 +373,12 @@ class AiSignalEngine:
                 asset = ",".join(str(item).strip() for item in asset_field if str(item).strip())
             else:
                 asset = str(asset_field).strip()
+            if isinstance(asset_name_field, (list, tuple)):
+                asset_names = "、".join(
+                    str(item).strip() for item in asset_name_field if str(item).strip()
+                )
+            else:
+                asset_names = str(asset_name_field).strip()
         except json.JSONDecodeError:
             logger.debug(
                 "AI 返回无法解析为 JSON，使用纯文本摘要: %s",
@@ -373,6 +387,7 @@ class AiSignalEngine:
             summary = "AI 返回格式异常，已忽略原始内容"
             event_type = "other"
             asset = ""
+            asset_names = ""
             action = "observe"
             direction = "neutral"
             strength = "low"
@@ -387,6 +402,21 @@ class AiSignalEngine:
             strength = "low"
 
         asset = asset.upper().strip()
+        asset_tokens = [token.strip() for token in asset.split(",") if token.strip()]
+        normalized_assets = [token for token in asset_tokens if token not in NO_ASSET_TOKENS]
+        if asset_names:
+            canonical_name = asset_names.strip()
+            upper_name = canonical_name.upper()
+            if upper_name in {"NONE", "NA", "N/A"} or canonical_name in {"无", "暂无"}:
+                asset_names = ""
+
+        if not normalized_assets:
+            asset = "NONE"
+            asset_names = ""
+        else:
+            asset = ",".join(normalized_assets)
+            if not asset_names:
+                asset_names = ",".join(normalized_assets)
         confidence = max(0.0, min(1.0, round(confidence, 2)))
         filtered_flags = []
         for flag in risk_flags:
@@ -400,7 +430,11 @@ class AiSignalEngine:
 
         # 保证所有推送附带摘要，但置信度低于 0.4 会被上层过滤
         effective_threshold = max(self._threshold, 0.4)
-        status = "success" if confidence >= effective_threshold else "skip"
+        # 仅当模型识别到加密货币标的时才推送
+        has_crypto_asset = asset != "NONE"
+        status = "success" if (confidence >= effective_threshold and has_crypto_asset) else "skip"
+        if not has_crypto_asset and "data_incomplete" not in filtered_flags:
+            filtered_flags.append("data_incomplete")
 
         return SignalResult(
             status=status,
@@ -414,6 +448,7 @@ class AiSignalEngine:
             risk_flags=filtered_flags,
             raw_response=raw_text,
             notes=notes,
+            asset_names=asset_names,
         )
 
     @staticmethod
@@ -450,18 +485,19 @@ def build_signal_prompt(payload: EventPayload) -> list[dict[str, str]]:
     system_prompt = (
         "你是加密交易台的资深分析师。"
         "需从多语种快讯中快速提炼可交易信号，并严格使用 JSON 结构输出结果。"
-        "输出字段固定为 summary、event_type、asset、action、direction、confidence、strength、risk_flags、notes。"
+        "输出字段固定为 summary、event_type、asset、asset_name、action、direction、confidence、strength、risk_flags、notes。"
         "event_type 仅能取 listing、delisting、hack、regulation、funding、whale、liquidation、partnership、product_launch、governance、macro、celebrity、airdrop、other。"
         "action 为 buy、sell 或 observe；direction 为 long、short 或 neutral。"
         "confidence 范围 0-1，保留两位小数，并与 high/medium/low 的 strength 保持一致性。"
         "risk_flags 为数组，枚举 price_volatility、liquidity_risk、regulation_risk、confidence_low、data_incomplete。"
+        "当事件直接涉及加密货币（由你判断，常见示例包括 BTC、ETH、SOL、BNB、XRP 等）时，输出对应的代币代码；若无法确认与加密资产有直接关联，请将 asset 设置为 NONE 并在 notes 中说明原因。"
         "所有字符串输出使用简体中文，禁止返回 Markdown、额外文本或解释。"
     )
 
     user_prompt = (
         "请结合以下事件上下文给出最具操作性的建议，若包含多条信息需综合判断：\n"
         f"```json\n{context_json}\n```\n"
-        "返回仅包含上述字段的 JSON 字符串，必要时在 notes 中说明原因或疑点。"
+        "返回仅包含上述字段的 JSON 字符串，必要时在 notes 中说明原因或疑点；当事件与加密货币无关或标的不明确时请设置 asset 为 NONE、asset_name 为 无，并解释原因。"
     )
 
     return [

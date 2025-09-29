@@ -64,6 +64,8 @@ class Config:
     DEEPL_API_KEY: str = os.getenv("DEEPL_API_KEY", "")
     DEEPL_API_URL: str = os.getenv("DEEPL_API_URL", "https://api.deepl.com/v2/translate")
 
+    FORWARD_COOLDOWN_SECONDS: float = float(os.getenv("FORWARD_COOLDOWN_SECONDS", "1.0"))
+
     @classmethod
     def validate(cls) -> bool:
         """Ensure required config values exist."""
