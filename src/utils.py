@@ -124,9 +124,12 @@ RISK_FLAG_LABELS = {
 
 
 def format_forwarded_message(
-    original_text: str,
+    *,
     source_channel: str,
     timestamp: datetime,
+    translated_text: str | None = None,
+    original_text: str | None = None,
+    show_original: bool = False,
     ai_summary: str | None = None,
     ai_action: str | None = None,
     ai_direction: str | None = None,
@@ -138,61 +141,81 @@ def format_forwarded_message(
     ai_risk_flags: list[str] | None = None,
     ai_notes: str | None = None,
 ) -> str:
-    """Return formatted message ready for forwarding."""
+    """Compose a compact forwarding message emphasising actionable insights."""
+
     ai_risk_flags = ai_risk_flags or []
     ai_notes = (ai_notes or "").strip()
     ai_asset = (ai_asset or "").strip()
     ai_asset_names = (ai_asset_names or "").strip()
+    translated_text = (translated_text or "").strip()
+    original_text = (original_text or "").strip()
 
-    parts = [
-        "🔔 **加密新闻监听**\n\n",
-        f"📡 **来源**: {source_channel}\n",
-        f"🕒 **时间**: {timestamp.strftime('%Y-%m-%d %H:%M:%S')}\n\n",
-        "📝 **内容**\n",
-        f"{original_text.strip()}\n",
-    ]
+    parts: list[str] = ["🔔 **加密新闻监听**\n\n"]
 
+    # 信号摘要：翻译文本与 AI 摘要合并，避免重复
+    summary_segments: list[str] = []
+    if translated_text:
+        summary_segments.append(translated_text)
+    elif original_text:
+        summary_segments.append(original_text)
+
+    if ai_summary and ai_summary not in summary_segments:
+        summary_segments.append(ai_summary)
+
+    if summary_segments:
+        parts.append("⚡ **信号摘要**\n")
+        parts.append("；".join(summary_segments) + "\n\n")
+
+    # 操作要点，仅当有 AI 结果时展示
     if ai_summary:
         action_value = ACTION_LABELS.get(ai_action or "observe", ai_action or "observe")
         confidence_text = (
             f"{ai_confidence:.2f}" if ai_confidence is not None else "未知"
         )
-        meta_lines: list[str] = []
-        if ai_event_type:
-            event_cn = EVENT_TYPE_LABELS.get(ai_event_type, ai_event_type)
-            meta_lines.append(f"• 类型: {event_cn}")
+        parts.append("🎯 **操作要点**\n")
+
         if ai_asset or ai_asset_names:
             asset_line = ai_asset
             if ai_asset_names and ai_asset:
                 asset_line = f"{ai_asset_names} ({ai_asset})"
             elif ai_asset_names:
                 asset_line = ai_asset_names
-            meta_lines.append(f"• 标的: {asset_line}")
-        meta_lines.append(f"• 动作: {action_value}")
+            elif ai_asset:
+                asset_line = ai_asset
+            else:
+                asset_line = "未识别"
+            parts.append(f"- 标的: {asset_line}\n")
+
+        parts.append(f"- 动作: {action_value}")
         if ai_direction:
             direction_cn = DIRECTION_LABELS.get(ai_direction, ai_direction)
-            meta_lines.append(f"• 方向: {direction_cn}")
-        meta_lines.append(f"• 置信度: {confidence_text}")
+            parts[-1] += f"（方向: {direction_cn}）"
+        parts[-1] += "\n"
+
+        parts.append(f"- 置信度: {confidence_text}")
         if ai_strength:
             strength_cn = STRENGTH_LABELS.get(ai_strength, ai_strength)
-            meta_lines.append(f"• 强度: {strength_cn}")
+            parts[-1] += f" · 强度: {strength_cn}"
+        parts[-1] += "\n"
 
         localized_flags = [
-            RISK_FLAG_LABELS.get(flag, flag) for flag in ai_risk_flags
+            RISK_FLAG_LABELS.get(flag, flag) for flag in ai_risk_flags if flag
         ]
         if localized_flags:
-            meta_lines.append(f"• 风险: {'、'.join(localized_flags)}")
+            parts.append(f"- 风险: {'、'.join(localized_flags)}\n")
 
         if ai_notes:
-            meta_lines.append(f"• 备注: {ai_notes}")
+            parts.append(f"- 备注: {ai_notes}\n")
 
-        parts.extend(
-            [
-                "\n🤖 **AI 信号**\n",
-                f"• 摘要: {ai_summary}\n",
-                "\n".join(meta_lines) + "\n",
-                "\n",
-            ]
-        )
+        parts.append("\n")
+
+    # 来源与时间
+    parts.append(f"📡 **来源**: {source_channel}\n")
+    parts.append(f"🕒 **时间**: {timestamp.strftime('%Y-%m-%d %H:%M:%S')}\n")
+
+    # 原文视情况展示
+    if show_original and original_text:
+        parts.append("\n🧾 **原文**\n")
+        parts.append(f"```\n{original_text}\n```\n")
 
     return "".join(parts)

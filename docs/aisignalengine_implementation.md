@@ -124,6 +124,7 @@ class AiSignalEngine:
 - `.env` 已添加 AI 相关开关，缺失 Key 时自动降级并继续推送。
 - `AiSignalEngine.from_config` 在初始化失败时记录日志，保持消息链路可用。
 - `_build_ai_kwargs` 将 AI 结果插入 `format_forwarded_message`，确保最终输出统一走 TG。
+- `format_forwarded_message` 负责生成紧凑通知：自动拼接翻译+摘要、按需展示操作要点，并依据 `SignalResult` 判断是否附带原文。
 - `_persist_event` 方法作为 Supabase 扩展点，后续可在此写入事件与交易记录。
 
 

@@ -102,6 +102,18 @@
    - 对短文本可直接调用 LLM 快速翻译；长文本采用批量切分+缓存策略，保证低延迟。
    - 翻译模块输出 `translated_text`、`language_detected`、`confidence`，供 `AiSignalEngine` 决定是否继续使用原文。
    - 当翻译失败时回退到原文，让模型自行翻译，并在 `risk_flags` 增加 `data_incomplete`。
+
+### 通知格式（现行）
+- 顶部展示 `⚡ 信号摘要`，由翻译文本与 AI 摘要拼接成一句话，直接说明事件与建议。
+- `🎯 操作要点` 只保留核心字段：标的、动作（含方向）、置信度 ± 强度、风险提示、备注（可选）。
+- `📡 来源` 与 `🕒 时间` 紧随其后，保证元数据统一。
+- 原文仅在以下条件展示：
+  1. AI 识别不到有效币种；
+  2. 置信度 < 0.4；
+  3. 风险提示包含 `data_incomplete` 或 `confidence_low`；
+  4. 备注中要求“查看原文”。
+  其余情况默认隐藏，保持通知简洁。
+
 4. **配置扩展**：`Config` 增加 `GEMINI_API_KEY`、`AI_MODEL_NAME`、`AI_SIGNAL_THRESHOLD`、`AI_ENABLED` 等字段，缺少凭证时降级为纯转发。
 5. **信号解析**：解析 Gemini JSON 为 `SignalResult`，包括方向、置信度、风险提示。
 6. **输出融合**：

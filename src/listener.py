@@ -200,7 +200,6 @@ class TelegramListener:
             if translated_text and translated_text != message_text:
                 keywords_hit = self._collect_keywords(message_text, translated_text)
 
-            display_text = message_text
             signal_result: SignalResult | None = None
             if self.ai_engine:
                 media_payload = await self._extract_media(event.message)
@@ -237,9 +236,6 @@ class TelegramListener:
                         signal_result.confidence,
                     )
 
-            if translated_text and translated_text != message_text:
-                display_text = f"{translated_text}\n\n—— 原文 ——\n{message_text}"
-
             if should_skip_forward:
                 await self._persist_event(
                     source_name,
@@ -267,10 +263,18 @@ class TelegramListener:
                 )
                 return
 
+            show_original = self._should_include_original(
+                original_text=message_text,
+                translated_text=translated_text,
+                signal_result=signal_result,
+            )
+
             formatted_message = format_forwarded_message(
-                display_text,
-                source_name,
-                event_time,
+                source_channel=source_name,
+                timestamp=event_time,
+                translated_text=translated_text,
+                original_text=message_text,
+                show_original=show_original,
                 **ai_kwargs,
             )
 
@@ -314,6 +318,41 @@ class TelegramListener:
             "ai_risk_flags": signal_result.risk_flags,
             "ai_notes": signal_result.notes,
         }
+
+    def _should_include_original(
+        self,
+        *,
+        original_text: str | None,
+        translated_text: str | None,
+        signal_result: SignalResult | None,
+    ) -> bool:
+        if not original_text or not original_text.strip():
+            return False
+
+        # 无 AI 结果或状态异常，保留原文便于人工判断
+        if not signal_result or signal_result.status != "success":
+            return True
+
+        # 资产未识别或信号置信度偏低，展示原文供复核
+        asset_code = (signal_result.asset or "").strip().upper()
+        if not asset_code or asset_code == "NONE":
+            return True
+        if signal_result.confidence < 0.4:
+            return True
+
+        normalized_flags = {flag for flag in signal_result.risk_flags}
+        if {"data_incomplete", "confidence_low"} & normalized_flags:
+            return True
+
+        notes = (signal_result.notes or "").strip()
+        if notes and "原文" in notes:
+            return True
+
+        # 若缺少译文，只在摘要中展示原文即可，无需重复
+        if not translated_text or translated_text.strip() == "":
+            return False
+
+        return False
 
     def _update_ai_stats(self, signal_result: SignalResult) -> None:
         if signal_result.status == "error":
