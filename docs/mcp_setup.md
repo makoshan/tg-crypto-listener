@@ -64,7 +64,26 @@ git remote add origin git@github.com:<org_or_user>/<repo-name>.git
    mcp github list-repos
    ```
 
-## 5. 代码提交流程
+## 5. 配置 Brave Search MCP
+
+1. **申请 Brave Search API Key**：访问 [Brave Search API](https://api.search.brave.com/app) 控制台，创建应用并复制 `BRAVE_SEARCH_API_KEY`。
+
+2. **在 Codex CLI 中注册 MCP**：继续编辑 `~/.codex/config.toml`，增加 Brave Search 配置：
+   ```toml
+   [mcp_servers.brave]
+   transport = "brave-search"
+   token = "$BRAVE_SEARCH_API_KEY"
+   ```
+   > 建议将真实 Key 存在安全凭证管理工具中，再通过环境变量注入。
+
+3. **测试连接**：
+   ```bash
+   mcp brave status
+   mcp brave search --query "latest ethereum whale activity"
+   ```
+   如命令返回正常 JSON，即说明 MCP 已接入，可在 Codex 中进行资讯检索。
+
+## 6. 代码提交流程
 
 1. 拉取最新代码：`git pull --rebase`
 2. 修改并自测后：
@@ -81,13 +100,13 @@ git remote add origin git@github.com:<org_or_user>/<repo-name>.git
 
 > 官方数据显示，引入 GitHub MCP 后，代码审查时间减少 45%，PR 合并冲突降低 62%。
 
-## 6. CI/CD 与审计建议
+## 7. CI/CD 与审计建议
 
 - 在仓库根目录添加 `CODEOWNERS`、`Pull Request Template` 提升审查效率。
 - 根据需要启用 GitHub Actions 进行 lint/test/deploy。
 - 对 `.env` 等敏感文件使用 Secrets 管理，不在仓库或 CI 日志中暴露。
 
-## 7. 常见问题排查
+## 8. 常见问题排查
 
 | 问题 | 可能原因 | 处理建议 |
 | ---- | -------- | -------- |
@@ -96,7 +115,7 @@ git remote add origin git@github.com:<org_or_user>/<repo-name>.git
 | PR 合并冲突频发 | 分支更新不及时 | 使用 `git pull --rebase` 并保持分支同步 |
 | DeepL/Gemini 调用失败 | 网络或 Key 不正确 | 检查代理、限额，更新配置 |
 
-## 8. 后续扩展
+## 9. 后续扩展
 
 - 通过 MCP 自动创建 Release Notes、Changelog。
 - 接入 Issue 模板和项目看板，结合 AI 辅助做优先级分析。
