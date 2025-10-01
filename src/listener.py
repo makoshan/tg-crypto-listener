@@ -277,6 +277,8 @@ class TelegramListener:
                 show_original=show_original,
                 **ai_kwargs,
             )
+            if signal_result and signal_result.links:
+                formatted_message = self._append_links(formatted_message, signal_result.links)
 
             success = await self.forwarder.forward_message(formatted_message)
             if success:
@@ -296,6 +298,15 @@ class TelegramListener:
         except Exception as exc:  # pylint: disable=broad-except
             self.stats["errors"] += 1
             logger.error(f"❌ 处理消息时出错: {exc}")
+
+    def _append_links(self, message: str, links: list[str]) -> str:
+        if not links:
+            return message
+        normalized = [link.strip() for link in links if link and link.strip()]
+        if not normalized:
+            return message
+        link_lines = "\n".join(normalized)
+        return f"{message}\n🔗 {link_lines}"
 
     def _build_ai_kwargs(self, signal_result: SignalResult | None) -> dict[str, object]:
         if not signal_result:

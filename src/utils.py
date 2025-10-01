@@ -152,7 +152,7 @@ def format_forwarded_message(
 
     parts: list[str] = ["🔔 **加密新闻监听**\n\n"]
 
-    # 信号摘要：翻译文本与 AI 摘要分别列出，便于快速浏览
+    # 信号摘要：翻译文本与 AI 摘要分别列出，清晰紧凑
     summary_segments: list[str] = []
     if translated_text:
         summary_segments.append(translated_text)
@@ -165,7 +165,9 @@ def format_forwarded_message(
     if summary_segments:
         parts.append("⚡ **信号摘要**\n")
         for segment in summary_segments:
-            parts.append(f"- {segment}\n")
+            cleaned = segment.replace("\n", " ").strip()
+            if cleaned:
+                parts.append(f"- {cleaned}\n")
         parts.append("\n")
 
     # 操作要点，仅当有 AI 结果时展示
@@ -176,6 +178,7 @@ def format_forwarded_message(
         )
         parts.append("🎯 **操作要点**\n")
 
+        asset_line = ""
         if ai_asset or ai_asset_names:
             asset_line = ai_asset
             if ai_asset_names and ai_asset:
@@ -184,30 +187,30 @@ def format_forwarded_message(
                 asset_line = ai_asset_names
             elif ai_asset:
                 asset_line = ai_asset
-            else:
-                asset_line = "未识别"
-            parts.append(f"- **标的**: {asset_line}\n")
 
-        parts.append(f"- **动作**: {action_value}")
-        if ai_direction:
-            direction_cn = DIRECTION_LABELS.get(ai_direction, ai_direction)
-            parts[-1] += f"（方向: {direction_cn}）"
-        parts[-1] += "\n"
+        direction_cn = DIRECTION_LABELS.get(ai_direction, ai_direction) if ai_direction else None
+        strength_cn = STRENGTH_LABELS.get(ai_strength, ai_strength) if ai_strength else None
 
-        parts.append(f"- **置信度**: {confidence_text}")
-        if ai_strength:
-            strength_cn = STRENGTH_LABELS.get(ai_strength, ai_strength)
-            parts[-1] += f" · 强度: {strength_cn}"
-        parts[-1] += "\n"
+        line_parts: list[str] = []
+        if asset_line:
+            line_parts.append(asset_line)
+        line_parts.append(action_value)
+        if direction_cn:
+            line_parts.append(f"方向: {direction_cn}")
+        line_parts.append(f"置信度: {confidence_text}")
+        if strength_cn:
+            line_parts.append(f"强度: {strength_cn}")
+
+        parts.append("- " + "，".join(line_parts) + "\n")
 
         localized_flags = [
             RISK_FLAG_LABELS.get(flag, flag) for flag in ai_risk_flags if flag
         ]
         if localized_flags:
-            parts.append(f"- ⚠️ **风险**: {'、'.join(localized_flags)}\n")
+            parts.append(f"- 风险: {'、'.join(localized_flags)}\n")
 
         if ai_notes:
-            parts.append(f"- 📝 **备注**: {ai_notes}\n")
+            parts.append(f"- 备注: {ai_notes}\n")
 
         parts.append("\n")
 

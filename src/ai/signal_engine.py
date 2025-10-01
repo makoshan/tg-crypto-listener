@@ -106,6 +106,7 @@ class SignalResult:
     raw_response: str = ""
     notes: str = ""
     error: Optional[str] = None
+    links: list[str] = field(default_factory=list)
 
     @property
     def should_execute_hot_path(self) -> bool:
@@ -395,6 +396,13 @@ class AiSignalEngine:
             if not isinstance(risk_flags, list):
                 risk_flags = [str(risk_flags)]
             notes = str(data.get("notes", "")).strip()
+            links_raw = data.get("links", [])
+            if isinstance(links_raw, str):
+                links = [links_raw]
+            elif isinstance(links_raw, list):
+                links = [str(item).strip() for item in links_raw if str(item).strip()]
+            else:
+                links = []
             if isinstance(asset_field, (list, tuple)):
                 asset = ",".join(str(item).strip() for item in asset_field if str(item).strip())
             else:
@@ -420,6 +428,7 @@ class AiSignalEngine:
             confidence = 0.0
             risk_flags = ["confidence_low"]
             notes = ""
+            links = []
 
         event_type = event_type if event_type in ALLOWED_EVENT_TYPES else "other"
         action = action if action in ALLOWED_ACTIONS else "observe"
@@ -477,6 +486,7 @@ class AiSignalEngine:
             summary=summary,
             event_type=event_type,
             asset=asset,
+            asset_names=asset_names,
             action=action,
             direction=direction,
             confidence=confidence,
@@ -484,7 +494,7 @@ class AiSignalEngine:
             risk_flags=filtered_flags,
             raw_response=raw_text,
             notes=notes,
-            asset_names=asset_names,
+            links=links,
         )
 
     @staticmethod

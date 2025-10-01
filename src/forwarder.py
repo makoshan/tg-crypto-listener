@@ -34,7 +34,11 @@ class MessageForwarder:
         """Attempt to forward message to primary chat, then backup."""
         for attempt in range(self.retry_count):
             try:
-                await self.client.send_message(self.target_chat_id, formatted_message)
+                await self.client.send_message(
+                    self.target_chat_id,
+                    formatted_message,
+                    link_preview=False,
+                )
                 logger.info(f"✅ 消息已转发到 {self.target_chat_id}")
                 if self.cooldown_seconds:
                     await asyncio.sleep(self.cooldown_seconds)
@@ -65,6 +69,7 @@ class MessageForwarder:
             await self.client.send_message(
                 self.backup_chat_id,
                 f"🔄 备用频道转发:\n\n{message}",
+                link_preview=False,
             )
             logger.info(f"✅ 已转发到备用频道 {self.backup_chat_id}")
             if self.cooldown_seconds:
