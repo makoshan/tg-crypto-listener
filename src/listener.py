@@ -6,6 +6,7 @@ import asyncio
 import base64
 import signal
 import sys
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -277,17 +278,23 @@ class TelegramListener:
                 show_original=show_original,
                 **ai_kwargs,
             )
-            link_preview = False
-            if signal_result and signal_result.links:
+            links: list[str] = []
+            if signal_result:
+                links = self._collect_links(
+                    signal_result,
+                    formatted_message,
+                    translated_text,
+                    message_text,
+                )
+            if links:
                 formatted_message = self._append_links(
                     formatted_message,
-                    signal_result.links,
+                    links,
                 )
-                link_preview = True
 
             success = await self.forwarder.forward_message(
                 formatted_message,
-                link_preview=link_preview,
+                link_preview=False,
             )
             if success:
                 self.stats["forwarded"] += 1
@@ -310,11 +317,48 @@ class TelegramListener:
     def _append_links(self, message: str, links: list[str]) -> str:
         if not links:
             return message
-        normalized = [link.strip() for link in links if link and link.strip()]
+        normalized = [link for link in links if link]
         if not normalized:
             return message
         link_lines = "\n".join(normalized)
         return f"{message}\n🔗 {link_lines}"
+
+    def _collect_links(
+        self,
+        signal_result: SignalResult,
+        formatted_message: str,
+        translated_text: str | None,
+        original_text: str | None,
+    ) -> list[str]:
+        candidate_sources = [
+            "\n".join(signal_result.links),
+            signal_result.summary,
+            signal_result.notes,
+            translated_text,
+            original_text,
+            formatted_message,
+        ]
+        seen: set[str] = set()
+        collected: list[str] = []
+        for source in candidate_sources:
+            for link in self._extract_links(source):
+                if link not in seen:
+                    seen.add(link)
+                    collected.append(link)
+        return collected
+
+    @staticmethod
+    def _extract_links(text: str | None) -> list[str]:
+        if not text:
+            return []
+        pattern = re.compile(r"https?://[\w\-._~:/?#\[\]@!$&'()*+,;=%]+", re.IGNORECASE)
+        matches = pattern.findall(text)
+        normalized = []
+        for match in matches:
+            cleaned = match.rstrip('.,!?)\]\"\'')
+            if cleaned:
+                normalized.append(cleaned)
+        return normalized
 
     def _build_ai_kwargs(self, signal_result: SignalResult | None) -> dict[str, object]:
         if not signal_result:
