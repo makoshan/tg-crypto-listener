@@ -277,10 +277,18 @@ class TelegramListener:
                 show_original=show_original,
                 **ai_kwargs,
             )
+            link_preview = False
             if signal_result and signal_result.links:
-                formatted_message = self._append_links(formatted_message, signal_result.links)
+                formatted_message = self._append_links(
+                    formatted_message,
+                    signal_result.links,
+                )
+                link_preview = True
 
-            success = await self.forwarder.forward_message(formatted_message)
+            success = await self.forwarder.forward_message(
+                formatted_message,
+                link_preview=link_preview,
+            )
             if success:
                 self.stats["forwarded"] += 1
                 logger.info("📤 已转发来自 %s 的消息", source_name)
