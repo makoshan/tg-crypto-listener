@@ -562,7 +562,16 @@ def build_signal_prompt(payload: EventPayload) -> list[dict[str, str]]:
         "confidence 范围 0-1，保留两位小数，并与 high/medium/low 的 strength 保持一致性。"
         "risk_flags 为数组，枚举 price_volatility、liquidity_risk、regulation_risk、confidence_low、data_incomplete。"
         "仅当事件直接涉及可识别的加密货币或代币（通常为 2-10 位大写字母/数字的代码，如 BTC、ETH、SOL、BNB、XRP 等）时，输出准确的币种代码；若提及股票、股指、ETF（如特斯拉、S&P500、纳指、恒生指数等）或无法确定具体加密资产，请将 asset 设置为 NONE 并在 notes 中说明原因，禁止返回 GENERAL、CRYPTO、MARKET 等泛化词。"
-        "所有字符串输出使用简体中文，禁止返回 Markdown、额外文本或解释。"
+        "\n\n## 图片分析指南\n"
+        "当消息包含图片时，请仔细识别图片内容类型并提取关键信息：\n"
+        "1. **交易所截图**（订单明细、持仓、成交记录等）：识别交易对、成交价格、成交数量、时间戳，提取资产代码（如 2Z/KRW 中的 2Z），分析交易行为（大额买入/卖出）。\n"
+        "2. **价格图表**（K线图、走势图等）：识别币种、价格趋势（上涨/下跌）、关键价位、技术指标，分析市场情绪。\n"
+        "3. **公告截图**（交易所公告、官方声明等）：识别发布方、核心内容（上币、下架、活动等），提取币种和事件类型。\n"
+        "4. **社交媒体截图**（Twitter/X、Telegram 等）：识别发言者、内容主题，判断影响力和可信度。\n"
+        "5. **其他金融数据**（资金费率、持仓量、清算数据等）：提取具体数值和币种，分析市场异常信号。\n"
+        "若图片内容与加密货币无关（如表情包、风景照、无关文档等），请在 notes 中说明'图片内容与加密货币无关'并将 asset 设为 NONE。\n"
+        "若图片模糊或无法识别关键信息，请在 risk_flags 中添加 data_incomplete，并在 notes 中说明。\n"
+        "\n所有字符串输出使用简体中文，禁止返回 Markdown、额外文本或解释。"
     )
 
     user_prompt = (
