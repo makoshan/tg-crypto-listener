@@ -11,7 +11,7 @@ from datetime import datetime
 from typing import Any, Dict, Optional, Sequence
 
 from ..utils import setup_logger
-from .gemini_client import AiServiceError
+from .gemini_client import AiServiceError, GeminiClient, GeminiResponse
 
 try:  # pragma: no cover - optional dependency
     import httpx
@@ -322,15 +322,26 @@ class AiSignalEngine:
                     }
 
         try:
-            client = OpenAIChatClient(
-                api_key=str(api_key),
-                model_name=getattr(config, "AI_MODEL_NAME", "gpt-4o-mini"),
-                base_url=base_url,
-                timeout=getattr(config, "AI_TIMEOUT_SECONDS", 8.0),
-                max_retries=getattr(config, "AI_RETRY_ATTEMPTS", 1),
-                retry_backoff_seconds=getattr(config, "AI_RETRY_BACKOFF_SECONDS", 1.5),
-                extra_headers=extra_headers or None,
-            )
+            # Use native GeminiClient for Gemini (supports multimodal)
+            if provider == "gemini":
+                client = GeminiClient(
+                    api_key=str(api_key),
+                    model_name=getattr(config, "AI_MODEL_NAME", "gemini-2.0-flash-exp"),
+                    timeout=getattr(config, "AI_TIMEOUT_SECONDS", 8.0),
+                    max_retries=getattr(config, "AI_RETRY_ATTEMPTS", 1),
+                    retry_backoff_seconds=getattr(config, "AI_RETRY_BACKOFF_SECONDS", 1.5),
+                )
+            else:
+                # Use OpenAI-compatible client for others
+                client = OpenAIChatClient(
+                    api_key=str(api_key),
+                    model_name=getattr(config, "AI_MODEL_NAME", "gpt-4o-mini"),
+                    base_url=base_url,
+                    timeout=getattr(config, "AI_TIMEOUT_SECONDS", 8.0),
+                    max_retries=getattr(config, "AI_RETRY_ATTEMPTS", 1),
+                    retry_backoff_seconds=getattr(config, "AI_RETRY_BACKOFF_SECONDS", 1.5),
+                    extra_headers=extra_headers or None,
+                )
         except AiServiceError as exc:
             logger.warning("AI 初始化失败，将以降级模式运行: %s", exc, exc_info=True)
             return cls(False, None, getattr(config, "AI_SIGNAL_THRESHOLD", 0.0), asyncio.Semaphore(1))
@@ -352,9 +363,23 @@ class AiSignalEngine:
             payload.text[:80].replace("\n", " "),
         )
 
+        # Extract images for GeminiClient multimodal support
+        images = None
+        if isinstance(self._client, GeminiClient) and payload.media:
+            images = [
+                {"base64": img["base64"], "mime_type": img["mime_type"]}
+                for img in payload.media
+                if img.get("base64") and img.get("mime_type")
+            ]
+            if images:
+                logger.debug("AI 分析包含 %d 张图片", len(images))
+
         async with self._semaphore:
             try:
-                response = await self._client.generate_signal(messages)
+                if isinstance(self._client, GeminiClient):
+                    response = await self._client.generate_signal(messages, images=images)
+                else:
+                    response = await self._client.generate_signal(messages)
             except AiServiceError as exc:
                 is_temporary = getattr(exc, "temporary", False)
                 logger.warning(

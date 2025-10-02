@@ -32,7 +32,7 @@ from .db.models import AiSignalPayload, NewsEventPayload
 
 logger = setup_logger(__name__)
 
-MAX_INLINE_MEDIA_BYTES = 1_000_000
+MAX_INLINE_MEDIA_BYTES = 4_000_000  # 4MB limit for Gemini inline images (20MB total request limit)
 
 
 class TelegramListener:

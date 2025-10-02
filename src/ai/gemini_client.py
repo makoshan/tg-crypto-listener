@@ -59,8 +59,13 @@ class GeminiClient:
         except Exception as exc:  # pragma: no cover - network/proxy issues
             raise AiServiceError(str(exc)) from exc
 
-    async def generate_signal(self, prompt: str) -> GeminiResponse:
-        """Execute prompt against Gemini and return plain text."""
+    async def generate_signal(self, prompt: str | list, images: list[dict] = None) -> GeminiResponse:
+        """Execute prompt against Gemini and return plain text.
+
+        Args:
+            prompt: Text prompt or list of content parts
+            images: Optional list of image dicts with base64 data
+        """
         last_exc: Exception | None = None
         last_error_message = "Gemini 调用失败"
         last_error_temporary = False
@@ -68,7 +73,7 @@ class GeminiClient:
         for attempt in range(self._max_retries + 1):
             try:
                 text = await asyncio.wait_for(
-                    asyncio.to_thread(self._call_model, prompt),
+                    asyncio.to_thread(self._call_model, prompt, images),
                     timeout=self._timeout,
                 )
             except asyncio.CancelledError:  # propagate cooperative cancellation
@@ -110,10 +115,35 @@ class GeminiClient:
 
         raise AiServiceError(last_error_message, temporary=last_error_temporary) from last_exc
 
-    def _call_model(self, prompt: str) -> str:
+    def _call_model(self, prompt: str | list, images: list[dict] = None) -> str:
+        import base64
+
+        # Build multimodal content if images provided
+        if images:
+            contents = []
+
+            # Add text part
+            if isinstance(prompt, str):
+                contents.append(prompt)
+            else:
+                contents.extend(prompt)
+
+            # Add image parts
+            for img in images:
+                if img.get("base64") and img.get("mime_type"):
+                    # Gemini expects inline_data format
+                    contents.append({
+                        "inline_data": {
+                            "mime_type": img["mime_type"],
+                            "data": img["base64"]  # Already base64 encoded
+                        }
+                    })
+        else:
+            contents = prompt
+
         response = self._client.models.generate_content(
             model=self._model_name,
-            contents=prompt,
+            contents=contents,
         )
 
         if hasattr(response, "text") and response.text:
