@@ -73,6 +73,15 @@ class SupabaseClient:
             return response
         return None
 
+    async def rpc(self, function_name: str, params: Dict[str, Any]) -> Any:
+        """Call a PostgreSQL function via RPC."""
+        response = await self._request(
+            "POST",
+            f"rpc/{function_name}",
+            json=params,
+        )
+        return response
+
     async def _request(
         self,
         method: str,

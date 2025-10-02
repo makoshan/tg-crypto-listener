@@ -31,6 +31,54 @@ class NewsEventRepository:
             return int(record["id"])
         return None
 
+    async def check_duplicate_by_embedding(
+        self,
+        embedding: List[float],
+        threshold: float = 0.92,
+        time_window_hours: int = 72,
+    ) -> Optional[Dict[str, Any]]:
+        """Check for semantically similar events using vector similarity.
+
+        Args:
+            embedding: Vector to compare against
+            threshold: Similarity threshold (0-1), default 0.92
+            time_window_hours: Only search within this time window
+
+        Returns:
+            Dict with 'id', 'content_text' and 'similarity' if found, None otherwise
+        """
+        if not embedding:
+            return None
+
+        try:
+            # Call PostgreSQL RPC function for vector similarity search
+            response = await self._client.rpc(
+                "find_similar_events",
+                {
+                    "query_embedding": embedding,
+                    "similarity_threshold": threshold,
+                    "time_window_hours": time_window_hours,
+                    "max_results": 1,
+                }
+            )
+
+            if isinstance(response, list) and response:
+                result = response[0]
+                return {
+                    "id": int(result["id"]),
+                    "content_text": result.get("content_text", ""),
+                    "similarity": float(result.get("similarity", 0.0)),
+                }
+
+            return None
+
+        except SupabaseError:
+            # RPC function might not exist yet, return None
+            return None
+        except Exception:
+            # Fallback: return None on any error
+            return None
+
     async def insert_event(self, payload: NewsEventPayload) -> Optional[int]:
         data = {
             "source": payload.source,
@@ -44,6 +92,7 @@ class NewsEventRepository:
             "media_refs": payload.media_refs or [],
             "hash_raw": payload.hash_raw,
             "hash_canonical": payload.hash_canonical,
+            "embedding": payload.embedding,  # Add embedding support
             "keywords_hit": payload.keywords_hit or [],
             "ingest_status": payload.ingest_status,
             "metadata": payload.metadata or {},

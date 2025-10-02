@@ -511,8 +511,19 @@ class TelegramListener:
             return
 
         try:
+            from .utils import compute_embedding
+
             hash_raw = compute_sha256(original_text)
             hash_canonical = compute_canonical_hash(original_text)
+
+            # Generate embedding for semantic dedup
+            embedding = None
+            if self.config.OPENAI_API_KEY:
+                embedding = await compute_embedding(
+                    original_text,
+                    api_key=self.config.OPENAI_API_KEY,
+                    model=self.config.OPENAI_EMBEDDING_MODEL,
+                )
 
             ingest_status = "forwarded" if forwarded else "processed"
             metadata = {
@@ -522,6 +533,9 @@ class TelegramListener:
                 "translation_confidence": translation_confidence,
                 "processed_at": processed_at.replace(microsecond=0).isoformat(),
             }
+            if embedding:
+                metadata["embedding_model"] = self.config.OPENAI_EMBEDDING_MODEL
+                metadata["embedding_generated_at"] = datetime.now().isoformat()
             if signal_result:
                 metadata.update(
                     {
@@ -534,7 +548,28 @@ class TelegramListener:
                 if signal_result.error:
                     metadata["ai_error"] = signal_result.error
 
+            # Level 1: Exact hash dedup
             news_event_id = await self.news_repository.check_duplicate(hash_raw)
+            if news_event_id:
+                logger.debug("精确去重命中: event_id=%s", news_event_id)
+                return
+
+            # Level 2: Semantic embedding dedup
+            if embedding:
+                similar = await self.news_repository.check_duplicate_by_embedding(
+                    embedding=embedding,
+                    threshold=self.config.EMBEDDING_SIMILARITY_THRESHOLD,
+                    time_window_hours=self.config.EMBEDDING_TIME_WINDOW_HOURS,
+                )
+                if similar:
+                    logger.info(
+                        "语义去重命中: event_id=%s similarity=%.3f content_preview=%s",
+                        similar["id"],
+                        similar["similarity"],
+                        similar.get("content_text", "")[:50],
+                    )
+                    return
+
             if not news_event_id:
                 payload = NewsEventPayload(
                     source=source_name,
@@ -548,6 +583,7 @@ class TelegramListener:
                     media_refs=media_refs,
                     hash_raw=hash_raw,
                     hash_canonical=hash_canonical,
+                    embedding=embedding,  # Add embedding vector
                     keywords_hit=list(dict.fromkeys(keywords_hit or [])),
                     ingest_status=ingest_status,
                     metadata=metadata,

@@ -96,6 +96,48 @@ def compute_canonical_hash(text: str) -> str:
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
 
+async def compute_embedding(text: str, api_key: str, model: str = "text-embedding-3-small") -> list[float] | None:
+    """Generate OpenAI embedding vector for text.
+
+    Args:
+        text: Input text to embed (will be truncated to 8000 chars)
+        api_key: OpenAI API key
+        model: Embedding model name
+
+    Returns:
+        List of floats (1536 dimensions for text-embedding-3-small) or None on error
+    """
+    if not text or not text.strip():
+        return None
+
+    if not api_key:
+        return None
+
+    try:
+        from openai import AsyncOpenAI
+
+        client = AsyncOpenAI(api_key=api_key)
+
+        # Truncate text to avoid token limits
+        truncated_text = text[:8000]
+
+        response = await client.embeddings.create(
+            model=model,
+            input=truncated_text
+        )
+
+        return response.data[0].embedding
+
+    except ImportError:
+        logger = setup_logger(__name__)
+        logger.warning("OpenAI SDK not installed, skipping embedding generation")
+        return None
+    except Exception as exc:
+        logger = setup_logger(__name__)
+        logger.warning("Embedding generation failed: %s", exc)
+        return None
+
+
 ACTION_LABELS = {
     "buy": "买入",
     "sell": "卖出",
