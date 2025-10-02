@@ -118,15 +118,23 @@ class GeminiClient:
     def _call_model(self, prompt: str | list, images: list[dict] = None) -> str:
         import base64
 
+        # Convert OpenAI-style messages to Gemini format
+        if isinstance(prompt, list) and prompt and isinstance(prompt[0], dict) and "role" in prompt[0]:
+            # Extract content from OpenAI-style messages [{'role': 'system', 'content': '...'}, ...]
+            text_parts = []
+            for msg in prompt:
+                if isinstance(msg, dict) and "content" in msg:
+                    text_parts.append(msg["content"])
+            prompt_text = "\n\n".join(text_parts)
+        elif isinstance(prompt, str):
+            prompt_text = prompt
+        else:
+            # Assume it's already in the correct format
+            prompt_text = prompt
+
         # Build multimodal content if images provided
         if images:
-            contents = []
-
-            # Add text part
-            if isinstance(prompt, str):
-                contents.append(prompt)
-            else:
-                contents.extend(prompt)
+            contents = [prompt_text]
 
             # Add image parts
             for img in images:
@@ -139,7 +147,7 @@ class GeminiClient:
                         }
                     })
         else:
-            contents = prompt
+            contents = prompt_text
 
         response = self._client.models.generate_content(
             model=self._model_name,
