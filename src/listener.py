@@ -7,7 +7,7 @@ import base64
 import signal
 import sys
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -23,8 +23,12 @@ from .utils import (
     MessageDeduplicator,
     contains_keywords,
     format_forwarded_message,
+    compute_canonical_hash,
+    compute_sha256,
     setup_logger,
 )
+from .db import AiSignalRepository, NewsEventRepository, SupabaseError, get_supabase_client
+from .db.models import AiSignalPayload, NewsEventPayload
 
 logger = setup_logger(__name__)
 
@@ -56,6 +60,14 @@ class TelegramListener:
             "translation_errors": 0,
             "start_time": datetime.now(),
         }
+        self.db_enabled = (
+            self.config.ENABLE_DB_PERSISTENCE
+            and bool(self.config.SUPABASE_URL)
+            and bool(self.config.SUPABASE_SERVICE_KEY)
+        )
+        self._supabase_client = None
+        self.news_repository: NewsEventRepository | None = None
+        self.signal_repository: AiSignalRepository | None = None
 
     async def initialize(self) -> None:
         """Prepare Telethon client and verify configuration."""
@@ -76,6 +88,20 @@ class TelegramListener:
             self.config.TARGET_CHAT_ID_BACKUP,
             cooldown_seconds=self.config.FORWARD_COOLDOWN_SECONDS,
         )
+
+        if self.db_enabled:
+            try:
+                self._supabase_client = get_supabase_client(
+                    self.config.SUPABASE_URL,
+                    self.config.SUPABASE_SERVICE_KEY,
+                    timeout=self.config.SUPABASE_TIMEOUT_SECONDS,
+                )
+                self.news_repository = NewsEventRepository(self._supabase_client)
+                self.signal_repository = AiSignalRepository(self._supabase_client)
+                logger.info("🗄️ Supabase 持久化已启用")
+            except SupabaseError as exc:
+                self.db_enabled = False
+                logger.warning("Supabase 初始化失败，将禁用持久化: %s", exc)
 
         if self.config.TRANSLATION_ENABLED:
             try:
@@ -163,6 +189,15 @@ class TelegramListener:
                 or str(getattr(source_chat, "id", "Unknown"))
             )
 
+            source_message_id = str(getattr(event.message, "id", ""))
+            published_at = getattr(event.message, "date", None) or datetime.now(timezone.utc)
+            channel_username = getattr(source_chat, "username", None)
+            source_url = (
+                f"https://t.me/{channel_username}/{source_message_id}"
+                if channel_username and source_message_id
+                else None
+            )
+
             logger.debug("📨 收到消息来自 %s: %.100s...", source_name, message_text)
 
             if not contains_keywords(message_text, self.config.FILTER_KEYWORDS):
@@ -185,6 +220,7 @@ class TelegramListener:
             language = "unknown"
             translation_confidence = 0.0
             keywords_hit = self._collect_keywords(message_text)
+            media_payload: list[dict[str, Any]] = []
 
             if self.translator:
                 try:
@@ -244,6 +280,14 @@ class TelegramListener:
                     translated_text,
                     signal_result,
                     False,
+                    source_message_id=source_message_id,
+                    source_url=source_url,
+                    published_at=published_at,
+                    processed_at=event_time,
+                    language=language,
+                    keywords_hit=keywords_hit,
+                    translation_confidence=translation_confidence,
+                    media_refs=media_payload,
                 )
                 return
 
@@ -261,6 +305,14 @@ class TelegramListener:
                     translated_text,
                     signal_result,
                     False,
+                    source_message_id=source_message_id,
+                    source_url=source_url,
+                    published_at=published_at,
+                    processed_at=event_time,
+                    language=language,
+                    keywords_hit=keywords_hit,
+                    translation_confidence=translation_confidence,
+                    media_refs=media_payload,
                 )
                 return
 
@@ -309,6 +361,14 @@ class TelegramListener:
                 translated_text,
                 signal_result,
                 success,
+                source_message_id=source_message_id,
+                source_url=source_url,
+                published_at=published_at,
+                processed_at=event_time,
+                language=language,
+                keywords_hit=keywords_hit,
+                translation_confidence=translation_confidence,
+                media_refs=media_payload,
             )
         except Exception as exc:  # pylint: disable=broad-except
             self.stats["errors"] += 1
@@ -434,10 +494,110 @@ class TelegramListener:
         translated_text: str | None,
         signal_result: SignalResult | None,
         forwarded: bool,
+        *,
+        source_message_id: str,
+        source_url: str | None,
+        published_at: datetime,
+        processed_at: datetime,
+        language: str,
+        keywords_hit: list[str],
+        translation_confidence: float,
+        media_refs: list[dict[str, Any]],
     ) -> None:
-        """Reserved for future Supabase integration."""
-        _ = (source_name, original_text, translated_text, signal_result, forwarded)
-        return None
+        if not self.db_enabled or not self.news_repository:
+            return
+
+        if not original_text.strip():
+            return
+
+        try:
+            hash_raw = compute_sha256(original_text)
+            hash_canonical = compute_canonical_hash(original_text)
+
+            ingest_status = "forwarded" if forwarded else "processed"
+            metadata = {
+                "forwarded": forwarded,
+                "source": source_name,
+                "language_detected": language,
+                "translation_confidence": translation_confidence,
+                "processed_at": processed_at.replace(microsecond=0).isoformat(),
+            }
+            if signal_result:
+                metadata.update(
+                    {
+                        "ai_status": signal_result.status,
+                        "ai_confidence": signal_result.confidence,
+                        "ai_strength": signal_result.strength,
+                        "ai_direction": signal_result.direction,
+                    }
+                )
+                if signal_result.error:
+                    metadata["ai_error"] = signal_result.error
+
+            news_event_id = await self.news_repository.check_duplicate(hash_raw)
+            if not news_event_id:
+                payload = NewsEventPayload(
+                    source=source_name,
+                    source_message_id=source_message_id,
+                    source_url=source_url,
+                    published_at=published_at,
+                    content_text=original_text,
+                    translated_text=translated_text,
+                    summary=signal_result.summary if signal_result else None,
+                    language=language or "unknown",
+                    media_refs=media_refs,
+                    hash_raw=hash_raw,
+                    hash_canonical=hash_canonical,
+                    keywords_hit=list(dict.fromkeys(keywords_hit or [])),
+                    ingest_status=ingest_status,
+                    metadata=metadata,
+                )
+                news_event_id = await self.news_repository.insert_event(payload)
+
+            if not news_event_id:
+                logger.warning("⚠️ 未能写入新闻事件到数据库")
+                return
+
+            if not signal_result or signal_result.status != "success" or not self.signal_repository:
+                return
+
+            model_name = self.config.AI_MODEL_NAME or "unknown"
+            published_at_aware = (
+                published_at if published_at.tzinfo else published_at.replace(tzinfo=timezone.utc)
+            )
+            processed_at_aware = (
+                processed_at if processed_at.tzinfo else processed_at.replace(tzinfo=timezone.utc)
+            )
+            latency_delta = processed_at_aware - published_at_aware
+            latency_ms = max(
+                0,
+                int(latency_delta.total_seconds() * 1000),
+            )
+
+            signal_payload = AiSignalPayload(
+                news_event_id=news_event_id,
+                model_name=model_name,
+                summary_cn=signal_result.summary,
+                event_type=signal_result.event_type,
+                assets=signal_result.asset,
+                asset_names=signal_result.asset_names or None,
+                action=signal_result.action,
+                direction=signal_result.direction,
+                confidence=float(signal_result.confidence),
+                strength=signal_result.strength,
+                risk_flags=signal_result.risk_flags,
+                notes=signal_result.notes or None,
+                links=signal_result.links,
+                execution_path="hot" if signal_result.should_execute_hot_path else "cold",
+                should_alert=forwarded,
+                latency_ms=latency_ms,
+                raw_response=signal_result.raw_response or None,
+            )
+            await self.signal_repository.insert_signal(signal_payload)
+        except SupabaseError as exc:
+            logger.warning("Supabase 写入失败: %s", exc)
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.warning("持久化流程异常: %s", exc)
 
     def _collect_keywords(self, *texts: str) -> list[str]:
         hits: list[str] = []

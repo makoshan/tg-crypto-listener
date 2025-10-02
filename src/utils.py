@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-import hashlib
 import logging
+import hashlib
+import re
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, Set
@@ -77,6 +78,22 @@ def contains_keywords(text: str, keywords: Set[str]) -> bool:
 
     text_lower = text.lower()
     return any(keyword in text_lower for keyword in keywords)
+
+
+def compute_sha256(text: str) -> str:
+    """Return SHA256 hash for raw text."""
+    if not text:
+        return ""
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def compute_canonical_hash(text: str) -> str:
+    """Return SHA256 hash after stripping whitespace and URLs."""
+    if not text:
+        return ""
+    normalized = re.sub(r"https?://\S+", "", text, flags=re.IGNORECASE)
+    normalized = re.sub(r"\s+", "", normalized)
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
 
 ACTION_LABELS = {
