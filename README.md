@@ -7,13 +7,13 @@
 ## 核心特点
 - **多源监听**：基于 Telethon 订阅多个 Telegram 频道，支持关键词过滤与消息去重。
 - **AI 结构化**：调用 Google Gemini 生成 JSON 结果（摘要、事件类型、action、confidence、risk_flags 等），遇到 503/超时自动降级为纯转发。
-- **可选翻译**：整合官方 `deepl` SDK，将非中文快讯先转为简体中文再送入 AI。
+- **可选翻译**：聚合 DeepL、Azure、Google、Amazon、百度、阿里云、腾讯云、华为云、火山、NiuTrans 等主流翻译 API，自动轮询/回退，优先消耗免费额度。
 - **可观测性**：周期性输出运行统计，便于监控转发、AI 成功率、错误等指标。
 
 ## 环境要求
 - Python 3.9 或以上（推荐 3.10+ 并使用 OpenSSL ≥ 1.1.1）。
 - Telegram API ID / HASH / 手机号。
-- （可选）Google Gemini API Key、DeepL API Key。
+- （可选）Google Gemini / DeepL / Azure Translator / Amazon Translate / Google Cloud Translation / 百度翻译开放平台 / 阿里云机器翻译 / 腾讯云机器翻译 / 华为云机器翻译 / 火山引擎机器翻译 / 小牛翻译 API 凭证，根据需要启用。
 
 ## 快速开始
 1. 克隆仓库并配置 `.env`（参考 `.env` 文件中注释，填写 Telegram、Gemini、DeepL 等凭证）。
@@ -58,14 +58,18 @@ PM2 会读取 `.env`，守护进程并在崩溃后自动拉起，也可配合 `p
 | `AI_TIMEOUT_SECONDS` / `AI_RETRY_ATTEMPTS` / `AI_RETRY_BACKOFF_SECONDS` | AI 调用超时与重试策略。|
 | `AI_MAX_CONCURRENCY` | 同时运行的 Gemini 请求数；遇到 503 可调低。|
 | `AI_SKIP_NEUTRAL_FORWARD` | 当 AI 判定为观望/低优先级时是否直接跳过转发。|
-| `TRANSLATION_ENABLED` / `DEEPL_API_KEY` | 是否启用 DeepL 翻译及相应凭证。|
+| `TRANSLATION_ENABLED` | 是否启用翻译聚合模块。|
+| `TRANSLATION_PROVIDERS` | 翻译服务优先级列表，默认包含 `deepl,azure,google,amazon,baidu,alibaba,tencent,huawei,volcano,niutrans`。|
+| `TRANSLATION_TARGET_LANGUAGE` | 目标语言（默认 `zh`，使用 ISO 639-1）。|
+| `TRANSLATION_PROVIDER_QUOTAS` | 可选的配额覆盖，格式 `provider:字符数`，例如 `tencent:5000000,deepl:500000`；未设置时按默认免费额度上限。|
+| 各云厂商凭据 | 例如 `DEEPL_API_KEY`、`AZURE_TRANSLATOR_KEY`/`REGION`、`AMAZON_TRANSLATE_ACCESS_KEY`/`SECRET_KEY`/`REGION`、`GOOGLE_TRANSLATE_API_KEY`、`BAIDU_TRANSLATE_APP_ID`/`SECRET_KEY`、`ALIBABA_TRANSLATE_APP_KEY`/`ACCESS_KEY_ID`/`ACCESS_KEY_SECRET`、`TENCENT_TRANSLATE_SECRET_ID`/`SECRET_KEY` 等 —— 仅在启用对应服务时必填。|
 | `SOURCE_CHANNELS` / `TARGET_CHAT_ID` | Telegram 源频道与目标推送频道。|
 
 修改配置后需重启服务以生效。
 
 ## 常用脚本
 - `scripts/gemini_stream_example.py`：快速验证 Gemini API Key 或 Prompt，支持命令行参数、文件输入。
-- `src/ai/translator.py`：DeepL 翻译封装，监听器中失败时会回退至原文。
+- `src/ai/translator.py`：多翻译服务聚合器，按优先级轮询各云厂商 API，出错时自动回退至下一家或原文。
 
 ## 故障排查
 - **Gemini 503 / UNAVAILABLE**：多因 Google 服务波动或配额不足。可降低 `AI_MAX_CONCURRENCY`、调大退避、临时关闭 `AI_ENABLED`，待服务恢复后再启用。

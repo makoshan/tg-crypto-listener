@@ -61,8 +61,58 @@ class Config:
 
     TRANSLATION_ENABLED: bool = _as_bool(os.getenv("TRANSLATION_ENABLED", "true"))
     TRANSLATION_TIMEOUT_SECONDS: float = float(os.getenv("TRANSLATION_TIMEOUT_SECONDS", "6"))
+    TRANSLATION_TARGET_LANGUAGE: str = os.getenv("TRANSLATION_TARGET_LANGUAGE", "zh").lower()
+    TRANSLATION_PROVIDERS: List[str] = [
+        provider.strip().lower()
+        for provider in os.getenv(
+            "TRANSLATION_PROVIDERS",
+            "deepl,azure,google,amazon,baidu,alibaba,tencent,huawei,volcano,niutrans",
+        ).split(",")
+        if provider.strip()
+    ]
+    TRANSLATION_PROVIDER_QUOTAS: str = os.getenv("TRANSLATION_PROVIDER_QUOTAS", "")
+
     DEEPL_API_KEY: str = os.getenv("DEEPL_API_KEY", "")
     DEEPL_API_URL: str = os.getenv("DEEPL_API_URL", "https://api.deepl.com/v2/translate")
+
+    AZURE_TRANSLATOR_KEY: str = os.getenv("AZURE_TRANSLATOR_KEY", "")
+    AZURE_TRANSLATOR_REGION: str = os.getenv("AZURE_TRANSLATOR_REGION", "")
+    AZURE_TRANSLATOR_ENDPOINT: str = os.getenv("AZURE_TRANSLATOR_ENDPOINT", "")
+
+    AMAZON_TRANSLATE_ACCESS_KEY: str = os.getenv("AMAZON_TRANSLATE_ACCESS_KEY", "")
+    AMAZON_TRANSLATE_SECRET_KEY: str = os.getenv("AMAZON_TRANSLATE_SECRET_KEY", "")
+    AMAZON_TRANSLATE_REGION: str = os.getenv("AMAZON_TRANSLATE_REGION", "")
+    AMAZON_TRANSLATE_SESSION_TOKEN: str = os.getenv("AMAZON_TRANSLATE_SESSION_TOKEN", "")
+
+    GOOGLE_TRANSLATE_API_KEY: str = os.getenv("GOOGLE_TRANSLATE_API_KEY", "")
+    GOOGLE_TRANSLATE_ENDPOINT: str = os.getenv("GOOGLE_TRANSLATE_ENDPOINT", "")
+
+    BAIDU_TRANSLATE_APP_ID: str = os.getenv("BAIDU_TRANSLATE_APP_ID", "")
+    BAIDU_TRANSLATE_SECRET_KEY: str = os.getenv("BAIDU_TRANSLATE_SECRET_KEY", "")
+
+    ALIBABA_TRANSLATE_ACCESS_KEY_ID: str = os.getenv("ALIBABA_TRANSLATE_ACCESS_KEY_ID", "")
+    ALIBABA_TRANSLATE_ACCESS_KEY_SECRET: str = os.getenv("ALIBABA_TRANSLATE_ACCESS_KEY_SECRET", "")
+    ALIBABA_TRANSLATE_APP_KEY: str = os.getenv("ALIBABA_TRANSLATE_APP_KEY", "")
+    ALIBABA_TRANSLATE_REGION_ID: str = os.getenv("ALIBABA_TRANSLATE_REGION_ID", "cn-hangzhou")
+
+    TENCENT_TRANSLATE_SECRET_ID: str = os.getenv("TENCENT_TRANSLATE_SECRET_ID", "")
+    TENCENT_TRANSLATE_SECRET_KEY: str = os.getenv("TENCENT_TRANSLATE_SECRET_KEY", "")
+    TENCENT_TRANSLATE_REGION: str = os.getenv("TENCENT_TRANSLATE_REGION", "ap-beijing")
+    TENCENT_TRANSLATE_PROJECT_ID: str = os.getenv("TENCENT_TRANSLATE_PROJECT_ID", "")
+
+    HUAWEI_TRANSLATE_ACCESS_KEY: str = os.getenv("HUAWEI_TRANSLATE_ACCESS_KEY", "")
+    HUAWEI_TRANSLATE_SECRET_KEY: str = os.getenv("HUAWEI_TRANSLATE_SECRET_KEY", "")
+    HUAWEI_TRANSLATE_PROJECT_ID: str = os.getenv("HUAWEI_TRANSLATE_PROJECT_ID", "")
+    HUAWEI_TRANSLATE_REGION: str = os.getenv("HUAWEI_TRANSLATE_REGION", "cn-north-4")
+    HUAWEI_TRANSLATE_ENDPOINT: str = os.getenv("HUAWEI_TRANSLATE_ENDPOINT", "")
+
+    VOLCANO_TRANSLATE_ACCESS_KEY: str = os.getenv("VOLCANO_TRANSLATE_ACCESS_KEY", "")
+    VOLCANO_TRANSLATE_SECRET_KEY: str = os.getenv("VOLCANO_TRANSLATE_SECRET_KEY", "")
+    VOLCANO_TRANSLATE_REGION: str = os.getenv("VOLCANO_TRANSLATE_REGION", "cn-north-1")
+    VOLCANO_TRANSLATE_ENDPOINT: str = os.getenv("VOLCANO_TRANSLATE_ENDPOINT", "")
+
+    NIUTRANS_API_KEY: str = os.getenv("NIUTRANS_API_KEY", "")
+    NIUTRANS_API_ENDPOINT: str = os.getenv("NIUTRANS_API_ENDPOINT", "")
 
     FORWARD_COOLDOWN_SECONDS: float = float(os.getenv("FORWARD_COOLDOWN_SECONDS", "1.0"))
 

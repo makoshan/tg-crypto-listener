@@ -15,7 +15,7 @@ from telethon import TelegramClient, events
 from telethon.errors import PhoneCodeInvalidError, SessionPasswordNeededError
 
 from .ai.signal_engine import AiSignalEngine, EventPayload, SignalResult
-from .ai.translator import Translator
+from .ai.translator import Translator, build_translator_from_config
 from .ai.gemini_client import AiServiceError
 from .config import Config
 from .forwarder import MessageForwarder
@@ -105,16 +105,16 @@ class TelegramListener:
 
         if self.config.TRANSLATION_ENABLED:
             try:
-                self.translator = Translator(
-                    enabled=self.config.TRANSLATION_ENABLED,
-                    api_key=self.config.DEEPL_API_KEY,
-                    timeout=self.config.TRANSLATION_TIMEOUT_SECONDS,
-                    api_url=self.config.DEEPL_API_URL,
-                )
-                if self.translator and not self.translator.enabled:
-                    logger.debug("翻译模块已配置但 Deepl Key 缺失，翻译将被跳过")
+                translator = build_translator_from_config(self.config)
             except AiServiceError as exc:
                 logger.warning("翻译模块初始化失败，将使用原文: %s", exc)
+                translator = None
+
+            if translator is not None:
+                self.translator = translator
+                if not translator.enabled:
+                    logger.debug("翻译模块已启用但缺少有效凭据，消息将保持原文")
+            else:
                 self.translator = None
 
         logger.info("🚀 正在连接到 Telegram...")
