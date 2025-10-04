@@ -64,8 +64,12 @@ PM2 会读取 `.env`，守护进程并在崩溃后自动拉起，也可配合 `p
 | `TRANSLATION_PROVIDER_QUOTAS` | 可选的配额覆盖，格式 `provider:字符数`，例如 `tencent:5000000,deepl:500000`；未设置时按默认免费额度上限。|
 | 各云厂商凭据 | 例如 `DEEPL_API_KEY`、`AZURE_TRANSLATOR_KEY`/`REGION`、`AMAZON_TRANSLATE_ACCESS_KEY`/`SECRET_KEY`/`REGION`、`GOOGLE_TRANSLATE_API_KEY`、`BAIDU_TRANSLATE_APP_ID`/`SECRET_KEY`、`ALIBABA_TRANSLATE_APP_KEY`/`ACCESS_KEY_ID`/`ACCESS_KEY_SECRET`、`TENCENT_TRANSLATE_SECRET_ID`/`SECRET_KEY` 等 —— 仅在启用对应服务时必填。|
 | `SOURCE_CHANNELS` / `TARGET_CHAT_ID` | Telegram 源频道与目标推送频道。|
+| `FILTER_KEYWORDS_FILE` | 可选：关键词文件路径（默认读取仓库根目录的 `keywords.txt`，文件已加入 `.gitignore`，支持逗号分组与 `#` 注释）。|
+| `FILTER_KEYWORDS` | 兼容旧版的备用配置；若同时存在，则会与文件中关键词合并。|
 
 修改配置后需重启服务以生效。
+
+仓库随附 `keywords.sample.txt` 作为模板，可复制为 `keywords.txt` 后维护；该文件不会进入 Git 仓库，可安全保存私有关键词。
 
 ## 常用脚本
 - `scripts/gemini_stream_example.py`：快速验证 Gemini API Key 或 Prompt，支持命令行参数、文件输入。

@@ -25,3 +25,7 @@ node_modules/
 
 # macOS
 .DS_Store
+
+# Local keyword lists
+keywords.txt
+Keyword.csv

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from typing import List, Set
 
 from dotenv import load_dotenv
@@ -14,6 +15,56 @@ def _as_bool(value: str, default: bool = False) -> bool:
     if value is None:
         return default
     return value.lower() in {"1", "true", "yes", "on"}
+
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_KEYWORDS_FILE = PROJECT_ROOT / "keywords.txt"
+
+
+def _load_keywords_from_env() -> Set[str]:
+    return {
+        keyword.strip().lower()
+        for keyword in os.getenv("FILTER_KEYWORDS", "").split(",")
+        if keyword.strip()
+    }
+
+
+def _resolve_keywords_file(path: str) -> Path:
+    candidate = Path(path).expanduser()
+    if not candidate.is_absolute():
+        candidate = PROJECT_ROOT / candidate
+    return candidate
+
+
+def _load_keywords_from_file(path: str | None) -> Set[str]:
+    keywords: Set[str] = set()
+    explicit_path = (path or "").strip()
+    if explicit_path:
+        keywords_file = _resolve_keywords_file(explicit_path)
+        warn_when_missing = True
+    else:
+        keywords_file = DEFAULT_KEYWORDS_FILE
+        warn_when_missing = False
+
+    if not keywords_file.exists():
+        if warn_when_missing:
+            print(f"⚠️ 关键词文件不存在: {keywords_file}")
+        return keywords
+
+    try:
+        with keywords_file.open("r", encoding="utf-8") as handle:
+            for raw_line in handle:
+                line = raw_line.split("#", 1)[0].strip()
+                if not line:
+                    continue
+                for token in line.split(","):
+                    keyword = token.strip()
+                    if keyword:
+                        keywords.add(keyword.lower())
+    except OSError as exc:
+        print(f"⚠️ 无法读取关键词文件 {keywords_file}: {exc}")
+
+    return keywords
 
 
 class Config:
@@ -32,11 +83,14 @@ class Config:
         if channel.strip()
     ]
 
-    FILTER_KEYWORDS: Set[str] = {
-        keyword.strip().lower()
-        for keyword in os.getenv("FILTER_KEYWORDS", "").split(",")
-        if keyword.strip()
-    }
+    FILTER_KEYWORDS_FILE: str = os.getenv("FILTER_KEYWORDS_FILE", "").strip()
+    _ENV_FILTER_KEYWORDS: Set[str] = _load_keywords_from_env()
+    _FILE_FILTER_KEYWORDS: Set[str] = _load_keywords_from_file(FILTER_KEYWORDS_FILE)
+    FILTER_KEYWORDS: Set[str] = (
+        _FILE_FILTER_KEYWORDS.union(_ENV_FILTER_KEYWORDS)
+        if (_FILE_FILTER_KEYWORDS or _ENV_FILTER_KEYWORDS)
+        else set()
+    )
 
     DEDUP_WINDOW_HOURS: int = int(os.getenv("DEDUP_WINDOW_HOURS", "24"))
 
