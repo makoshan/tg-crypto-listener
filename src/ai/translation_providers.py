@@ -568,7 +568,6 @@ class TencentTranslateProvider(BaseTranslationProvider):
         credential_scope, string_to_sign = _tc3_string_to_sign(
             body,
             timestamp,
-            self._region,
             self._service,
             canonical_request,
         )
@@ -819,12 +818,11 @@ def _tc3_canonical_request(host: str, body: str) -> str:
 def _tc3_string_to_sign(
     body: str,
     timestamp: int,
-    region: str,
     service: str,
     canonical_request: str,
 ) -> tuple[str, str]:
     date = _dt.datetime.utcfromtimestamp(timestamp).strftime("%Y-%m-%d")
-    credential_scope = f"{date}/{region}/{service}/tc3_request"
+    credential_scope = f"{date}/{service}/tc3_request"
     hashed_request = hashlib.sha256(canonical_request.encode("utf-8")).hexdigest()
     string_to_sign = (
         "TC3-HMAC-SHA256\n"
@@ -836,10 +834,9 @@ def _tc3_string_to_sign(
 
 
 def _tc3_signature(secret_key: str, credential_scope: str, string_to_sign: str) -> str:
-    date, region, service, _ = credential_scope.split("/")
+    date, service, _ = credential_scope.split("/")
     secret_date = hmac.new(("TC3" + secret_key).encode("utf-8"), date.encode("utf-8"), hashlib.sha256).digest()
-    secret_region = hmac.new(secret_date, region.encode("utf-8"), hashlib.sha256).digest()
-    secret_service = hmac.new(secret_region, service.encode("utf-8"), hashlib.sha256).digest()
+    secret_service = hmac.new(secret_date, service.encode("utf-8"), hashlib.sha256).digest()
     secret_signing = hmac.new(secret_service, b"tc3_request", hashlib.sha256).digest()
     signature = hmac.new(secret_signing, string_to_sign.encode("utf-8"), hashlib.sha256).hexdigest()
     return signature
