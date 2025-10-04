@@ -25,6 +25,7 @@ from .utils import (
     format_forwarded_message,
     compute_canonical_hash,
     compute_sha256,
+    compute_embedding,
     setup_logger,
 )
 from .db import AiSignalRepository, NewsEventRepository, SupabaseError, get_supabase_client
@@ -216,6 +217,52 @@ class TelegramListener:
 
             event_time = datetime.now()
 
+            hash_raw = compute_sha256(message_text)
+            hash_canonical = compute_canonical_hash(message_text)
+            embedding_vector: list[float] | None = None
+
+            if self.db_enabled and self.news_repository and hash_raw:
+                try:
+                    existing_event_id = await self.news_repository.check_duplicate(hash_raw)
+                except Exception as exc:  # pylint: disable=broad-except
+                    logger.warning("哈希去重检查失败，继续处理: %s", exc)
+                else:
+                    if existing_event_id:
+                        self.stats["duplicates"] += 1
+                        logger.debug(
+                            "🔁 数据库哈希去重命中: event_id=%s", existing_event_id
+                        )
+                        return
+
+            if (
+                self.db_enabled
+                and self.news_repository
+                and self.config.OPENAI_API_KEY
+            ):
+                embedding_vector = await compute_embedding(
+                    message_text,
+                    api_key=self.config.OPENAI_API_KEY,
+                    model=self.config.OPENAI_EMBEDDING_MODEL,
+                )
+                if embedding_vector:
+                    try:
+                        similar = await self.news_repository.check_duplicate_by_embedding(
+                            embedding=embedding_vector,
+                            threshold=self.config.EMBEDDING_SIMILARITY_THRESHOLD,
+                            time_window_hours=self.config.EMBEDDING_TIME_WINDOW_HOURS,
+                        )
+                    except Exception as exc:  # pylint: disable=broad-except
+                        logger.warning("语义去重检查失败，继续处理: %s", exc)
+                    else:
+                        if similar:
+                            self.stats["duplicates"] += 1
+                            logger.info(
+                                "🔁 语义去重命中: event_id=%s similarity=%.3f",
+                                similar["id"],
+                                similar["similarity"],
+                            )
+                            return
+
             translated_text = None
             language = "unknown"
             translation_confidence = 0.0
@@ -288,6 +335,9 @@ class TelegramListener:
                     keywords_hit=keywords_hit,
                     translation_confidence=translation_confidence,
                     media_refs=media_payload,
+                    hash_raw=hash_raw,
+                    hash_canonical=hash_canonical,
+                    embedding=embedding_vector,
                 )
                 return
 
@@ -313,6 +363,9 @@ class TelegramListener:
                     keywords_hit=keywords_hit,
                     translation_confidence=translation_confidence,
                     media_refs=media_payload,
+                    hash_raw=hash_raw,
+                    hash_canonical=hash_canonical,
+                    embedding=embedding_vector,
                 )
                 return
 
@@ -369,6 +422,9 @@ class TelegramListener:
                 keywords_hit=keywords_hit,
                 translation_confidence=translation_confidence,
                 media_refs=media_payload,
+                hash_raw=hash_raw,
+                hash_canonical=hash_canonical,
+                embedding=embedding_vector,
             )
         except Exception as exc:  # pylint: disable=broad-except
             self.stats["errors"] += 1
@@ -503,6 +559,9 @@ class TelegramListener:
         keywords_hit: list[str],
         translation_confidence: float,
         media_refs: list[dict[str, Any]],
+        hash_raw: str | None = None,
+        hash_canonical: str | None = None,
+        embedding: list[float] | None = None,
     ) -> None:
         if not self.db_enabled or not self.news_repository:
             return
@@ -511,15 +570,12 @@ class TelegramListener:
             return
 
         try:
-            from .utils import compute_embedding
+            hash_raw = hash_raw or compute_sha256(original_text)
+            hash_canonical = hash_canonical or compute_canonical_hash(original_text)
 
-            hash_raw = compute_sha256(original_text)
-            hash_canonical = compute_canonical_hash(original_text)
-
-            # Generate embedding for semantic dedup
-            embedding = None
-            if self.config.OPENAI_API_KEY:
-                embedding = await compute_embedding(
+            embedding_vector = embedding
+            if embedding_vector is None and self.config.OPENAI_API_KEY:
+                embedding_vector = await compute_embedding(
                     original_text,
                     api_key=self.config.OPENAI_API_KEY,
                     model=self.config.OPENAI_EMBEDDING_MODEL,
@@ -533,7 +589,7 @@ class TelegramListener:
                 "translation_confidence": translation_confidence,
                 "processed_at": processed_at.replace(microsecond=0).isoformat(),
             }
-            if embedding:
+            if embedding_vector:
                 metadata["embedding_model"] = self.config.OPENAI_EMBEDDING_MODEL
                 metadata["embedding_generated_at"] = datetime.now().isoformat()
             if signal_result:
@@ -555,9 +611,9 @@ class TelegramListener:
                 return
 
             # Level 2: Semantic embedding dedup
-            if embedding:
+            if embedding_vector:
                 similar = await self.news_repository.check_duplicate_by_embedding(
-                    embedding=embedding,
+                    embedding=embedding_vector,
                     threshold=self.config.EMBEDDING_SIMILARITY_THRESHOLD,
                     time_window_hours=self.config.EMBEDDING_TIME_WINDOW_HOURS,
                 )
@@ -583,7 +639,7 @@ class TelegramListener:
                     media_refs=media_refs,
                     hash_raw=hash_raw,
                     hash_canonical=hash_canonical,
-                    embedding=embedding,  # Add embedding vector
+                    embedding=embedding_vector,  # Add embedding vector
                     keywords_hit=list(dict.fromkeys(keywords_hit or [])),
                     ingest_status=ingest_status,
                     metadata=metadata,
