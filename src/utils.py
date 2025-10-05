@@ -212,26 +212,52 @@ def format_forwarded_message(
     parts: list[str] = ["🔔 **加密新闻监听**\n\n"]
 
     # 信号摘要：翻译文本与 AI 摘要分别列出，清晰紧凑
-    summary_segments: list[str] = []
-    if translated_text:
-        summary_segments.append(translated_text)
-    elif original_text:
-        summary_segments.append(original_text)
+    def _normalize_for_compare(text: str) -> str:
+        stripped = re.sub(r"\s+", "", text)
+        stripped = re.sub(r"[，,。\.！!？?：:；;"'“”‘’`·•\-]", "", stripped)
+        return stripped.lower()
 
-    if ai_summary and ai_summary not in summary_segments:
-        summary_segments.append(ai_summary)
+    summary_segments: list[tuple[str, str]] = []
+    if translated_text:
+        summary_segments.append(("translation", translated_text))
+    elif original_text:
+        summary_segments.append(("original", original_text))
+
+    if ai_summary:
+        ai_summary_clean = _normalize_for_compare(ai_summary)
+        is_duplicate = False
+        for _, existing in summary_segments:
+            existing_clean = _normalize_for_compare(existing)
+            if existing_clean and ai_summary_clean:
+                if existing_clean == ai_summary_clean or (
+                    len(ai_summary_clean) > 20
+                    and len(existing_clean) > 20
+                    and (ai_summary_clean in existing_clean or existing_clean in ai_summary_clean)
+                ):
+                    is_duplicate = True
+                    break
+        if not is_duplicate:
+            summary_segments.append(("ai", ai_summary))
+
+    label_map = {
+        "translation": "译文",
+        "original": "原文",
+        "ai": "AI 摘要",
+    }
 
     if summary_segments:
         parts.append("⚡ **信号摘要**\n")
-        for segment in summary_segments:
+        for kind, segment in summary_segments:
             cleaned = segment.replace("\n", " ").strip()
             if cleaned:
-                parts.append(f"- {cleaned}\n")
+                label = label_map.get(kind, "要点")
+                parts.append(f"- {label}：{cleaned}\n")
         parts.append("\n")
 
     # 操作要点，仅当有 AI 结果时展示
     if ai_summary:
-        action_value = ACTION_LABELS.get(ai_action or "observe", ai_action or "observe")
+        action_key = (ai_action or "observe").lower()
+        action_value = ACTION_LABELS.get(action_key, ai_action or "observe")
         confidence_text = (
             f"{ai_confidence:.2f}" if ai_confidence is not None else "未知"
         )
@@ -247,20 +273,31 @@ def format_forwarded_message(
             elif ai_asset:
                 asset_line = ai_asset
 
-        direction_cn = DIRECTION_LABELS.get(ai_direction, ai_direction) if ai_direction else None
-        strength_cn = STRENGTH_LABELS.get(ai_strength, ai_strength) if ai_strength else None
+        direction_key = (ai_direction or "").lower()
+        direction_cn = DIRECTION_LABELS.get(direction_key, ai_direction) if ai_direction else None
+        strength_key = (ai_strength or "").lower()
+        strength_cn = STRENGTH_LABELS.get(strength_key, ai_strength) if ai_strength else None
 
         line_parts: list[str] = []
         if asset_line:
             line_parts.append(asset_line)
-        line_parts.append(action_value)
-        if direction_cn:
-            line_parts.append(f"方向: {direction_cn}")
+
+        if action_key == "observe":
+            line_parts.append(f"状态: {action_value}")
+        else:
+            line_parts.append(action_value)
+            if direction_cn:
+                line_parts.append(f"方向: {direction_cn}")
+
         line_parts.append(f"置信度: {confidence_text}")
         if strength_cn:
             line_parts.append(f"强度: {strength_cn}")
 
         parts.append("- " + "，".join(line_parts) + "\n")
+
+        event_type_label = EVENT_TYPE_LABELS.get(ai_event_type or "", None)
+        if event_type_label:
+            parts.append(f"- 事件类型: {event_type_label}\n")
 
         localized_flags = [
             RISK_FLAG_LABELS.get(flag, flag) for flag in ai_risk_flags if flag
