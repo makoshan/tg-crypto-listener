@@ -214,7 +214,7 @@ def format_forwarded_message(
     # 信号摘要：翻译文本与 AI 摘要分别列出，清晰紧凑
     def _normalize_for_compare(text: str) -> str:
         stripped = re.sub(r"\s+", "", text)
-        stripped = re.sub(r"[，,。\.！!？?：:；;"'“”‘’`·•\-]", "", stripped)
+        stripped = re.sub(r'[，,。\.！!？?：:；;"\'“”‘’`·•\-]', "", stripped)
         return stripped.lower()
 
     summary_segments: list[tuple[str, str]] = []
