@@ -122,7 +122,7 @@ class TelegramListener:
 
                     if backend == "local":
                         self.memory_repository = LocalMemoryStore(
-                            pattern_dir=memory_dir,
+                            base_path=memory_dir,
                             lookback_hours=memory_config.lookback_hours,
                         )
                         logger.info("🗄️ Local Memory 已启用 (关键词匹配)")
@@ -132,7 +132,7 @@ class TelegramListener:
                             memory_config,
                         )
                         local_store = LocalMemoryStore(
-                            pattern_dir=memory_dir,
+                            base_path=memory_dir,
                             lookback_hours=memory_config.lookback_hours,
                         )
                         self.memory_repository = HybridMemoryRepository(
