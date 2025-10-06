@@ -90,9 +90,20 @@ class LocalMemoryStore:
         # 标准化为 MemoryEntry
         entries = self._normalize_patterns(patterns)
 
-        # 时间窗口过滤
-        cutoff_time = datetime.utcnow() - timedelta(hours=self.lookback_hours)
-        entries = [e for e in entries if e.created_at >= cutoff_time]
+        # 时间窗口过滤（使用 UTC aware datetime）
+        from datetime import timezone
+        cutoff_time = datetime.now(timezone.utc) - timedelta(hours=self.lookback_hours)
+
+        # 确保 created_at 是 aware datetime
+        aware_entries = []
+        for e in entries:
+            if e.created_at.tzinfo is None:
+                # 如果是 naive，假设为 UTC
+                aware_created_at = e.created_at.replace(tzinfo=timezone.utc)
+                e.created_at = aware_created_at
+            aware_entries.append(e)
+
+        entries = [e for e in aware_entries if e.created_at >= cutoff_time]
 
         # 置信度过滤
         entries = [e for e in entries if e.confidence >= min_confidence]
@@ -144,14 +155,16 @@ class LocalMemoryStore:
 
         for item in patterns:
             try:
-                # 解析时间戳
+                # 解析时间戳（确保为 UTC aware datetime）
+                from datetime import timezone
+
                 timestamp_str = item.get("timestamp") or item.get("created_at")
                 if timestamp_str:
                     created_at = datetime.fromisoformat(
                         str(timestamp_str).replace("Z", "+00:00")
                     )
                 else:
-                    created_at = datetime.utcnow()
+                    created_at = datetime.now(timezone.utc)
 
                 # 解析资产列表
                 assets = item.get("assets") or item.get("asset") or []
