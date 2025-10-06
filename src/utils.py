@@ -200,6 +200,7 @@ def format_forwarded_message(
     ai_strength: str | None = None,
     ai_risk_flags: list[str] | None = None,
     ai_notes: str | None = None,
+    context_source: str | None = None,
 ) -> str:
     """Compose a compact forwarding message emphasising actionable insights."""
 
@@ -231,7 +232,11 @@ def format_forwarded_message(
     summary_text = (summary_text or "暂无摘要").replace("\n", " ").strip()
 
     parts.append("⚡ 信号摘要\n")
-    parts.append(f"📡 来源: {source_channel}，内容：{summary_text}\n")
+    if context_source:
+        source_display = context_source
+    else:
+        source_display = source_channel
+    parts.append(f"📡 来源: {source_display}，内容：{summary_text}\n")
     if ai_notes:
         parts.append(f"📝 备注: {ai_notes}\n")
 
@@ -287,6 +292,11 @@ def format_forwarded_message(
             parts.append(f"- 风险: {'、'.join(localized_flags)}\n")
 
     # 时间
-    parts.append(f"\n🕒 时间: {timestamp.strftime('%Y-%m-%d %H:%M:%S')}\n")
+    parts.append(
+        f"\n🕒 时间: {timestamp.strftime('%Y-%m-%d %H:%M:%S')}"
+    )
+    if context_source and context_source != source_channel:
+        parts.append(f" | 来源频道: {source_channel}")
+    parts.append("\n")
 
     return "".join(parts)
