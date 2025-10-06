@@ -117,13 +117,36 @@ class Config:
         os.getenv("FORWARD_INCLUDE_TRANSLATION", "true")
     )
 
+    # Memory configuration
     MEMORY_ENABLED: bool = _as_bool(os.getenv("MEMORY_ENABLED", "false"))
+    MEMORY_BACKEND: str = os.getenv("MEMORY_BACKEND", "supabase")  # local | supabase | hybrid
+    MEMORY_DIR: str = os.getenv("MEMORY_DIR", "./memories")
     MEMORY_MAX_NOTES: int = int(os.getenv("MEMORY_MAX_NOTES", "3"))
     MEMORY_LOOKBACK_HOURS: int = int(os.getenv("MEMORY_LOOKBACK_HOURS", "72"))
     MEMORY_MIN_CONFIDENCE: float = float(os.getenv("MEMORY_MIN_CONFIDENCE", "0.6"))
     MEMORY_SIMILARITY_THRESHOLD: float = float(
         os.getenv("MEMORY_SIMILARITY_THRESHOLD", "0.85")
     )
+
+    # Claude configuration (for deep analysis)
+    CLAUDE_ENABLED: bool = _as_bool(os.getenv("CLAUDE_ENABLED", "false"))
+    CLAUDE_API_KEY: str = os.getenv("CLAUDE_API_KEY", "")
+    CLAUDE_MODEL: str = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-5-20250929")
+    CLAUDE_TIMEOUT_SECONDS: float = float(os.getenv("CLAUDE_TIMEOUT_SECONDS", "30"))
+    CLAUDE_MAX_TOOL_TURNS: int = int(os.getenv("CLAUDE_MAX_TOOL_TURNS", "10"))
+
+    # Context Editing configuration (Claude Memory Tool)
+    MEMORY_CONTEXT_TRIGGER_TOKENS: int = int(os.getenv("MEMORY_CONTEXT_TRIGGER_TOKENS", "10000"))
+    MEMORY_CONTEXT_KEEP_TOOLS: int = int(os.getenv("MEMORY_CONTEXT_KEEP_TOOLS", "2"))
+    MEMORY_CONTEXT_CLEAR_AT_LEAST: int = int(os.getenv("MEMORY_CONTEXT_CLEAR_AT_LEAST", "500"))
+
+    # Routing strategy (Gemini + Claude hybrid)
+    HIGH_VALUE_CONFIDENCE_THRESHOLD: float = float(os.getenv("HIGH_VALUE_CONFIDENCE_THRESHOLD", "0.7"))
+    CRITICAL_KEYWORDS: Set[str] = {
+        keyword.strip().lower()
+        for keyword in os.getenv("CRITICAL_KEYWORDS", "上币,listing,hack,黑客,监管,regulation").split(",")
+        if keyword.strip()
+    }
 
     TRANSLATION_ENABLED: bool = _as_bool(os.getenv("TRANSLATION_ENABLED", "true"))
     TRANSLATION_TIMEOUT_SECONDS: float = float(os.getenv("TRANSLATION_TIMEOUT_SECONDS", "6"))

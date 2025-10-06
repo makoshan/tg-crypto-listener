@@ -4,27 +4,6 @@
 > **状态**: ✅ 符合 Cookbook 核心思想，适合升级现有代码
 > **参考**: [Memory & Context Management Cookbook](./memory_cookbook.ipynb)
 
----
-
-## 📋 关键缺失项已补充（v2.0）
-
-### ✅ 1. Context Editing 策略
-- **作用**: 单次会话内自动清理旧 Tool Use 结果，防止 context 爆炸
-- **配置**: 见 5.3 节 `.env` 配置、11.B 节 `Config` 字段
-- **实现**: `AnthropicClient` 调用 API 时传入 `context_management` 参数
-
-### ✅ 2. Claude 自主组织记忆
-- **核心**: 完全由 Claude Memory Tool 决定文件路径、格式、内容结构
-- **说明**: 见 4.2 节 "存储格式与 Claude 自主组织"
-- **注意**: `LocalMemoryStore.save_pattern()` 仅用于 Gemini 场景，Claude 场景下 `MemoryToolHandler` 只执行工具命令
-
-### ✅ 3. 详细实施路线图
-- **Phase 1**: 核心组件开发（1-2 周）- 见 10.1 节
-- **Phase 2**: 生产优化（2-3 周）- 见 10.2 节
-- **Phase 3**: A/B 测试与调优（持续）- 见 10.3 节
-- **里程碑**: 4 个关键检查点，明确验收标准
-
----
 
 ## 1. 核心设计
 
@@ -332,7 +311,415 @@ memories/
 - `LocalMemoryStore.save_pattern()` 仅在定期归纳任务（`consolidate_patterns.py`）中调用，将 Claude 生成的 Markdown 转为 JSON 供 Gemini 快速读取
 - 生产环境建议：定期检查 Claude 创建的文件结构，发现异常（如路径过深、文件过多）时调整 System Prompt
 
-### 4.3 与现有代码的兼容重点
+---
+
+### 4.3 模式切换：Local / Supabase / Hybrid
+
+#### **核心原则**
+- **记忆存储后端** 与 **AI 引擎路由** 是两个独立维度
+- 所有后端模式都支持 Gemini + Claude 混合架构
+- 通过 `MEMORY_BACKEND` 环境变量无缝切换，无需修改代码
+
+---
+
+#### **模式 1: 纯本地存储 (`MEMORY_BACKEND=local`)**
+
+**架构流程**：
+```
+┌─────────────────────────────────────────────────────┐
+│ 1. Gemini (90%) 读取本地记忆                        │
+│    └─ LocalMemoryStore.load_entries()               │
+│       └─ patterns/*.json（关键词匹配）              │
+├─────────────────────────────────────────────────────┤
+│ 2. Claude (10%) Memory Tool 写入                    │
+│    └─ MemoryToolHandler.execute_tool_use()          │
+│       └─ create /memories/patterns/xxx.md           │
+├─────────────────────────────────────────────────────┤
+│ 3. 定期归纳任务（可选）                             │
+│    └─ Markdown → JSON 转换                          │
+│       └─ 供 Gemini 下次快速读取                     │
+└─────────────────────────────────────────────────────┘
+```
+
+**配置示例**：
+```bash
+# .env
+MEMORY_ENABLED=true
+MEMORY_BACKEND=local
+MEMORY_DIR=./memories
+
+AI_PROVIDER=gemini
+CLAUDE_ENABLED=true
+CLAUDE_API_KEY=sk-ant-xxx
+```
+
+**优点**：
+- ✅ 完全离线，无外部依赖
+- ✅ 成本最低（无 Supabase 订阅费用）
+- ✅ Claude Memory Tool 自主组织记忆结构
+- ✅ 适合单实例部署、开发测试环境
+
+**缺点**：
+- ❌ 不支持多实例共享记忆（每个 Bot 独立学习）
+- ❌ 无向量相似度检索（依赖关键词匹配，召回率较低）
+- ❌ 文件系统性能瓶颈（大量文件时检索变慢）
+
+---
+
+#### **模式 2: 纯 Supabase 存储 (`MEMORY_BACKEND=supabase`)**
+
+**架构流程**：
+```
+┌─────────────────────────────────────────────────────┐
+│ 1. Gemini (90%) 读取 Supabase 记忆                  │
+│    └─ SupabaseMemoryRepository.fetch_memories()     │
+│       └─ RPC: search_similar_memories_by_keywords() │
+│          └─ pgvector 向量相似度检索                 │
+├─────────────────────────────────────────────────────┤
+│ 2. Claude (10%) 写入 Supabase                       │
+│    └─ MemoryToolHandler 拦截 Memory Tool 命令       │
+│       └─ INSERT INTO memory_entries (content, ...)  │
+│          └─ 后台任务生成 Embedding（OpenAI API）    │
+├─────────────────────────────────────────────────────┤
+│ 3. 向量检索增强                                     │
+│    └─ 不依赖关键词匹配，支持语义相似度              │
+│       └─ "监管推迟" 能匹配到 "SEC delay decision"   │
+└─────────────────────────────────────────────────────┘
+```
+
+**配置示例**：
+```bash
+# .env
+MEMORY_ENABLED=true
+MEMORY_BACKEND=supabase
+
+SUPABASE_URL=https://xxx.supabase.co
+SUPABASE_KEY=eyJxxx
+OPENAI_API_KEY=sk-xxx  # 用于生成 Embedding
+
+AI_PROVIDER=gemini
+CLAUDE_ENABLED=true
+CLAUDE_API_KEY=sk-ant-xxx
+```
+
+**实现要点**：
+
+1. **Claude 写入适配**：
+   ```python
+   # src/memory/memory_tool_handler.py
+   class MemoryToolHandler:
+       def __init__(self, backend: MemoryBackend):
+           self.backend = backend
+
+       def execute_tool_use(self, tool_input: dict) -> dict:
+           command = tool_input["command"]
+
+           if command == "create":
+               path = tool_input["path"]
+               content = tool_input["file_text"]
+
+               if isinstance(self.backend, SupabaseMemoryRepository):
+                   # 写入 Supabase memory_entries 表
+                   self.backend.insert_memory(
+                       content=content,
+                       metadata={
+                           "path": path,
+                           "source": "claude_memory_tool",
+                           "created_at": datetime.utcnow().isoformat()
+                       }
+                   )
+                   # 后台任务生成 Embedding（异步）
+                   asyncio.create_task(
+                       self.backend.generate_embedding(content)
+                   )
+
+               return {"success": True, "path": path}
+   ```
+
+2. **Supabase 表结构扩展**：
+   ```sql
+   -- 新增字段存储 Claude Memory Tool 内容
+   ALTER TABLE memory_entries
+   ADD COLUMN content_markdown TEXT;  -- Claude 写入的 Markdown 内容
+
+   -- 触发器：自动生成 Embedding
+   CREATE OR REPLACE FUNCTION generate_embedding_trigger()
+   RETURNS TRIGGER AS $$
+   BEGIN
+       -- 调用 Edge Function 生成 Embedding
+       PERFORM net.http_post(
+           url := 'https://xxx.supabase.co/functions/v1/generate-embedding',
+           body := json_build_object('text', NEW.content_markdown)
+       );
+       RETURN NEW;
+   END;
+   $$ LANGUAGE plpgsql;
+   ```
+
+**优点**：
+- ✅ 向量相似度检索（语义匹配，召回率高）
+- ✅ 多实例共享记忆（所有 Bot 同步学习）
+- ✅ 持久化存储，支持灾备和历史追溯
+- ✅ 适合生产环境、多区域部署
+
+**缺点**：
+- ❌ 依赖外部服务（Supabase + OpenAI API）
+- ❌ 成本增加（Supabase 订阅 + Embedding 生成费用）
+- ❌ 网络故障影响可用性
+- ❌ Claude Memory Tool 需额外适配层（拦截文件操作转为数据库写入）
+
+---
+
+#### **模式 3: 混合存储 (`MEMORY_BACKEND=hybrid`)**
+
+**架构流程**：
+```
+┌─────────────────────────────────────────────────────┐
+│ 1. Gemini (90%) 读取记忆（优先 Supabase）           │
+│    ├─ 尝试 SupabaseMemoryRepository.fetch_memories()│
+│    │  └─ 成功 → 返回向量检索结果                    │
+│    └─ 失败 → 降级到 LocalMemoryStore.load_entries() │
+│       └─ 使用本地 JSON 种子模式                     │
+├─────────────────────────────────────────────────────┤
+│ 2. Claude (10%) 双写记忆                            │
+│    ├─ 主写：Supabase memory_entries 表              │
+│    └─ 备写：Local /memories/*.md（灾备）            │
+├─────────────────────────────────────────────────────┤
+│ 3. 定期同步任务                                     │
+│    └─ Supabase → Local 单向同步                     │
+│       └─ 确保本地备份最新                           │
+└─────────────────────────────────────────────────────┘
+```
+
+**配置示例**：
+```bash
+# .env
+MEMORY_ENABLED=true
+MEMORY_BACKEND=hybrid
+
+MEMORY_DIR=./memories
+SUPABASE_URL=https://xxx.supabase.co
+SUPABASE_KEY=eyJxxx
+OPENAI_API_KEY=sk-xxx
+
+AI_PROVIDER=gemini
+CLAUDE_ENABLED=true
+CLAUDE_API_KEY=sk-ant-xxx
+```
+
+**实现代码**：
+```python
+# src/memory/hybrid_repository.py
+class HybridMemoryRepository:
+    """混合记忆仓储：Supabase 主存储 + Local 灾备"""
+
+    def __init__(self, supabase_repo: SupabaseMemoryRepository,
+                 local_store: LocalMemoryStore):
+        self.supabase = supabase_repo
+        self.local = local_store
+        self.logger = setup_logger(__name__)
+
+    async def fetch_memories(self, keywords: List[str], limit: int = 3) -> List[MemoryEntry]:
+        """优先 Supabase，失败时降级本地"""
+        try:
+            memories = await self.supabase.fetch_memories(keywords, limit)
+            if memories:
+                self.logger.info(f"从 Supabase 检索到 {len(memories)} 条记忆")
+                return memories
+        except Exception as e:
+            self.logger.warning(f"Supabase 检索失败，降级到本地: {e}")
+
+        # 降级到本地 JSON
+        local_entries = self.local.load_entries(keywords, limit)
+        self.logger.info(f"从本地检索到 {len(local_entries)} 条记忆（灾备模式）")
+        return local_entries
+
+    async def save_memory(self, content: str, metadata: dict):
+        """双写：Supabase + Local"""
+        # 主写 Supabase
+        try:
+            await self.supabase.insert_memory(content, metadata)
+            self.logger.info(f"已写入 Supabase: {metadata.get('path')}")
+        except Exception as e:
+            self.logger.error(f"Supabase 写入失败: {e}")
+
+        # 备写本地（无论 Supabase 是否成功）
+        self.local.save_pattern(
+            category=metadata.get("category", "general"),
+            pattern={
+                "summary": content[:200],
+                "content": content,
+                "timestamp": metadata.get("created_at"),
+                **metadata
+            }
+        )
+        self.logger.info(f"已备份到本地: {metadata.get('path')}")
+```
+
+**定期同步任务**：
+```python
+# scripts/sync_supabase_to_local.py
+"""每日同步 Supabase 记忆到本地备份"""
+
+async def sync_memories():
+    config = Config()
+    supabase_repo = SupabaseMemoryRepository(...)
+    local_store = LocalMemoryStore(config.MEMORY_DIR)
+
+    # 获取最近 7 天的 Supabase 记忆
+    recent_memories = await supabase_repo.fetch_all_memories(days=7)
+
+    for memory in recent_memories:
+        # 转换为本地 JSON 格式
+        local_store.save_pattern(
+            category=memory.metadata.get("category"),
+            pattern={
+                "summary": memory.summary,
+                "content": memory.content_markdown,
+                "timestamp": memory.timestamp,
+                "assets": memory.assets,
+                "action": memory.action,
+                "confidence": memory.confidence
+            }
+        )
+
+    logger.info(f"已同步 {len(recent_memories)} 条记忆到本地备份")
+
+# Cron: 0 3 * * * python -m scripts.sync_supabase_to_local
+```
+
+**优点**：
+- ✅ Supabase 宕机时自动降级（高可用）
+- ✅ 本地备份所有记忆（灾备恢复）
+- ✅ 平滑迁移路径（从 Local 逐步迁移到 Supabase）
+- ✅ 可离线运行（降级模式下仅用本地）
+
+**缺点**：
+- ❌ 架构复杂度增加
+- ❌ 双写可能导致数据不一致（需定期同步修正）
+- ❌ 存储成本增加（Supabase + 本地磁盘）
+
+---
+
+#### **模式对比总结**
+
+| 维度 | Local | Supabase | Hybrid |
+|------|-------|----------|--------|
+| **检索方式** | 关键词匹配 | 向量相似度 | 向量（主）+ 关键词（备） |
+| **多实例共享** | ❌ | ✅ | ✅ |
+| **离线运行** | ✅ | ❌ | ✅（降级） |
+| **成本** | 免费 | $$（Supabase + OpenAI） | $$$（双存储） |
+| **可用性** | 99.9%（本地） | 99.5%（外部依赖） | 99.95%（自动降级） |
+| **Claude Memory Tool** | 原生支持 | 需适配层 | 需适配层 |
+| **适用场景** | 开发/测试/单实例 | 生产/多区域 | 关键业务/过渡期 |
+
+---
+
+#### **切换步骤**
+
+##### **从 Local → Supabase**：
+
+1. **导出现有本地记忆**：
+   ```bash
+   python scripts/export_local_memories.py \
+       --memory-dir ./memories \
+       --output memories_export.json
+   ```
+
+2. **导入 Supabase**：
+   ```bash
+   python scripts/import_to_supabase.py \
+       --input memories_export.json \
+       --supabase-url https://xxx.supabase.co \
+       --supabase-key eyJxxx
+   ```
+
+3. **修改配置**：
+   ```bash
+   # .env
+   MEMORY_BACKEND=supabase  # 从 local 改为 supabase
+   SUPABASE_URL=https://xxx.supabase.co
+   SUPABASE_KEY=eyJxxx
+   ```
+
+4. **验证**：
+   ```bash
+   # 运行集成测试
+   pytest tests/memory/test_supabase_repository.py
+
+   # 检查记忆检索
+   python scripts/test_memory_fetch.py --keywords "上币,listing"
+   ```
+
+---
+
+##### **从 Supabase → Local**：
+
+1. **导出 Supabase 记忆**：
+   ```bash
+   python scripts/export_supabase_memories.py \
+       --supabase-url https://xxx.supabase.co \
+       --supabase-key eyJxxx \
+       --output memories_export.json
+   ```
+
+2. **转换为本地格式**：
+   ```bash
+   python scripts/convert_to_local_json.py \
+       --input memories_export.json \
+       --output-dir ./memories/patterns/
+   ```
+
+3. **修改配置**：
+   ```bash
+   # .env
+   MEMORY_BACKEND=local
+   MEMORY_DIR=./memories
+   ```
+
+4. **验证**：
+   ```bash
+   # 检查本地文件
+   ls -lh memories/patterns/
+
+   # 测试记忆加载
+   python scripts/test_memory_fetch.py --keywords "上币,listing"
+   ```
+
+---
+
+##### **启用 Hybrid 混合模式**：
+
+1. **确保 Local 和 Supabase 都已配置**：
+   ```bash
+   # .env
+   MEMORY_BACKEND=hybrid
+   MEMORY_DIR=./memories
+   SUPABASE_URL=https://xxx.supabase.co
+   SUPABASE_KEY=eyJxxx
+   ```
+
+2. **初始化本地备份**：
+   ```bash
+   # 从 Supabase 同步到本地（首次）
+   python scripts/sync_supabase_to_local.py
+   ```
+
+3. **配置定期同步**：
+   ```bash
+   # Crontab
+   0 3 * * * cd /path/to/project && python -m scripts.sync_supabase_to_local
+   ```
+
+4. **监控降级日志**：
+   ```bash
+   # 检查是否触发降级
+   grep "降级到本地" logs/listener.log
+   ```
+
+---
+
+### 4.4 与现有代码的兼容重点
 - 当前 AI 调用流程：`src/listener.py:301` 已通过 `await self.ai_engine.analyse(payload)` 异步调用；`AiSignalEngine` 会把 `build_signal_prompt()` 产出的 messages 交给 `OpenAIChatClient` 或 `GeminiClient`，别名映射已覆盖 OpenAI/DeepSeek/Qwen 等提供商。
 - 信号引擎改造范围极小：主流程仍是 `messages = build_signal_prompt(payload)` → `response = await client.generate_signal(...)` → `return self._parse_response(response)`；新增 `AnthropicClient` 后只需在 `src/ai/signal_engine.py` 针对该类型调用 `generate_signal_with_memory(...)`，其余分支保持原逻辑。
 - 必要的扩展组件：新增 `src/ai/anthropic_client.py` 处理 Claude Memory Tool 循环并对接 `MemoryToolHandler`；`Config` 引入 `MEMORY_ENABLED`、`MEMORY_DIR`、`MEMORY_CONTEXT_TRIGGER_TOKENS` 等字段，并在 `.env` 中新增 `AI_PROVIDER=anthropic`、`AI_MODEL_NAME=claude-sonnet-4-5-20250929`、`AI_API_KEY=sk-ant-xxx` 的示例配置。
@@ -860,82 +1247,129 @@ elif stats["high_value_accuracy"] < 0.85:
 ### Phase 1: 基础实施（1-2 周）
 
 #### 1.1 核心组件开发
-- [ ] **MemoryToolHandler** - 从 Cookbook 复制并适配
-  - [ ] 复制 `docs/memory_cookbook.ipynb` 中的 `memory_tool.py` 到 `src/memory/memory_tool_handler.py`
-  - [ ] 实现 6 个命令：`view`, `create`, `str_replace`, `insert`, `delete`, `rename`
-  - [ ] 路径验证：`_validate_path()` 防止目录穿越攻击
-  - [ ] 安全审计日志：记录所有写操作（`create`, `str_replace`, `delete`）
 
-- [ ] **LocalMemoryStore** - 本地记忆快速读取（供 Gemini 使用）
-  - [ ] `load_entries(keywords, limit)` - 返回与 `SupabaseMemoryRepository.fetch_memories()` 一致的结构
-  - [ ] `save_pattern(category, pattern)` - 可选，仅用于定期归纳任务
-  - [ ] 时间窗口过滤：与 Supabase 保持一致（`MEMORY_LOOKBACK_HOURS=168`）
-  - [ ] 日志格式统一：复用 `setup_logger(__name__)`，输出 "检索到 X 条历史记忆"
+##### **MemoryToolHandler** - 从 Cookbook 复制并适配
+- [ ] 复制 `docs/memory_cookbook.ipynb` 中的 `memory_tool.py` 到 `src/memory/memory_tool_handler.py`
+- [ ] 实现 6 个命令：`view`, `create`, `str_replace`, `insert`, `delete`, `rename`
+- [ ] 路径验证：`_validate_path()` 防止目录穿越攻击
+- [ ] 安全审计日志：记录所有写操作（`create`, `str_replace`, `delete`）
+- [ ] **后端适配器**：支持 Local / Supabase / Hybrid 三种模式
+  - [ ] `LocalBackend` - 直接文件系统读写
+  - [ ] `SupabaseBackend` - 拦截 Memory Tool 命令，转为 Supabase 数据库操作
+  - [ ] `HybridBackend` - 双写模式（主写 Supabase，备写 Local）
 
-- [ ] **AnthropicClient** - Claude API 客户端
-  - [ ] 实现 `generate_signal_with_memory(payload)` - 支持 Memory Tool 循环
-  - [ ] Context Editing 配置：
-    ```python
-    context_management={
-      "edits": [{
-        "type": "clear_tool_uses_20250919",
-        "trigger": {"type": "input_tokens", "value": config.MEMORY_CONTEXT_TRIGGER_TOKENS},
-        "keep": {"type": "tool_uses", "value": config.MEMORY_CONTEXT_KEEP_TOOLS},
-        "clear_at_least": {"type": "input_tokens", "value": config.MEMORY_CONTEXT_CLEAR_AT_LEAST}
-      }]
-    }
-    ```
-  - [ ] Tool Use 循环：检测 `tool_use` block → 执行 `MemoryToolHandler` → 回填结果 → 继续对话
-  - [ ] 响应解析：兼容现有 `SignalResult` 结构
+##### **LocalMemoryStore** - 本地记忆快速读取（供 Gemini 使用）
+- [ ] `load_entries(keywords, limit)` - 返回与 `SupabaseMemoryRepository.fetch_memories()` 一致的结构
+- [ ] `save_pattern(category, pattern)` - 可选，仅用于定期归纳任务
+- [ ] 时间窗口过滤：与 Supabase 保持一致（`MEMORY_LOOKBACK_HOURS=168`）
+- [ ] 日志格式统一：复用 `setup_logger(__name__)`，输出 "检索到 X 条历史记忆"
+
+##### **HybridMemoryRepository** - 混合存储仓储（新增）
+- [ ] `fetch_memories()` - 优先 Supabase 向量检索，失败时降级本地 JSON
+- [ ] `save_memory()` - 双写：主写 Supabase + 备写 Local
+- [ ] 降级日志：记录 Supabase 故障和降级事件
+- [ ] 健康检查：定期测试 Supabase 连接，预警潜在故障
+
+##### **AnthropicClient** - Claude API 客户端
+- [ ] 实现 `generate_signal_with_memory(payload)` - 支持 Memory Tool 循环
+- [ ] Context Editing 配置：
+  ```python
+  context_management={
+    "edits": [{
+      "type": "clear_tool_uses_20250919",
+      "trigger": {"type": "input_tokens", "value": config.MEMORY_CONTEXT_TRIGGER_TOKENS},
+      "keep": {"type": "tool_uses", "value": config.MEMORY_CONTEXT_KEEP_TOOLS},
+      "clear_at_least": {"type": "input_tokens", "value": config.MEMORY_CONTEXT_CLEAR_AT_LEAST}
+    }]
+  }
+  ```
+- [ ] Tool Use 循环：检测 `tool_use` block → 执行 `MemoryToolHandler` → 回填结果 → 继续对话
+- [ ] 响应解析：兼容现有 `SignalResult` 结构
+- [ ] 后端模式检测：根据 `config.MEMORY_BACKEND` 选择对应的 `MemoryToolHandler` 后端
 
 #### 1.2 配置与集成
-- [ ] **Config 扩展** (`src/config.py`)
-  - [ ] 新增字段（见 11.B 节）：`CLAUDE_ENABLED`, `CLAUDE_API_KEY`, `CLAUDE_MODEL`
-  - [ ] Context Editing 参数：`MEMORY_CONTEXT_TRIGGER_TOKENS`, `MEMORY_CONTEXT_KEEP_TOOLS`, `MEMORY_CONTEXT_CLEAR_AT_LEAST`
-  - [ ] 路由策略：`HIGH_VALUE_CONFIDENCE_THRESHOLD`, `CRITICAL_KEYWORDS`
 
-- [ ] **Listener 集成** (`src/listener.py`)
-  - [ ] 初始化双引擎：`gemini_engine` (现有) + `claude_engine` (新增)
-  - [ ] 路由逻辑：`is_high_value_signal(payload)` 判断是否升级 Claude
-  - [ ] 记忆注入：在调用前执行 `payload.historical_reference = memory_store.load_entries(payload.keywords_hit)`
-  - [ ] 并发控制：设定 Claude 调用上限（如单日 100 次）
+##### **Config 扩展** (`src/config.py`)
+- [ ] 新增字段（见 11.B 节）：`CLAUDE_ENABLED`, `CLAUDE_API_KEY`, `CLAUDE_MODEL`
+- [ ] Context Editing 参数：`MEMORY_CONTEXT_TRIGGER_TOKENS`, `MEMORY_CONTEXT_KEEP_TOOLS`, `MEMORY_CONTEXT_CLEAR_AT_LEAST`
+- [ ] 路由策略：`HIGH_VALUE_CONFIDENCE_THRESHOLD`, `CRITICAL_KEYWORDS`
+- [ ] **后端切换字段**：`MEMORY_BACKEND` (local | supabase | hybrid)
+
+##### **Listener 集成** (`src/listener.py`)
+- [ ] 根据 `MEMORY_BACKEND` 初始化存储层：
+  - [ ] `local` → `LocalMemoryRepository`
+  - [ ] `supabase` → `SupabaseMemoryRepository`
+  - [ ] `hybrid` → `HybridMemoryRepository`（优先 Supabase，降级 Local）
+- [ ] 初始化双引擎：`gemini_engine` (现有) + `claude_engine` (新增)
+- [ ] 路由逻辑：`is_high_value_signal(payload)` 判断是否升级 Claude
+- [ ] 记忆注入：在调用前执行 `payload.historical_reference = memory_repository.fetch_memories(payload.keywords_hit)`
+- [ ] 并发控制：设定 Claude 调用上限（如单日 100 次）
 
 #### 1.3 测试
-- [ ] **单元测试** (`tests/memory/`)
-  - [ ] `test_memory_tool_handler.py` - 路径穿越、权限检查、命令执行
-  - [ ] `test_local_memory_store.py` - 记忆读写、去重、时间窗口过滤
-  - [ ] `test_anthropic_client.py` - Mock API 响应、Tool Use 循环、Context Editing 触发
 
-- [ ] **集成测试**
-  - [ ] 模拟跨会话学习：Session 1 学习模式 → Session 2 应用模式
-  - [ ] 路由测试：关键词触发 Claude、非关键词走 Gemini
-  - [ ] Context 清理验证：大量信号处理后检查 token 使用
+##### **单元测试** (`tests/memory/`)
+- [ ] `test_memory_tool_handler.py` - 路径穿越、权限检查、命令执行
+- [ ] `test_local_memory_store.py` - 记忆读写、去重、时间窗口过滤
+- [ ] `test_hybrid_repository.py` - 降级逻辑、双写验证
+- [ ] `test_anthropic_client.py` - Mock API 响应、Tool Use 循环、Context Editing 触发
+
+##### **集成测试**
+- [ ] 跨会话学习：Session 1 学习模式 → Session 2 应用模式
+- [ ] 路由测试：关键词触发 Claude、非关键词走 Gemini
+- [ ] Context 清理验证：大量信号处理后检查 token 使用
+- [ ] **后端切换测试**：
+  - [ ] Local → Supabase 迁移验证（数据完整性）
+  - [ ] Hybrid 降级测试（模拟 Supabase 故障）
+  - [ ] Supabase → Local 导出验证
 
 ---
 
 ### Phase 2: 生产优化（2-3 周）
 
 #### 2.1 模式提取与归纳
-- [ ] **ClaudePatternExtractor** - 定期模式提取
-  - [ ] 从数据库获取最近 24h 高价值信号
-  - [ ] 调用 Claude Memory Tool 自主提取模式（完全不干预分类）
-  - [ ] 可选：将 Claude 的 Markdown 模式转为 JSON 供 Gemini 快速读取
 
-- [ ] **定期任务** (`scripts/consolidate_patterns.py`)
-  - [ ] Cron 配置：每日凌晨 2 点运行
+##### **ClaudePatternExtractor** - 定期模式提取
+- [ ] 从数据库获取最近 24h 高价值信号
+- [ ] 调用 Claude Memory Tool 自主提取模式（完全不干预分类）
+- [ ] 可选：将 Claude 的 Markdown 模式转为 JSON 供 Gemini 快速读取
+
+##### **定期任务**
+- [ ] `scripts/consolidate_patterns.py` - 每日凌晨 2 点运行
   - [ ] 备份现有记忆：`tar -czf memories_backup_$(date +%Y%m%d).tar.gz memories/`
   - [ ] 清理旧记忆：删除 90 天前的 `assets/` 文件（保留 `patterns/` 永久）
 
-#### 2.2 监控与告警
-- [ ] **成本监控**
-  - [ ] 统计指标：`gemini_calls`, `claude_calls`, `claude_trigger_ratio`（目标 0.10-0.15）
-  - [ ] 告警规则：`claude_trigger_ratio > 0.20` 发送通知
-  - [ ] Token 使用对比：有/无记忆的 token 差异
+- [ ] `scripts/sync_supabase_to_local.py` - Hybrid 模式同步任务（每日凌晨 3 点）
+  - [ ] 从 Supabase 拉取最近 7 天记忆
+  - [ ] 转换为本地 JSON 格式存储
+  - [ ] 验证同步完整性（记录条数对比）
 
-- [ ] **记忆质量评估**
-  - [ ] 命中率统计：多少次分析用到了历史记忆
-  - [ ] 准确率对比：记忆辅助 vs 无记忆的 `high_value_accuracy`
-  - [ ] 异常检测：记忆文件结构异常（路径过深、文件过多）
+- [ ] `scripts/export_local_memories.py` - 导出工具
+  - [ ] 支持命令行参数：`--memory-dir`, `--output`, `--days`
+  - [ ] 输出标准 JSON 格式（兼容 Supabase 导入）
+
+- [ ] `scripts/import_to_supabase.py` - 导入工具
+  - [ ] 批量插入 `memory_entries` 表
+  - [ ] 自动生成 Embedding（调用 OpenAI API）
+  - [ ] 进度条显示和错误重试
+
+#### 2.2 监控与告警
+
+##### **成本监控**
+- [ ] 统计指标：`gemini_calls`, `claude_calls`, `claude_trigger_ratio`（目标 0.10-0.15）
+- [ ] 告警规则：`claude_trigger_ratio > 0.20` 发送通知
+- [ ] Token 使用对比：有/无记忆的 token 差异
+- [ ] **后端模式监控**：
+  - [ ] Local 模式：监控文件系统磁盘使用（目标 < 100MB）
+  - [ ] Supabase 模式：监控 API 调用次数、Embedding 生成费用
+  - [ ] Hybrid 模式：降级触发频率（目标 < 1%）、双写成功率（目标 > 99%）
+
+##### **记忆质量评估**
+- [ ] 命中率统计：多少次分析用到了历史记忆
+- [ ] 准确率对比：记忆辅助 vs 无记忆的 `high_value_accuracy`
+- [ ] 异常检测：记忆文件结构异常（路径过深、文件过多）
+- [ ] **后端性能对比**：
+  - [ ] Local vs Supabase 检索延迟对比（目标 Supabase < 200ms）
+  - [ ] 向量检索召回率 vs 关键词匹配召回率
 
 #### 2.3 安全加固
 - [ ] **Prompt Injection 防御**
@@ -989,10 +1423,15 @@ elif stats["high_value_accuracy"] < 0.85:
 
 **开始 Phase 1 前确认：**
 - [ ] 已安装 Anthropic SDK：`pip install anthropic`
-- [ ] 已配置 `.env`：`CLAUDE_API_KEY`, `MEMORY_DIR`, `MEMORY_ENABLED=true`
-- [ ] 已创建目录：`mkdir -p memories/patterns`
+- [ ] 已配置 `.env`：
+  - [ ] `CLAUDE_API_KEY`, `MEMORY_ENABLED=true`
+  - [ ] `MEMORY_BACKEND=local`（或 `supabase` / `hybrid`）
+  - [ ] `MEMORY_DIR=./memories`（Local/Hybrid 模式需要）
+  - [ ] `SUPABASE_URL`, `SUPABASE_KEY`（Supabase/Hybrid 模式需要）
+- [ ] 已创建目录：`mkdir -p memories/patterns`（Local/Hybrid 模式）
 - [ ] 已复制 Cookbook 代码：`memory_tool.py` 到本地
 - [ ] 已阅读安全章节（第 7 节）：路径穿越、Prompt Injection 防御
+- [ ] 已阅读模式切换章节（第 4.3 节）：选择合适的后端模式
 
 ---
 

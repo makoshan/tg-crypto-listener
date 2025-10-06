@@ -1,0 +1,59 @@
+{
+  "patterns": [
+    {
+      "id": "core-001",
+      "timestamp": "2025-10-06T00:00:00+00:00",
+      "event_type": "listing",
+      "assets": ["GENERAL"],
+      "action": "buy",
+      "confidence": 0.8,
+      "similarity": 1.0,
+      "summary": "交易所上币短期利好：新代币上线主流交易所（币安/Coinbase/OKX）通常带来短期价格上涨，建议买入观察",
+      "notes": "历史数据显示，主流交易所上币公告后 24-48 小时内平均上涨 15-30%。注意：需结合项目基本面和市场情绪"
+    },
+    {
+      "id": "core-002",
+      "timestamp": "2025-10-06T00:00:00+00:00",
+      "event_type": "hack",
+      "assets": ["ETH", "DeFi"],
+      "action": "sell",
+      "confidence": 0.85,
+      "similarity": 1.0,
+      "summary": "安全事件恐慌抛售：黑客攻击、协议漏洞、大额盗币等安全事件会引发恐慌性抛售，建议卖出或观望",
+      "notes": "DeFi 协议遭黑客攻击后，相关资产通常在 6-12 小时内下跌 10-40%。影响范围可能波及同类协议"
+    },
+    {
+      "id": "core-003",
+      "timestamp": "2025-10-06T00:00:00+00:00",
+      "event_type": "regulation",
+      "assets": ["BTC", "ETH"],
+      "action": "observe",
+      "confidence": 0.7,
+      "similarity": 1.0,
+      "summary": "监管不确定性观望：SEC/CFTC 等监管机构的政策变化（ETF 推迟、诉讼、新规）带来不确定性，建议观望",
+      "notes": "监管消息通常引发短期波动（±5-15%），但中长期影响取决于具体政策内容。正面监管（ETF 通过）为利好"
+    },
+    {
+      "id": "core-004",
+      "timestamp": "2025-10-06T00:00:00+00:00",
+      "event_type": "whale_movement",
+      "assets": ["BTC", "ETH"],
+      "action": "observe",
+      "confidence": 0.65,
+      "similarity": 1.0,
+      "summary": "巨鲸转账观望：大额 BTC/ETH 从交易所转出（冷钱包）通常被视为看涨信号，反之为看跌",
+      "notes": "单笔 > 1000 BTC 或 10000 ETH 的链上转账可能预示大户动向。但需结合交易所净流入/流出数据综合判断"
+    },
+    {
+      "id": "core-005",
+      "timestamp": "2025-10-06T00:00:00+00:00",
+      "event_type": "macro",
+      "assets": ["GENERAL"],
+      "action": "observe",
+      "confidence": 0.5,
+      "similarity": 1.0,
+      "summary": "宏观市场情绪：美联储利率决议、通胀数据、美股大盘走势等宏观因素影响加密市场整体情绪",
+      "notes": "加密市场与美股纳斯达克呈现高相关性（0.7-0.8）。降息预期为利好，加息预期为利空"
+    }
+  ]
+}
