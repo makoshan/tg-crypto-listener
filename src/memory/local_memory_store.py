@@ -75,13 +75,22 @@ class LocalMemoryStore:
         patterns: List[Dict] = []
 
         # 加载关键词对应的模式文件
+        loaded_files = []
         for keyword in keywords:
             file_path = self.pattern_dir / f"{keyword.lower()}.json"
-            patterns.extend(self._load_pattern_file(file_path))
+            keyword_patterns = self._load_pattern_file(file_path)
+            if keyword_patterns:
+                loaded_files.append(f"{keyword.lower()}.json({len(keyword_patterns)})")
+                patterns.extend(keyword_patterns)
 
         # 加载通用模式
         common_path = self.pattern_dir / "core.json"
-        patterns.extend(self._load_pattern_file(common_path))
+        core_patterns = self._load_pattern_file(common_path)
+        if core_patterns:
+            loaded_files.append(f"core.json({len(core_patterns)})")
+            patterns.extend(core_patterns)
+
+        logger.debug(f"📂 加载模式文件: {', '.join(loaded_files) if loaded_files else '无'}")
 
         if not patterns:
             logger.info("未检索到相似历史记忆")
@@ -115,6 +124,18 @@ class LocalMemoryStore:
         entries = entries[:limit]
 
         logger.info(f"检索到 {len(entries)} 条历史记忆")
+
+        # 详细调试日志：显示检索到的记忆内容
+        if entries:
+            logger.debug("📚 Local Memory 检索详情:")
+            for i, entry in enumerate(entries, 1):
+                logger.debug(
+                    f"  [{i}] ID={entry.id[:8]}... asset={entry.assets} "
+                    f"action={entry.action} confidence={entry.confidence:.2f} "
+                    f"similarity={entry.similarity:.2f}"
+                )
+                logger.debug(f"      摘要: {entry.summary[:80]}..." if len(entry.summary) > 80 else f"      摘要: {entry.summary}")
+
         return entries
 
     def _load_pattern_file(self, file_path: Path) -> List[Dict]:

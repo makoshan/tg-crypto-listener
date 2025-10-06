@@ -110,6 +110,13 @@ class HybridMemoryRepository:
 
         if local_entries:
             logger.info(f"从本地检索到 {len(local_entries)} 条记忆（灾备模式）")
+            logger.debug("🔄 Hybrid 降级详情:")
+            for i, entry in enumerate(local_entries, 1):
+                logger.debug(
+                    f"  [{i}] {entry.id[:8]}... {entry.assets} "
+                    f"{entry.action} conf={entry.confidence:.2f}"
+                )
+                logger.debug(f"      {entry.summary[:60]}..." if len(entry.summary) > 60 else f"      {entry.summary}")
 
         context = MemoryContext()
         context.extend(local_entries)
