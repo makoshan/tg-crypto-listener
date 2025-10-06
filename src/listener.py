@@ -136,8 +136,8 @@ class TelegramListener:
                             lookback_hours=memory_config.lookback_hours,
                         )
                         self.memory_repository = HybridMemoryRepository(
-                            supabase=supabase_repo,
-                            local=local_store,
+                            supabase_repo=supabase_repo,
+                            local_store=local_store,
                             max_failures=3,
                         )
                         logger.info("🗄️ Hybrid Memory 已启用 (Supabase 主力 + Local 降级)")
