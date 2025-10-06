@@ -29,6 +29,7 @@ from .utils import (
     setup_logger,
 )
 from .db import AiSignalRepository, NewsEventRepository, SupabaseError, get_supabase_client
+from .memory import MemoryContext, MemoryRepositoryConfig, SupabaseMemoryRepository
 from .db.models import AiSignalPayload, NewsEventPayload
 
 logger = setup_logger(__name__)
@@ -69,6 +70,7 @@ class TelegramListener:
         self._supabase_client = None
         self.news_repository: NewsEventRepository | None = None
         self.signal_repository: AiSignalRepository | None = None
+        self.memory_repository: SupabaseMemoryRepository | None = None
 
     async def initialize(self) -> None:
         """Prepare Telethon client and verify configuration."""
@@ -99,6 +101,17 @@ class TelegramListener:
                 )
                 self.news_repository = NewsEventRepository(self._supabase_client)
                 self.signal_repository = AiSignalRepository(self._supabase_client)
+                if self.config.MEMORY_ENABLED:
+                    memory_config = MemoryRepositoryConfig(
+                        max_notes=max(1, int(self.config.MEMORY_MAX_NOTES)),
+                        similarity_threshold=float(self.config.MEMORY_SIMILARITY_THRESHOLD),
+                        lookback_hours=max(1, int(self.config.MEMORY_LOOKBACK_HOURS)),
+                        min_confidence=max(0.0, float(self.config.MEMORY_MIN_CONFIDENCE)),
+                    )
+                    self.memory_repository = SupabaseMemoryRepository(
+                        self._supabase_client,
+                        memory_config,
+                    )
                 logger.info("🗄️ Supabase 持久化已启用")
             except SupabaseError as exc:
                 self.db_enabled = False
@@ -284,9 +297,28 @@ class TelegramListener:
             if translated_text and translated_text != message_text:
                 keywords_hit = self._collect_keywords(message_text, translated_text)
 
+            memory_context: MemoryContext | None = None
             signal_result: SignalResult | None = None
             if self.ai_engine:
                 media_payload = await self._extract_media(event.message)
+                historical_reference_entries: list[dict[str, str | float]]
+                if (
+                    self.config.MEMORY_ENABLED
+                    and self.memory_repository
+                    and embedding_vector
+                ):
+                    try:
+                        memory_context = await self.memory_repository.fetch_memories(
+                            embedding=embedding_vector,
+                            asset_codes=None,
+                        )
+                    except SupabaseError as exc:
+                        logger.warning("记忆检索失败，跳过历史参考: %s", exc)
+                        memory_context = None
+                if memory_context and not memory_context.is_empty():
+                    historical_reference_entries = memory_context.to_prompt_payload()
+                else:
+                    historical_reference_entries = []
                 payload = EventPayload(
                     text=message_text,
                     source=source_name,
@@ -295,7 +327,14 @@ class TelegramListener:
                     language=language,
                     translation_confidence=translation_confidence,
                     keywords_hit=keywords_hit,
-                    historical_reference={},
+                    historical_reference=(
+                        {
+                            "entries": historical_reference_entries,
+                            "enabled": True,
+                        }
+                        if self.config.MEMORY_ENABLED
+                        else {}
+                    ),
                     media=media_payload,
                 )
                 signal_result = await self.ai_engine.analyse(payload)

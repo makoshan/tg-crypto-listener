@@ -561,6 +561,7 @@ def build_signal_prompt(payload: EventPayload) -> list[dict[str, str]]:
         "action 为 buy、sell 或 observe；direction 为 long、short 或 neutral。"
         "confidence 范围 0-1，保留两位小数，并与 high/medium/low 的 strength 保持一致性。"
         "risk_flags 为数组，枚举 price_volatility、liquidity_risk、regulation_risk、confidence_low、data_incomplete。"
+        "historical_reference.entries 提供近似历史案例，包含时间、资产、动作、置信度与相似度；若列表非空，务必结合这些案例比较当前事件并在 notes 中说明与历史是否一致，若为空可直接按照当前事实判断。"
         "仅当事件直接涉及可识别的加密货币或代币（通常为 2-10 位大写字母/数字的代码，如 BTC、ETH、SOL、BNB、XRP 等）时，输出准确的币种代码；若提及股票、股指、ETF（如特斯拉、S&P500、纳指、恒生指数等）或无法确定具体加密资产，请将 asset 设置为 NONE 并在 notes 中说明原因，禁止返回 GENERAL、CRYPTO、MARKET 等泛化词。"
         "\n\n## 图片分析指南\n"
         "当消息包含图片时，请仔细识别图片内容类型并提取关键信息：\n"
