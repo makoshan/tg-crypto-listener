@@ -394,6 +394,15 @@ class TelegramListener:
                         "🧠 记忆注入 Prompt: %d 条历史参考",
                         len(historical_reference_entries),
                     )
+                    # 详细显示每条记忆的内容
+                    logger.debug("📚 记忆详情:")
+                    for i, entry in enumerate(memory_context.entries, 1):
+                        logger.debug(
+                            f"  [{i}] ID={entry.id[:8]}... assets={entry.assets} "
+                            f"action={entry.action} conf={entry.confidence:.2f} "
+                            f"sim={entry.similarity:.2f} time={entry.created_at.strftime('%Y-%m-%d %H:%M')}"
+                        )
+                        logger.debug(f"      摘要: {entry.summary}")
                 else:
                     historical_reference_entries = []
                     logger.debug("🧠 无历史记忆，使用空上下文")
