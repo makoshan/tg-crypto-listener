@@ -80,6 +80,12 @@ class NewsEventRepository:
             return None
 
     async def insert_event(self, payload: NewsEventPayload) -> Optional[int]:
+        # Convert embedding list to PostgreSQL vector format string
+        embedding_str = None
+        if payload.embedding:
+            # PostgreSQL vector format: "[0.1,0.2,0.3,...]"
+            embedding_str = "[" + ",".join(str(v) for v in payload.embedding) + "]"
+
         data = {
             "source": payload.source,
             "source_message_id": payload.source_message_id,
@@ -92,7 +98,7 @@ class NewsEventRepository:
             "media_refs": payload.media_refs or [],
             "hash_raw": payload.hash_raw,
             "hash_canonical": payload.hash_canonical,
-            "embedding": payload.embedding,  # Add embedding support
+            "embedding": embedding_str,  # Convert list to PostgreSQL vector string
             "keywords_hit": payload.keywords_hit or [],
             "ingest_status": payload.ingest_status,
             "metadata": payload.metadata or {},

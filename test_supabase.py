@@ -63,9 +63,9 @@ async def test_1_basic_connection():
 
 
 async def test_2_table_structure():
-    """测试 2: 表结构验证"""
+    """测试 2: 表结构验证（news_events + ai_signals）"""
     print("\n" + "="*60)
-    print("测试 2: 表结构验证")
+    print("测试 2: 表结构验证（news_events + ai_signals）")
     print("="*60)
 
     try:
@@ -75,23 +75,27 @@ async def test_2_table_structure():
             timeout=Config.SUPABASE_TIMEOUT_SECONDS
         )
 
-        # 尝试查询表（使用 REST API）
-        response = await client._request("GET", "memory_entries", params={"select": "*", "limit": "0"})
+        # 检查 news_events 表
+        ne_response = await client._request("GET", "news_events", params={"select": "id,embedding", "limit": "0"})
+        print(f"✅ 表 'news_events' 存在")
 
-        print(f"✅ 表 'memory_entries' 存在")
-        if isinstance(response, list):
-            print(f"   查询成功，返回 {len(response)} 条记录")
+        # 统计有 embedding 的记录
+        ne_with_emb = await client._request("GET", "news_events", params={"select": "id", "embedding": "not.is.null"})
+        print(f"   有 embedding 的记录: {len(ne_with_emb) if isinstance(ne_with_emb, list) else 0} 条")
 
-        # 尝试统计总记录数
-        count_response = await client._request("GET", "memory_entries", params={"select": "id"}, headers={"Prefer": "count=exact"})
-        total_count = len(count_response) if isinstance(count_response, list) else 0
-        print(f"   数据库中共有 {total_count} 条记忆")
+        # 检查 ai_signals 表
+        ais_response = await client._request("GET", "ai_signals", params={"select": "id", "limit": "0"})
+        print(f"✅ 表 'ai_signals' 存在")
+
+        # 统计总记录数
+        ais_count = await client._request("GET", "ai_signals", params={"select": "id", "limit": "1000"})
+        print(f"   AI 信号记录: {len(ais_count) if isinstance(ais_count, list) else 0} 条")
 
         return True
 
     except Exception as e:
         print(f"❌ 表结构验证失败: {e}")
-        print(f"   请确保已执行 schema.sql 创建表结构")
+        print(f"   请确保已执行 supabase_migration.sql 创建表结构")
         return False
 
 

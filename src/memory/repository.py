@@ -70,18 +70,27 @@ class SupabaseMemoryRepository:
         )
 
         try:
+            logger.info(f"🔍 Supabase RPC 调用开始: search_memory_events")
             result = await self._client.rpc("search_memory_events", params)
             result_count = len(result) if isinstance(result, list) else 'N/A'
-            logger.debug(f"✅ RPC 返回: type={type(result).__name__}, count={result_count}")
+            logger.info(f"✅ Supabase RPC 返回: type={type(result).__name__}, count={result_count}")
 
             # 如果返回为空，记录详细信息
             if isinstance(result, list) and len(result) == 0:
                 logger.warning(
-                    f"⚠️ RPC 返回空结果 - 可能原因: "
-                    f"1) 时间窗口太短 ({params['time_window_hours']}h), "
-                    f"2) 相似度阈值太高 ({params['match_threshold']}), "
-                    f"3) 置信度阈值太高 ({params['min_confidence']}), "
-                    f"4) 数据库中无匹配记录"
+                    f"⚠️ Supabase RPC 返回空结果 - 可能原因:\n"
+                    f"   1) 时间窗口太短 ({params['time_window_hours']}h)\n"
+                    f"   2) 相似度阈值太高 ({params['match_threshold']})\n"
+                    f"   3) 置信度阈值太高 ({params['min_confidence']})\n"
+                    f"   4) 数据库中无匹配记录\n"
+                    f"   5) Embedding 查询向量维度={len(params['query_embedding'])}"
+                )
+            elif isinstance(result, list) and len(result) > 0:
+                logger.info(
+                    f"📊 Supabase 返回 {len(result)} 条记忆:\n"
+                    f"   - 时间窗口: {params['time_window_hours']}h\n"
+                    f"   - 相似度阈值: {params['match_threshold']}\n"
+                    f"   - 置信度阈值: {params['min_confidence']}"
                 )
         except SupabaseError as exc:
             logger.warning("Supabase RPC search_memory_events 失败: %s", exc)

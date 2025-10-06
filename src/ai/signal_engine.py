@@ -511,19 +511,28 @@ class AiSignalEngine:
             )
             try:
                 # Build Claude prompt based on Gemini's initial analysis
+                logger.info("🧠 正在构建 Claude 深度分析 Prompt...")
                 claude_prompt = self._build_claude_deep_analysis_prompt(payload, gemini_result)
+                logger.info(f"🧠 Claude Prompt 构建完成，长度: {len(str(claude_prompt))} 字符")
+
                 claude_response = await self._claude_client.generate_signal(claude_prompt)
+                logger.info(
+                    f"✅ Claude API 返回完成，响应长度: {len(claude_response.text)} 字符, "
+                    f"token 使用: {claude_response.usage}"
+                )
 
                 # Parse Claude's response (expects same JSON structure)
                 claude_result = self._parse_response(claude_response)
                 logger.info(
-                    "✅ Claude 深度分析完成: confidence=%.2f (Gemini: %.2f)",
+                    "✅ Claude 深度分析完成: action=%s confidence=%.2f (Gemini: %.2f) asset=%s",
+                    claude_result.action,
                     claude_result.confidence,
                     gemini_result.confidence,
+                    claude_result.asset,
                 )
                 return claude_result
             except Exception as exc:
-                logger.warning("Claude 深度分析失败，回退到 Gemini 结果: %s", exc)
+                logger.warning("⚠️ Claude 深度分析失败，回退到 Gemini 结果: %s", exc, exc_info=True)
                 return gemini_result
 
         return gemini_result

@@ -224,6 +224,7 @@ class AnthropicClient:
 
         while tool_turn_count < self._max_tool_turns:
             # 调用 Claude API
+            logger.info(f"🤖 Claude API 调用开始 (轮次: {tool_turn_count + 1}, model: {self._model_name})")
             response: Message = self._client.messages.create(
                 model=self._model_name,
                 max_tokens=max_tokens,
@@ -232,6 +233,10 @@ class AnthropicClient:
                 tools=[{"type": "memory_20250818", "name": "memory"}],
                 betas=["context-management-2025-06-27"],
                 context_management=self._context_management
+            )
+            logger.info(
+                f"✅ Claude API 响应完成 (input_tokens: {response.usage.input_tokens}, "
+                f"output_tokens: {response.usage.output_tokens}, stop_reason: {response.stop_reason})"
             )
 
             # 提取 text blocks 和 tool use blocks
