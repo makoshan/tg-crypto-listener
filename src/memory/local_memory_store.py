@@ -126,13 +126,13 @@ class LocalMemoryStore:
         logger.info(f"检索到 {len(entries)} 条历史记忆")
 
         # 详细调试日志：显示检索到的记忆内容
-        if entries:
+        if entries and logger.isEnabledFor(10):  # DEBUG level
             logger.debug("📚 Local Memory 检索详情:")
             for i, entry in enumerate(entries, 1):
                 logger.debug(
-                    f"  [{i}] ID={entry.id[:8]}... asset={entry.assets} "
+                    f"  [{i}] ID={entry.id[:8]}... assets={entry.assets} "
                     f"action={entry.action} confidence={entry.confidence:.2f} "
-                    f"similarity={entry.similarity:.2f}"
+                    f"similarity={entry.similarity:.2f} time={entry.created_at.strftime('%Y-%m-%d %H:%M')}"
                 )
                 logger.debug(f"      摘要: {entry.summary[:80]}..." if len(entry.summary) > 80 else f"      摘要: {entry.summary}")
 

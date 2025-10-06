@@ -72,9 +72,10 @@ class HybridMemoryRepository:
         try:
             # Debug: 记录检索参数
             logger.debug(
-                f"Supabase 检索参数: embedding={'有' if embedding else '无'} "
+                f"🌐 Hybrid → Supabase 检索参数: embedding={'有' if embedding else '无'} "
                 f"(维度={len(embedding) if embedding else 0}), "
-                f"asset_codes={list(asset_codes) if asset_codes else []}"
+                f"asset_codes={list(asset_codes) if asset_codes else []}, "
+                f"keywords={keywords or []}"
             )
 
             context = await self.supabase.fetch_memories(
@@ -83,36 +84,47 @@ class HybridMemoryRepository:
             )
 
             if not context.is_empty():
-                logger.info(f"从 Supabase 检索到 {len(context.entries)} 条记忆")
+                logger.info(f"✅ Hybrid: 从 Supabase 检索到 {len(context.entries)} 条记忆")
                 self._supabase_failures = 0  # 重置失败计数
+
+                # DEBUG 模式下显示详细信息
+                if logger.isEnabledFor(10):
+                    logger.debug("📦 Supabase 记忆详情:")
+                    for i, entry in enumerate(context.entries, 1):
+                        logger.debug(
+                            f"  [{i}] {entry.id[:8]}... {entry.assets} {entry.action} "
+                            f"conf={entry.confidence:.2f} sim={entry.similarity:.2f}"
+                        )
                 return context
 
             # Supabase 返回空结果，降级本地
-            logger.info(
-                f"Supabase 返回空结果，降级到本地检索 "
+            logger.warning(
+                f"⚠️  Hybrid: Supabase 返回空结果，降级到本地检索 "
                 f"(embedding维度={len(embedding) if embedding else 0}, "
-                f"asset_codes={list(asset_codes) if asset_codes else []})"
+                f"asset_codes={list(asset_codes) if asset_codes else []}, "
+                f"keywords={keywords or []})"
             )
 
         except (SupabaseError, Exception) as e:
             self._supabase_failures += 1
             logger.warning(
-                f"Supabase 检索失败（{self._supabase_failures}/{self._max_failures}），"
+                f"❌ Hybrid: Supabase 检索失败（{self._supabase_failures}/{self._max_failures}），"
                 f"降级到本地: {e}"
             )
 
             # 触发告警
             if self._supabase_failures >= self._max_failures:
                 logger.error(
-                    f"Supabase 连续失败 {self._supabase_failures} 次，"
+                    f"🚨 Hybrid: Supabase 连续失败 {self._supabase_failures} 次，"
                     "请检查网络连接或 Supabase 服务状态"
                 )
 
         # 降级到本地 JSON（关键词匹配）
         if not keywords:
-            logger.debug("无关键词，跳过本地降级检索")
+            logger.warning("⚠️  Hybrid: 无关键词，跳过本地降级检索")
             return MemoryContext()
 
+        logger.info(f"🔄 Hybrid: 开始本地降级检索 (keywords={keywords})")
         local_entries = self.local.load_entries(
             keywords=keywords,
             limit=self._config.max_notes,
@@ -120,14 +132,19 @@ class HybridMemoryRepository:
         )
 
         if local_entries:
-            logger.info(f"从本地检索到 {len(local_entries)} 条记忆（灾备模式）")
-            logger.debug("🔄 Hybrid 降级详情:")
-            for i, entry in enumerate(local_entries, 1):
-                logger.debug(
-                    f"  [{i}] {entry.id[:8]}... {entry.assets} "
-                    f"{entry.action} conf={entry.confidence:.2f}"
-                )
-                logger.debug(f"      {entry.summary[:60]}..." if len(entry.summary) > 60 else f"      {entry.summary}")
+            logger.info(f"✅ Hybrid: 从本地检索到 {len(local_entries)} 条记忆（灾备模式）")
+
+            # DEBUG 模式下显示详细信息
+            if logger.isEnabledFor(10):
+                logger.debug("📦 本地降级记忆详情:")
+                for i, entry in enumerate(local_entries, 1):
+                    logger.debug(
+                        f"  [{i}] {entry.id[:8]}... {entry.assets} "
+                        f"{entry.action} conf={entry.confidence:.2f} sim={entry.similarity:.2f}"
+                    )
+                    logger.debug(f"      {entry.summary[:80]}..." if len(entry.summary) > 80 else f"      {entry.summary}")
+        else:
+            logger.warning(f"⚠️  Hybrid: 本地检索无结果 (keywords={keywords})")
 
         context = MemoryContext()
         context.extend(local_entries)

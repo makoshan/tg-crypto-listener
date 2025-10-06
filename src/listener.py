@@ -395,14 +395,22 @@ class TelegramListener:
                         len(historical_reference_entries),
                     )
                     # 详细显示每条记忆的内容
-                    logger.debug("📚 记忆详情:")
-                    for i, entry in enumerate(memory_context.entries, 1):
-                        logger.debug(
-                            f"  [{i}] ID={entry.id[:8]}... assets={entry.assets} "
-                            f"action={entry.action} conf={entry.confidence:.2f} "
-                            f"sim={entry.similarity:.2f} time={entry.created_at.strftime('%Y-%m-%d %H:%M')}"
-                        )
-                        logger.debug(f"      摘要: {entry.summary}")
+                    if logger.isEnabledFor(10):  # DEBUG level
+                        logger.debug("📚 记忆详情（完整）:")
+                        for i, entry in enumerate(memory_context.entries, 1):
+                            logger.debug(
+                                f"  [{i}] ID={entry.id[:8]}... assets={entry.assets} "
+                                f"action={entry.action} confidence={entry.confidence:.2f} "
+                                f"similarity={entry.similarity:.2f} time={entry.created_at.strftime('%Y-%m-%d %H:%M:%S')}"
+                            )
+                            logger.debug(f"      摘要: {entry.summary}")
+                    else:
+                        # INFO level: 只显示简短统计
+                        for i, entry in enumerate(memory_context.entries, 1):
+                            logger.info(
+                                f"  [{i}] {entry.assets} {entry.action} "
+                                f"(conf={entry.confidence:.2f}, sim={entry.similarity:.2f})"
+                            )
                 else:
                     historical_reference_entries = []
                     logger.debug("🧠 无历史记忆，使用空上下文")
