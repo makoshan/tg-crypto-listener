@@ -63,7 +63,11 @@ class AnthropicClient:
         context_management: Optional[Dict[str, Any]] = None,
         max_retries: int = 1,
         retry_backoff_seconds: float = 1.5,
-        max_tool_turns: int = 10  # 防止 Tool Use 死循环
+        max_tool_turns: int = 10,  # 防止 Tool Use 死循环
+        *,
+        context_trigger_tokens: Optional[int] = None,
+        context_keep_tools: Optional[int] = None,
+        context_clear_at_least: Optional[int] = None
     ) -> None:
         """
         初始化 Anthropic 客户端
@@ -90,7 +94,14 @@ class AnthropicClient:
         self._model_name = model_name
         self._timeout = timeout
         self._memory_handler = memory_handler
-        self._context_management = context_management or self._default_context_config()
+        if context_management is None:
+            self._context_management = self._default_context_config(
+                trigger_tokens=context_trigger_tokens,
+                keep_tools=context_keep_tools,
+                clear_at_least=context_clear_at_least,
+            )
+        else:
+            self._context_management = context_management
         self._max_retries = max(0, int(max_retries))
         self._retry_backoff = max(0.0, float(retry_backoff_seconds))
         self._max_tool_turns = max_tool_turns
@@ -100,15 +111,30 @@ class AnthropicClient:
             f"(timeout={timeout}s, max_tool_turns={max_tool_turns})"
         )
 
-    def _default_context_config(self) -> Dict[str, Any]:
+    def _default_context_config(
+        self,
+        *,
+        trigger_tokens: Optional[int] = None,
+        keep_tools: Optional[int] = None,
+        clear_at_least: Optional[int] = None,
+    ) -> Dict[str, Any]:
         """默认 Context Editing 配置"""
         return {
             "edits": [
                 {
                     "type": "clear_tool_uses_20250919",
-                    "trigger": {"type": "input_tokens", "value": 10000},
-                    "keep": {"type": "tool_uses", "value": 2},
-                    "clear_at_least": {"type": "input_tokens", "value": 500}
+                    "trigger": {
+                        "type": "input_tokens",
+                        "value": int(trigger_tokens) if trigger_tokens is not None else 10000,
+                    },
+                    "keep": {
+                        "type": "tool_uses",
+                        "value": int(keep_tools) if keep_tools is not None else 2,
+                    },
+                    "clear_at_least": {
+                        "type": "input_tokens",
+                        "value": int(clear_at_least) if clear_at_least is not None else 500,
+                    },
                 }
             ]
         }
