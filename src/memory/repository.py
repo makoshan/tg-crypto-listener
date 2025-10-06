@@ -7,7 +7,11 @@ from datetime import datetime
 from typing import Iterable, Sequence
 
 from ..db.supabase_client import SupabaseClient, SupabaseError
+from ..utils import setup_logger
 from .types import MemoryContext, MemoryEntry
+
+
+logger = setup_logger(__name__)
 
 
 @dataclass(slots=True)
@@ -56,9 +60,11 @@ class SupabaseMemoryRepository:
 
         try:
             result = await self._client.rpc("search_memory_events", params)
-        except SupabaseError:
+        except SupabaseError as exc:
+            logger.warning("Supabase RPC search_memory_events 失败: %s", exc)
             return MemoryContext()
-        except Exception:
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.warning("记忆检索出现未知异常: %s", exc)
             return MemoryContext()
 
         entries: list[MemoryEntry] = []
@@ -98,6 +104,21 @@ class SupabaseMemoryRepository:
                 entries.append(entry)
 
         entries.sort(key=lambda item: item.similarity, reverse=True)
+        top_entries = entries[: self._config.max_notes]
+        if top_entries:
+            logger.info(
+                "检索到 %d 条历史记忆 (阈值=%.2f, 时间窗口=%dh)",
+                len(top_entries),
+                self._config.similarity_threshold,
+                self._config.lookback_hours,
+            )
+        else:
+            logger.debug(
+                "未检索到相似历史记忆 (阈值=%.2f, 时间窗口=%dh)",
+                self._config.similarity_threshold,
+                self._config.lookback_hours,
+            )
+
         context = MemoryContext()
-        context.extend(entries[: self._config.max_notes])
+        context.extend(top_entries)
         return context
