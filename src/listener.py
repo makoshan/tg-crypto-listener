@@ -380,7 +380,7 @@ class TelegramListener:
                 )
                 return
 
-            ai_kwargs = self._build_ai_kwargs(signal_result)
+            ai_kwargs = self._build_ai_kwargs(signal_result, source_name)
             if not ai_kwargs:
                 # 强制要求每条推送包含 AI 摘要，若缺失则跳过
                 self.stats["ai_skipped"] += 1
@@ -516,15 +516,43 @@ class TelegramListener:
                 normalized.append(cleaned)
         return normalized
 
-    def _build_ai_kwargs(self, signal_result: SignalResult | None) -> dict[str, object]:
+    def _build_ai_kwargs(
+        self,
+        signal_result: SignalResult | None,
+        source: str,
+    ) -> dict[str, object]:
         if not signal_result:
+            logger.debug("AI 结果为空，source=%s", source)
             return {}
+
         if signal_result.status == "error":
+            logger.warning(
+                "AI 分析返回错误状态，source=%s error=%s",
+                source,
+                signal_result.error or "unknown",
+            )
             return {}
+
         if signal_result.status != "success":
+            logger.info(
+                "AI 状态为 %s，非成功结果，source=%s",
+                signal_result.status,
+                source,
+            )
             return {}
+
         if not signal_result.summary:
+            raw_preview = (signal_result.raw_response or "").strip()
+            if len(raw_preview) > 160:
+                raw_preview = raw_preview[:157] + "..."
+            logger.info(
+                "AI 返回缺少摘要，source=%s action=%s raw=%s",
+                source,
+                signal_result.action,
+                raw_preview,
+            )
             return {}
+
         return {
             "ai_summary": signal_result.summary,
             "ai_action": signal_result.action,
