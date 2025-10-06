@@ -214,10 +214,16 @@ def format_forwarded_message(
     # 信号摘要：翻译文本与 AI 摘要分别列出，清晰紧凑
     def _normalize_for_compare(text: str) -> str:
         stripped = re.sub(r"\s+", "", text)
-        stripped = re.sub(r'[，,。\.！!？?：:；;"\'“”‘’`·•\-]', "", stripped)
+        stripped = re.sub(r'[，,。\\.!？?：:；;"\'“”‘’`·•\-]', "", stripped)
         return stripped.lower()
 
     summary_segments: list[tuple[str, str]] = []
+
+    # If the translated text is effectively the same as the original, skip showing both
+    if translated_text and original_text:
+        if _normalize_for_compare(translated_text) == _normalize_for_compare(original_text):
+            translated_text = ""
+
     if translated_text:
         summary_segments.append(("translation", translated_text))
     elif original_text:
