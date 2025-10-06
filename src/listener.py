@@ -248,7 +248,7 @@ class TelegramListener:
                 else None
             )
 
-            logger.debug("📨 收到消息来自 %s: %.100s...", source_name, message_text)
+            logger.debug("📨 收到消息来自 %s (长度: %d): %.300s...", source_name, len(message_text), message_text)
 
             if not contains_keywords(message_text, self.config.FILTER_KEYWORDS):
                 self.stats["filtered_out"] += 1
