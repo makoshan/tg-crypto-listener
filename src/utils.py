@@ -188,7 +188,7 @@ def format_forwarded_message(
     timestamp: datetime,
     translated_text: str | None = None,
     original_text: str | None = None,
-    show_original: bool = False,
+    show_original: bool = False,  # 保留签名但不再展示原文
     show_translation: bool = True,
     ai_summary: str | None = None,
     ai_action: str | None = None,
@@ -213,7 +213,7 @@ def format_forwarded_message(
     if not show_translation:
         translated_text = ""
 
-    parts: list[str] = ["🔔 **加密新闻监听**\n\n"]
+    parts: list[str] = ["🔔 加密新闻监听\n"]
 
     # 信号摘要：翻译文本与 AI 摘要分别列出，清晰紧凑
     def _normalize_for_compare(text: str) -> str:
@@ -230,13 +230,10 @@ def format_forwarded_message(
         summary_text = translated_text or original_text
     summary_text = (summary_text or "暂无摘要").replace("\n", " ").strip()
 
-    parts.append("⚡ **信号摘要**\n\n")
+    parts.append("⚡ 信号摘要\n")
     parts.append(f"📡 来源: {source_channel}，内容：{summary_text}\n")
-
-    # 备注信息（notes 跨段展示）
     if ai_notes:
-        parts.append(f"备注: {ai_notes}\n")
-    parts.append("\n")
+        parts.append(f"📝 备注: {ai_notes}\n")
 
     # 操作要点，仅当有 AI 结果时展示
     if ai_summary:
@@ -245,7 +242,7 @@ def format_forwarded_message(
         confidence_text = (
             f"{ai_confidence:.2f}" if ai_confidence is not None else "未知"
         )
-        parts.append("🎯 **操作要点**\n")
+        parts.append("\n🎯 操作要点\n")
 
         asset_line = ""
         if ai_asset or ai_asset_names:
@@ -277,26 +274,19 @@ def format_forwarded_message(
         if strength_cn:
             line_parts.append(f"强度: {strength_cn}")
 
-        parts.append("，".join(line_parts) + "\n")
+        parts.append("- " + "，".join(line_parts) + "\n")
 
         event_type_label = EVENT_TYPE_LABELS.get(ai_event_type or "", None)
         if event_type_label:
-            parts.append(f"事件类型: {event_type_label}\n")
+            parts.append(f"- 事件类型: {event_type_label}\n")
 
         localized_flags = [
             RISK_FLAG_LABELS.get(flag, flag) for flag in ai_risk_flags if flag
         ]
         if localized_flags:
-            parts.append(f"风险: {'、'.join(localized_flags)}\n")
-
-        parts.append("\n")
+            parts.append(f"- 风险: {'、'.join(localized_flags)}\n")
 
     # 时间
-    parts.append(f"🕒 **时间**: {timestamp.strftime('%Y-%m-%d %H:%M:%S')}\n")
-
-    # 原文视情况展示
-    if show_original and original_text:
-        parts.append("\n🧾 **原文**\n")
-        parts.append(f"```\n{original_text}\n```\n")
+    parts.append(f"\n🕒 时间: {timestamp.strftime('%Y-%m-%d %H:%M:%S')}\n")
 
     return "".join(parts)
