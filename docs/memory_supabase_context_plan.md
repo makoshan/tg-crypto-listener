@@ -278,34 +278,45 @@ CREATE OR REPLACE FUNCTION search_memory_events(
     time_window_hours int DEFAULT 72
 )
 RETURNS TABLE (
-    id uuid,
-    created_at timestamp,
+    ai_signal_id bigint,
+    news_event_id bigint,
+    created_at timestamptz,
     assets text[],
     action text,
-    confidence float,
+    confidence double precision,
     summary text,
-    similarity float
+    similarity double precision
 )
 LANGUAGE plpgsql
 AS $$
 BEGIN
     RETURN QUERY
     SELECT
+        ais.id,
         ne.id,
         ne.created_at,
-        ais.assets,
-        ais.action,
-        ais.confidence,
-        ais.summary,
-        1 - (ne.embedding <=> query_embedding) as similarity
+        regexp_split_to_array(
+            regexp_replace(coalesce(NULLIF(ais.assets, ''), 'NONE'), '\s+', '', 'g'),
+            ','
+        )::text[] AS assets,
+        ais.action::text,
+        ais.confidence::double precision,
+        ais.summary_cn::text,
+        (1 - (ne.embedding <=> query_embedding))::double precision AS similarity
     FROM news_events ne
-    JOIN ai_signals ais ON ne.id = ais.event_id
+    JOIN ai_signals ais ON ais.news_event_id = ne.id
     WHERE
         ne.embedding IS NOT NULL
         AND ais.confidence >= min_confidence
         AND ne.created_at >= NOW() - (time_window_hours || ' hours')::interval
-        AND (asset_filter IS NULL OR ais.assets && asset_filter)
-        AND 1 - (ne.embedding <=> query_embedding) >= match_threshold
+        AND (
+            asset_filter IS NULL
+            OR regexp_split_to_array(
+                regexp_replace(coalesce(NULLIF(ais.assets, ''), 'NONE'), '\s+', '', 'g'),
+                ','
+            ) && asset_filter
+        )
+        AND (1 - (ne.embedding <=> query_embedding)) >= match_threshold
     ORDER BY
         similarity DESC,
         ais.confidence DESC,
