@@ -70,6 +70,13 @@ class HybridMemoryRepository:
         """
         # 尝试 Supabase 向量检索
         try:
+            # Debug: 记录检索参数
+            logger.debug(
+                f"Supabase 检索参数: embedding={'有' if embedding else '无'} "
+                f"(维度={len(embedding) if embedding else 0}), "
+                f"asset_codes={list(asset_codes) if asset_codes else []}"
+            )
+
             context = await self.supabase.fetch_memories(
                 embedding=embedding,
                 asset_codes=asset_codes
@@ -81,7 +88,11 @@ class HybridMemoryRepository:
                 return context
 
             # Supabase 返回空结果，降级本地
-            logger.info("Supabase 返回空结果，降级到本地检索")
+            logger.info(
+                f"Supabase 返回空结果，降级到本地检索 "
+                f"(embedding维度={len(embedding) if embedding else 0}, "
+                f"asset_codes={list(asset_codes) if asset_codes else []})"
+            )
 
         except (SupabaseError, Exception) as e:
             self._supabase_failures += 1
