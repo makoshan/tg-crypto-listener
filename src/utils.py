@@ -240,6 +240,7 @@ def format_forwarded_message(
         source_display = source_channel
     parts.append(f" {source_display}：{summary_text}")
     if ai_notes:
+        parts.append("")
         parts.append(f"备注: {ai_notes}")
         parts.append("")
 
