@@ -7,7 +7,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 
-@dataclass(slots=True)
+@dataclass
 class NewsEventPayload:
     source: str
     source_message_id: str
@@ -26,7 +26,7 @@ class NewsEventPayload:
     embedding: Optional[List[float]] = None
 
 
-@dataclass(slots=True)
+@dataclass
 class AiSignalPayload:
     news_event_id: int
     model_name: str
@@ -47,7 +47,7 @@ class AiSignalPayload:
     raw_response: Optional[str] = None
 
 
-@dataclass(slots=True)
+@dataclass
 class StrategyInsightPayload:
     title: str
     narrative: Optional[str] = None

@@ -31,7 +31,7 @@ DEFAULT_PROVIDER_QUOTAS: dict[str, int] = {
 }
 
 
-@dataclass(slots=True)
+@dataclass
 class TranslationResult:
     text: str
     language: str

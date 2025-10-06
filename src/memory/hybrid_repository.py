@@ -30,7 +30,8 @@ class HybridMemoryRepository:
         self,
         supabase_repo: SupabaseMemoryRepository,
         local_store: LocalMemoryStore,
-        config: MemoryRepositoryConfig | None = None
+        config: MemoryRepositoryConfig | None = None,
+        max_failures: int = 3,
     ):
         """
         初始化混合记忆仓储
@@ -39,12 +40,13 @@ class HybridMemoryRepository:
             supabase_repo: Supabase 记忆仓储
             local_store: 本地记忆存储
             config: 记忆检索配置
+            max_failures: 触发降级的连续失败阈值
         """
         self.supabase = supabase_repo
         self.local = local_store
         self._config = config or MemoryRepositoryConfig()
         self._supabase_failures = 0  # 连续失败计数
-        self._max_failures = 3  # 触发降级的失败阈值
+        self._max_failures = max_failures
 
         logger.info("HybridMemoryRepository 初始化（Supabase 主 + Local 备）")
 

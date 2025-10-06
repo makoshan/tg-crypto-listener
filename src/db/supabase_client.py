@@ -12,7 +12,7 @@ class SupabaseError(RuntimeError):
     """Raised when Supabase returns an unexpected response."""
 
 
-@dataclass(slots=True)
+@dataclass
 class SupabaseClient:
     """Minimal REST client for Supabase tables."""
 

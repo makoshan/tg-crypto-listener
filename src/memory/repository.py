@@ -14,7 +14,7 @@ from .types import MemoryContext, MemoryEntry
 logger = setup_logger(__name__)
 
 
-@dataclass(slots=True)
+@dataclass
 class MemoryRepositoryConfig:
     """Configuration parameters controlling memory retrieval."""
 

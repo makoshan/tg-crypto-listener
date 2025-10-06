@@ -12,6 +12,7 @@ from typing import Any, Dict, Optional, Sequence
 
 from ..utils import setup_logger
 from .gemini_client import AiServiceError, GeminiClient, GeminiResponse
+from .anthropic_client import AnthropicClient, AnthropicResponse
 
 try:  # pragma: no cover - optional dependency
     import httpx
@@ -114,6 +115,45 @@ class SignalResult:
             self.status == "success"
             and self.action in {"buy", "sell"}
         )
+
+    def is_high_value_signal(
+        self,
+        *,
+        confidence_threshold: float = 0.7,
+        critical_event_types: set[str] | None = None,
+        critical_keywords: set[str] | None = None,
+        message_text: str = "",
+    ) -> bool:
+        """Determine if signal qualifies for Claude deep analysis.
+
+        Args:
+            confidence_threshold: Minimum confidence for high-value classification
+            critical_event_types: Event types requiring deep analysis
+            critical_keywords: Keywords triggering deep analysis
+            message_text: Original message text for keyword matching
+
+        Returns:
+            True if signal meets high-value criteria
+        """
+        if self.status != "success":
+            return False
+
+        # Criterion 1: High confidence
+        if self.confidence >= confidence_threshold:
+            return True
+
+        # Criterion 2: Critical event type
+        critical_events = critical_event_types or {"hack", "regulation", "listing", "delisting"}
+        if self.event_type in critical_events:
+            return True
+
+        # Criterion 3: Critical keyword match
+        if critical_keywords and message_text:
+            message_lower = message_text.lower()
+            if any(keyword.lower() in message_lower for keyword in critical_keywords):
+                return True
+
+        return False
 
 
 @dataclass
@@ -252,7 +292,7 @@ class OpenAIChatClient:
 
 
 class AiSignalEngine:
-    """Coordinate optional AI powered signal generation."""
+    """Coordinate optional AI powered signal generation with dual-engine routing."""
 
     def __init__(
         self,
@@ -260,13 +300,24 @@ class AiSignalEngine:
         client: Optional[OpenAIChatClient],
         threshold: float,
         semaphore: asyncio.Semaphore,
+        *,
+        claude_client: Optional[AnthropicClient] = None,
+        claude_enabled: bool = False,
+        high_value_threshold: float = 0.7,
+        critical_keywords: set[str] | None = None,
     ) -> None:
         self.enabled = enabled and client is not None
         self._client = client
         self._threshold = threshold
         self._semaphore = semaphore
+        self._claude_client = claude_client
+        self._claude_enabled = claude_enabled and claude_client is not None
+        self._high_value_threshold = high_value_threshold
+        self._critical_keywords = critical_keywords or set()
         if not self.enabled:
             logger.debug("AiSignalEngine 未启用或缺少客户端，所有消息将跳过 AI 分析")
+        if self._claude_enabled:
+            logger.info("🤖 Claude 深度分析已启用 (10% 高价值信号路由)")
 
     @classmethod
     def from_config(cls, config: Any) -> "AiSignalEngine":
@@ -347,7 +398,48 @@ class AiSignalEngine:
             return cls(False, None, getattr(config, "AI_SIGNAL_THRESHOLD", 0.0), asyncio.Semaphore(1))
 
         concurrency = max(1, int(getattr(config, "AI_MAX_CONCURRENCY", 1)))
-        return cls(True, client, getattr(config, "AI_SIGNAL_THRESHOLD", 0.0), asyncio.Semaphore(concurrency))
+
+        # Initialize Claude client if enabled
+        claude_client: Optional[AnthropicClient] = None
+        claude_enabled = getattr(config, "CLAUDE_ENABLED", False)
+        if claude_enabled:
+            claude_api_key = getattr(config, "CLAUDE_API_KEY", "").strip()
+            if claude_api_key:
+                try:
+                    from ..memory import MemoryToolHandler
+
+                    memory_dir = getattr(config, "MEMORY_DIR", "./memories")
+                    memory_handler = MemoryToolHandler(base_path=memory_dir)
+
+                    claude_client = AnthropicClient(
+                        api_key=claude_api_key,
+                        model_name=getattr(config, "CLAUDE_MODEL", "claude-sonnet-4-5-20250929"),
+                        timeout=getattr(config, "CLAUDE_TIMEOUT_SECONDS", 30.0),
+                        max_tool_turns=getattr(config, "CLAUDE_MAX_TOOL_TURNS", 10),
+                        memory_handler=memory_handler,
+                        context_trigger_tokens=getattr(config, "MEMORY_CONTEXT_TRIGGER_TOKENS", 10000),
+                        context_keep_tools=getattr(config, "MEMORY_CONTEXT_KEEP_TOOLS", 2),
+                        context_clear_at_least=getattr(config, "MEMORY_CONTEXT_CLEAR_AT_LEAST", 500),
+                    )
+                    logger.info("🧠 Claude 深度分析引擎已初始化")
+                except Exception as exc:
+                    logger.warning("Claude 初始化失败，将禁用深度分析: %s", exc)
+                    claude_client = None
+                    claude_enabled = False
+
+        high_value_threshold = getattr(config, "HIGH_VALUE_CONFIDENCE_THRESHOLD", 0.7)
+        critical_keywords = getattr(config, "CRITICAL_KEYWORDS", set())
+
+        return cls(
+            True,
+            client,
+            getattr(config, "AI_SIGNAL_THRESHOLD", 0.0),
+            asyncio.Semaphore(concurrency),
+            claude_client=claude_client,
+            claude_enabled=claude_enabled,
+            high_value_threshold=high_value_threshold,
+            critical_keywords=critical_keywords,
+        )
 
     async def analyse(self, payload: EventPayload) -> SignalResult:
         if not self.enabled or not self._client:
@@ -374,6 +466,7 @@ class AiSignalEngine:
             if images:
                 logger.debug("AI 分析包含 %d 张图片", len(images))
 
+        # Step 1: Gemini fast analysis (90%)
         async with self._semaphore:
             try:
                 if isinstance(self._client, GeminiClient):
@@ -389,8 +482,43 @@ class AiSignalEngine:
                 )
                 return SignalResult(status="error", error=str(exc))
 
-        logger.debug("AI 返回长度: %d", len(response.text))
-        return self._parse_response(response)
+        logger.debug("Gemini 返回长度: %d", len(response.text))
+        gemini_result = self._parse_response(response)
+
+        # Step 2: Check if high-value signal qualifies for Claude (10%)
+        if (
+            self._claude_enabled
+            and self._claude_client
+            and gemini_result.is_high_value_signal(
+                confidence_threshold=self._high_value_threshold,
+                critical_keywords=self._critical_keywords,
+                message_text=payload.text,
+            )
+        ):
+            logger.info(
+                "🧠 触发 Claude 深度分析: event_type=%s confidence=%.2f asset=%s",
+                gemini_result.event_type,
+                gemini_result.confidence,
+                gemini_result.asset,
+            )
+            try:
+                # Build Claude prompt based on Gemini's initial analysis
+                claude_prompt = self._build_claude_deep_analysis_prompt(payload, gemini_result)
+                claude_response = await self._claude_client.generate_signal(claude_prompt)
+
+                # Parse Claude's response (expects same JSON structure)
+                claude_result = self._parse_response(claude_response)
+                logger.info(
+                    "✅ Claude 深度分析完成: confidence=%.2f (Gemini: %.2f)",
+                    claude_result.confidence,
+                    gemini_result.confidence,
+                )
+                return claude_result
+            except Exception as exc:
+                logger.warning("Claude 深度分析失败，回退到 Gemini 结果: %s", exc)
+                return gemini_result
+
+        return gemini_result
 
     def _parse_response(self, response: OpenAIChatResponse) -> SignalResult:
         raw_text = response.text.strip()
@@ -520,6 +648,74 @@ class AiSignalEngine:
             raw_response=raw_text,
             notes=notes,
             links=links,
+        )
+
+    def _build_claude_deep_analysis_prompt(
+        self, payload: EventPayload, gemini_result: SignalResult
+    ) -> str:
+        """Build enriched prompt for Claude based on Gemini's initial analysis."""
+        context = {
+            "original_text": payload.text,
+            "translated_text": payload.translated_text or payload.text,
+            "source": payload.source,
+            "timestamp": payload.timestamp.isoformat(),
+            "language": payload.language,
+            "keywords_hit": payload.keywords_hit,
+            "historical_reference": payload.historical_reference,
+            "gemini_analysis": {
+                "summary": gemini_result.summary,
+                "event_type": gemini_result.event_type,
+                "asset": gemini_result.asset,
+                "asset_names": gemini_result.asset_names,
+                "action": gemini_result.action,
+                "direction": gemini_result.direction,
+                "confidence": gemini_result.confidence,
+                "strength": gemini_result.strength,
+                "risk_flags": gemini_result.risk_flags,
+                "notes": gemini_result.notes,
+            },
+        }
+
+        context_json = json.dumps(context, ensure_ascii=False, indent=2)
+
+        system_prompt = (
+            "你是加密交易台的资深分析师，擅长深度分析高价值信号。\n"
+            "当前任务：基于 Gemini 的初步分析，进行深度验证和优化。\n\n"
+            "## 分析要点\n"
+            "1. **验证 Gemini 判断**：检查事件类型、资产识别、置信度是否合理\n"
+            "2. **历史对比**：结合 historical_reference 中的相似案例，判断当前事件的独特性\n"
+            "3. **风险评估**：补充 Gemini 可能遗漏的风险点（如流动性、监管、市场情绪）\n"
+            "4. **置信度校准**：基于历史案例和当前市场环境，调整置信度\n"
+            "5. **可操作性**：明确 action 的具体执行策略（入场点、止损、仓位建议）\n\n"
+            "## 输出要求\n"
+            "严格使用 JSON 格式，字段与 Gemini 一致：\n"
+            "- summary: 深度分析后的精炼摘要（中文）\n"
+            "- event_type: listing | delisting | hack | regulation | funding | whale | liquidation | partnership | product_launch | governance | macro | celebrity | airdrop | other\n"
+            "- asset: 加密资产代码（如 BTC、ETH），非加密资产设为 NONE\n"
+            "- asset_name: 资产名称\n"
+            "- action: buy | sell | observe\n"
+            "- direction: long | short | neutral\n"
+            "- confidence: 0-1 (两位小数)\n"
+            "- strength: low | medium | high\n"
+            "- risk_flags: [price_volatility, liquidity_risk, regulation_risk, confidence_low, data_incomplete]\n"
+            "- notes: 深度分析要点，包括历史对比结论、风险提示、操作建议\n"
+            "- links: 相关链接数组\n\n"
+            "若 Gemini 分析存在明显错误（如误判资产、置信度过高），请在 notes 中说明修正理由。"
+        )
+
+        user_prompt = (
+            "请基于以下上下文进行深度分析：\n"
+            f"```json\n{context_json}\n```\n\n"
+            "返回优化后的 JSON 分析结果。"
+        )
+
+        # Claude expects messages format for generate_signal
+        return json.dumps(
+            [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            ensure_ascii=False,
         )
 
     @staticmethod

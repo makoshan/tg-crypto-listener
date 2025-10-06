@@ -29,7 +29,13 @@ from .utils import (
     setup_logger,
 )
 from .db import AiSignalRepository, NewsEventRepository, SupabaseError, get_supabase_client
-from .memory import MemoryContext, MemoryRepositoryConfig, SupabaseMemoryRepository
+from .memory import (
+    MemoryContext,
+    MemoryRepositoryConfig,
+    SupabaseMemoryRepository,
+    LocalMemoryStore,
+    HybridMemoryRepository,
+)
 from .db.models import AiSignalPayload, NewsEventPayload
 
 logger = setup_logger(__name__)
@@ -70,7 +76,7 @@ class TelegramListener:
         self._supabase_client = None
         self.news_repository: NewsEventRepository | None = None
         self.signal_repository: AiSignalRepository | None = None
-        self.memory_repository: SupabaseMemoryRepository | None = None
+        self.memory_repository: SupabaseMemoryRepository | LocalMemoryStore | HybridMemoryRepository | None = None
 
     async def initialize(self) -> None:
         """Prepare Telethon client and verify configuration."""
@@ -101,6 +107,8 @@ class TelegramListener:
                 )
                 self.news_repository = NewsEventRepository(self._supabase_client)
                 self.signal_repository = AiSignalRepository(self._supabase_client)
+
+                # Initialize memory repository based on MEMORY_BACKEND
                 if self.config.MEMORY_ENABLED:
                     memory_config = MemoryRepositoryConfig(
                         max_notes=max(1, int(self.config.MEMORY_MAX_NOTES)),
@@ -108,10 +116,38 @@ class TelegramListener:
                         lookback_hours=max(1, int(self.config.MEMORY_LOOKBACK_HOURS)),
                         min_confidence=max(0.0, float(self.config.MEMORY_MIN_CONFIDENCE)),
                     )
-                    self.memory_repository = SupabaseMemoryRepository(
-                        self._supabase_client,
-                        memory_config,
-                    )
+
+                    backend = getattr(self.config, "MEMORY_BACKEND", "supabase").lower()
+                    memory_dir = getattr(self.config, "MEMORY_DIR", "./memories")
+
+                    if backend == "local":
+                        self.memory_repository = LocalMemoryStore(
+                            pattern_dir=memory_dir,
+                            lookback_hours=memory_config.lookback_hours,
+                        )
+                        logger.info("🗄️ Local Memory 已启用 (关键词匹配)")
+                    elif backend == "hybrid":
+                        supabase_repo = SupabaseMemoryRepository(
+                            self._supabase_client,
+                            memory_config,
+                        )
+                        local_store = LocalMemoryStore(
+                            pattern_dir=memory_dir,
+                            lookback_hours=memory_config.lookback_hours,
+                        )
+                        self.memory_repository = HybridMemoryRepository(
+                            supabase=supabase_repo,
+                            local=local_store,
+                            max_failures=3,
+                        )
+                        logger.info("🗄️ Hybrid Memory 已启用 (Supabase 主力 + Local 降级)")
+                    else:  # supabase (default)
+                        self.memory_repository = SupabaseMemoryRepository(
+                            self._supabase_client,
+                            memory_config,
+                        )
+                        logger.info("🗄️ Supabase Memory 已启用 (向量相似度)")
+
                 logger.info("🗄️ Supabase 持久化已启用")
             except SupabaseError as exc:
                 self.db_enabled = False
@@ -302,17 +338,34 @@ class TelegramListener:
             if self.ai_engine:
                 media_payload = await self._extract_media(event.message)
                 historical_reference_entries: list[dict[str, str | float]]
-                if (
-                    self.config.MEMORY_ENABLED
-                    and self.memory_repository
-                    and embedding_vector
-                ):
+                if self.config.MEMORY_ENABLED and self.memory_repository:
                     try:
-                        memory_context = await self.memory_repository.fetch_memories(
-                            embedding=embedding_vector,
-                            asset_codes=None,
-                        )
-                    except SupabaseError as exc:
+                        # Different backends require different inputs
+                        if isinstance(self.memory_repository, LocalMemoryStore):
+                            # Local: keyword-based, no embedding needed
+                            memory_entries = self.memory_repository.load_entries(
+                                keywords=keywords_hit,
+                                limit=self.config.MEMORY_MAX_NOTES,
+                                min_confidence=self.config.MEMORY_MIN_CONFIDENCE,
+                            )
+                            memory_context = MemoryContext(entries=memory_entries)
+                        elif isinstance(self.memory_repository, HybridMemoryRepository):
+                            # Hybrid: try Supabase (embedding), fallback to Local (keywords)
+                            memory_context = await self.memory_repository.fetch_memories(
+                                embedding=embedding_vector,
+                                asset_codes=None,
+                                keywords=keywords_hit,
+                            )
+                        else:
+                            # Supabase: vector similarity (requires embedding)
+                            if embedding_vector:
+                                memory_context = await self.memory_repository.fetch_memories(
+                                    embedding=embedding_vector,
+                                    asset_codes=None,
+                                )
+                            else:
+                                memory_context = None
+                    except (SupabaseError, Exception) as exc:
                         logger.warning("记忆检索失败，跳过历史参考: %s", exc)
                         memory_context = None
                 if memory_context and not memory_context.is_empty():

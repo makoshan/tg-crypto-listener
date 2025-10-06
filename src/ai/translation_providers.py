@@ -26,7 +26,7 @@ class TranslationProviderError(RuntimeError):
     """Raised when a translation provider fails irrecoverably."""
 
 
-@dataclass(slots=True)
+@dataclass
 class ProviderResult:
     """Container for provider translation responses."""
 

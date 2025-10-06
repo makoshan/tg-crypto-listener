@@ -7,7 +7,7 @@ from datetime import datetime
 from typing import Iterable, List
 
 
-@dataclass(slots=True)
+@dataclass
 class MemoryEntry:
     """Single memory item retrieved from persistent storage."""
 
@@ -34,7 +34,7 @@ class MemoryEntry:
         }
 
 
-@dataclass(slots=True)
+@dataclass
 class MemoryContext:
     """Container holding memories ready for prompt usage."""
 
