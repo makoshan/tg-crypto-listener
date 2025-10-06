@@ -16,11 +16,12 @@ module.exports = {
     error_file: './logs/error.log',
     log_date_format: 'YYYY-MM-DD HH:mm:ss Z',
 
-    // 环境变量
+    // 环境变量（会自动读取 .env 文件）
     env: {
       NODE_ENV: 'production',
-      PYTHONPATH: '.'
+      PYTHONPATH: '.',
     },
+    env_file: '.env',
 
     // 进程管理
     instances: 1,
