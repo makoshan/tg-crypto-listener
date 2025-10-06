@@ -113,6 +113,10 @@ class Config:
     AI_RETRY_BACKOFF_SECONDS: float = float(os.getenv("AI_RETRY_BACKOFF_SECONDS", "1.5"))
     AI_SKIP_NEUTRAL_FORWARD: bool = _as_bool(os.getenv("AI_SKIP_NEUTRAL_FORWARD", "false"))
 
+    FORWARD_INCLUDE_TRANSLATION: bool = _as_bool(
+        os.getenv("FORWARD_INCLUDE_TRANSLATION", "true")
+    )
+
     MEMORY_ENABLED: bool = _as_bool(os.getenv("MEMORY_ENABLED", "false"))
     MEMORY_MAX_NOTES: int = int(os.getenv("MEMORY_MAX_NOTES", "3"))
     MEMORY_LOOKBACK_HOURS: int = int(os.getenv("MEMORY_LOOKBACK_HOURS", "72"))

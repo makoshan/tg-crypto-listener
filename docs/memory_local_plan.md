@@ -221,7 +221,7 @@ response = client.messages.create(
 ```python
 # 步骤 1: Gemini 初筛（90% 场景，低成本）
 gemini_result = await gemini_engine.analyse(payload)
-local_patterns = memory_store.load_patterns(payload.keywords_hit)
+    local_patterns = memory_store.load_entries(payload.keywords_hit)
 payload.historical_reference = local_patterns  # 注入本地记忆
 
 # 步骤 2: 高价值场景升级 Claude（10% 场景）
@@ -306,7 +306,10 @@ memories/
 ```python
 from pathlib import Path
 import json
-from typing import List, Dict, Optional
+from datetime import datetime
+from typing import List, Dict
+from uuid import uuid4
+
 
 class LocalMemoryStore:
     """轻量本地记忆存储，供 Gemini 快速读取"""
@@ -315,31 +318,50 @@ class LocalMemoryStore:
         self.base_path = Path(base_path)
         self.base_path.mkdir(parents=True, exist_ok=True)
 
-    def load_patterns(self, keywords: List[str], limit: int = 3) -> List[Dict]:
-        """根据关键词加载相关模式"""
-        patterns = []
+    def load_entries(self, keywords: List[str], limit: int = 3) -> List[Dict[str, object]]:
+        """返回与 SupabaseMemoryRepository 一致的记忆条目结构"""
         pattern_dir = self.base_path / "patterns"
+        patterns: List[Dict[str, object]] = []
 
         if not pattern_dir.exists():
             return []
 
-        # 匹配模式文件
+        def _collect(file_path: Path) -> None:
+            if not file_path.exists():
+                return
+            with open(file_path, "r", encoding="utf-8") as fp:
+                data = json.load(fp)
+            patterns.extend(data.get("patterns", []))
+
         for keyword in keywords:
-            pattern_file = pattern_dir / f"{keyword.lower()}.json"
-            if pattern_file.exists():
-                with open(pattern_file, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                    patterns.extend(data.get("patterns", []))
+            _collect(pattern_dir / f"{keyword.lower()}.json")
 
-        # 通用模式
-        common_file = pattern_dir / "common.json"
-        if common_file.exists():
-            with open(common_file, "r", encoding="utf-8") as f:
-                patterns.extend(json.load(f).get("patterns", []))
+        _collect(pattern_dir / "common.json")
 
-        # 按置信度排序，取前 N 条
-        patterns.sort(key=lambda x: x.get("confidence", 0), reverse=True)
-        return patterns[:limit]
+        normalized: List[Dict[str, object]] = []
+        for item in patterns:
+            created_at = item.get("timestamp") or datetime.utcnow().isoformat()
+            parsed = datetime.fromisoformat(str(created_at).replace("Z", "+00:00"))
+            assets = item.get("assets") or item.get("asset") or []
+            if isinstance(assets, str):
+                assets_list = [part.strip() for part in assets.split(",") if part.strip()]
+            else:
+                assets_list = [str(part).strip() for part in assets if str(part).strip()]
+
+            normalized.append(
+                {
+                    "id": item.get("id") or str(uuid4()),
+                    "timestamp": parsed.strftime("%Y-%m-%d %H:%M"),
+                    "assets": ",".join(assets_list) if assets_list else "NONE",
+                    "action": item.get("action", "observe"),
+                    "confidence": float(item.get("confidence", 0.0)),
+                    "similarity": float(item.get("similarity", 1.0)),
+                    "summary": item.get("summary") or item.get("notes", ""),
+                }
+            )
+
+        normalized.sort(key=lambda x: x["similarity"], reverse=True)
+        return normalized[:limit]
 
     def save_pattern(self, category: str, pattern: Dict):
         """保存新模式（由 Claude 提取后调用）"""
@@ -356,12 +378,14 @@ class LocalMemoryStore:
         existing.append(pattern)
 
         # 去重并限制数量
-        unique = {p["summary"]: p for p in existing}.values()
+        unique = {p.get("summary", str(uuid4())): p for p in existing}.values()
         limited = sorted(unique, key=lambda x: x.get("timestamp", ""), reverse=True)[:50]
 
-        with open(file_path, "w", encoding="utf-8") as f:
-            json.dump({"patterns": list(limited)}, f, ensure_ascii=False, indent=2)
+with open(file_path, "w", encoding="utf-8") as f:
+    json.dump({"patterns": list(limited)}, f, ensure_ascii=False, indent=2)
 ```
+
+> 说明：`load_entries()` 的返回值已经与 `SupabaseMemoryRepository.fetch_memories()` 保持一致，可直接包装成 `MemoryContext`。后续新增的 `LocalMemoryRepository` 只需将这些字典封装为 `MemoryEntry` 并按照现有日志格式输出即可。
 
 #### `claude_pattern_extractor.py` - Claude 模式提取器
 ```python
@@ -439,7 +463,7 @@ class HybridAiEngine:
 
     async def analyse(self, payload: EventPayload) -> SignalResult:
         # 步骤 1: 加载本地记忆
-        patterns = self.memory_store.load_patterns(payload.keywords_hit)
+        patterns = self.memory_store.load_entries(payload.keywords_hit)
         payload.historical_reference = {"patterns": patterns}
 
         # 步骤 2: Gemini 分析
@@ -493,38 +517,55 @@ class HybridAiEngine:
 #### 修改 `src/listener.py`
 ```python
 # 仅需修改初始化部分
-class SignalListener:
-    def __init__(self, config: Config):
+class TelegramListener:
+    def __init__(self) -> None:
+        self.config = Config()
         # ... 现有初始化
 
-        # 使用混合引擎替代单一引擎
-        if config.MEMORY_ENABLED:
-            self.ai_engine = HybridAiEngine(config)
-        else:
-            self.ai_engine = AiSignalEngine.from_config(config)  # 保留原逻辑
+        if self.db_enabled:
+            self._supabase_client = get_supabase_client(...)
+            if self.config.MEMORY_ENABLED:
+                if self.config.MEMORY_BACKEND == "local":
+                    repository = LocalMemoryRepository(
+                        base_path=self.config.MEMORY_DIR,
+                        config=MemoryRepositoryConfig(...)
+                    )
+                else:
+                    repository = SupabaseMemoryRepository(
+                        self._supabase_client,
+                        MemoryRepositoryConfig(...)
+                    )
+                self.memory_repository = repository
 
-    # 其他代码无需改动，仍然调用 self.ai_engine.analyse(payload)
+        # 引擎层保持原有 `AiSignalEngine`，本地记忆仓储与 Supabase 通过相同接口提供数据
+        # 建议在 LocalMemoryRepository 中复用 `setup_logger(__name__)`，输出
+        # “检索到 X 条历史记忆”/“未检索到相似历史记忆” 与 Supabase 版本保持一致，方便统一监控
 ```
 
 ### 5.3 配置项（`.env`）
 ```bash
-# 混合架构配置
+# 记忆配置（与 Supabase 方案共享）
 MEMORY_ENABLED=true
+MEMORY_BACKEND=local          # supabase | local | hybrid
 MEMORY_DIR=./memories
+MEMORY_MAX_NOTES=3
+MEMORY_LOOKBACK_HOURS=168     # 本地实现同样使用时间窗口过滤
+MEMORY_MIN_CONFIDENCE=0.6
+MEMORY_SIMILARITY_THRESHOLD=0.75
 
-# Gemini 主引擎（日常分析 90%）
+# Gemini 主引擎（日常分析）
 AI_PROVIDER=gemini
-AI_MODEL=gemini-2.0-flash-exp
+AI_MODEL_NAME=gemini-2.0-flash-exp
 AI_API_KEY=your_gemini_key
 
-# Claude 辅助引擎（深度分析 10%）
+# Claude 辅助引擎（深度分析）
 CLAUDE_ENABLED=true
 CLAUDE_API_KEY=sk-ant-xxx
 CLAUDE_MODEL=claude-sonnet-4-5-20250929
 
 # 路由策略
-HIGH_VALUE_CONFIDENCE_THRESHOLD=0.7  # 高价值信号置信度阈值
-CRITICAL_KEYWORDS=上币,listing,hack,黑客,监管,regulation  # 触发 Claude 关键词
+HIGH_VALUE_CONFIDENCE_THRESHOLD=0.7
+CRITICAL_KEYWORDS=上币,listing,hack,黑客,监管,regulation
 ```
 
 ### 5.4 定期任务（可选）

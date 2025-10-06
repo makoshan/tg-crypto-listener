@@ -420,6 +420,7 @@ class TelegramListener:
                 translated_text=translated_text,
                 original_text=message_text,
                 show_original=show_original,
+                show_translation=self.config.FORWARD_INCLUDE_TRANSLATION,
                 **ai_kwargs,
             )
             links: list[str] = []

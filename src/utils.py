@@ -189,6 +189,7 @@ def format_forwarded_message(
     translated_text: str | None = None,
     original_text: str | None = None,
     show_original: bool = False,
+    show_translation: bool = True,
     ai_summary: str | None = None,
     ai_action: str | None = None,
     ai_direction: str | None = None,
@@ -209,6 +210,9 @@ def format_forwarded_message(
     translated_text = (translated_text or "").strip()
     original_text = (original_text or "").strip()
 
+    if not show_translation:
+        translated_text = ""
+
     parts: list[str] = ["🔔 **加密新闻监听**\n\n"]
 
     # 信号摘要：翻译文本与 AI 摘要分别列出，清晰紧凑
@@ -217,48 +221,22 @@ def format_forwarded_message(
         stripped = re.sub(r'[，,。\\.!？?：:；;"\'“”‘’`·•\-]', "", stripped)
         return stripped.lower()
 
-    summary_segments: list[tuple[str, str]] = []
-
-    # If the translated text is effectively the same as the original, skip showing both
     if translated_text and original_text:
         if _normalize_for_compare(translated_text) == _normalize_for_compare(original_text):
             translated_text = ""
 
-    if translated_text:
-        summary_segments.append(("translation", translated_text))
-    elif original_text:
-        summary_segments.append(("original", original_text))
+    summary_text = (ai_summary or "").strip()
+    if not summary_text:
+        summary_text = translated_text or original_text
+    summary_text = (summary_text or "暂无摘要").replace("\n", " ").strip()
 
-    if ai_summary:
-        ai_summary_clean = _normalize_for_compare(ai_summary)
-        is_duplicate = False
-        for _, existing in summary_segments:
-            existing_clean = _normalize_for_compare(existing)
-            if existing_clean and ai_summary_clean:
-                if existing_clean == ai_summary_clean or (
-                    len(ai_summary_clean) > 20
-                    and len(existing_clean) > 20
-                    and (ai_summary_clean in existing_clean or existing_clean in ai_summary_clean)
-                ):
-                    is_duplicate = True
-                    break
-        if not is_duplicate:
-            summary_segments.append(("ai", ai_summary))
+    parts.append("⚡ **信号摘要**\n\n")
+    parts.append(f"📡 来源: {source_channel}，内容：{summary_text}\n")
 
-    label_map = {
-        "translation": "译文",
-        "original": "原文",
-        "ai": "AI 摘要",
-    }
-
-    if summary_segments:
-        parts.append("⚡ **信号摘要**\n")
-        for kind, segment in summary_segments:
-            cleaned = segment.replace("\n", " ").strip()
-            if cleaned:
-                label = label_map.get(kind, "要点")
-                parts.append(f"- {label}：{cleaned}\n")
-        parts.append("\n")
+    # 备注信息（notes 跨段展示）
+    if ai_notes:
+        parts.append(f"备注: {ai_notes}\n")
+    parts.append("\n")
 
     # 操作要点，仅当有 AI 结果时展示
     if ai_summary:
@@ -299,25 +277,21 @@ def format_forwarded_message(
         if strength_cn:
             line_parts.append(f"强度: {strength_cn}")
 
-        parts.append("- " + "，".join(line_parts) + "\n")
+        parts.append("，".join(line_parts) + "\n")
 
         event_type_label = EVENT_TYPE_LABELS.get(ai_event_type or "", None)
         if event_type_label:
-            parts.append(f"- 事件类型: {event_type_label}\n")
+            parts.append(f"事件类型: {event_type_label}\n")
 
         localized_flags = [
             RISK_FLAG_LABELS.get(flag, flag) for flag in ai_risk_flags if flag
         ]
         if localized_flags:
-            parts.append(f"- 风险: {'、'.join(localized_flags)}\n")
-
-        if ai_notes:
-            parts.append(f"- 备注: {ai_notes}\n")
+            parts.append(f"风险: {'、'.join(localized_flags)}\n")
 
         parts.append("\n")
 
-    # 来源与时间
-    parts.append(f"📡 **来源**: {source_channel}\n")
+    # 时间
     parts.append(f"🕒 **时间**: {timestamp.strftime('%Y-%m-%d %H:%M:%S')}\n")
 
     # 原文视情况展示
