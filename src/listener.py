@@ -477,7 +477,7 @@ class TelegramListener:
         if not normalized:
             return message
         link_lines = "\n".join(f"source: {link}" for link in normalized)
-        return f"{message}\n\n————————————\n{link_lines}"
+        return f"{message}\n{link_lines}"
 
     def _collect_links(
         self,

@@ -233,15 +233,14 @@ def format_forwarded_message(
 
     parts: list[str] = []
 
-    parts.append("⚡ 信号摘要")
+    parts.append("⚡ 信号")
     if context_source:
         source_display = context_source
     else:
         source_display = source_channel
-    parts.append(f"📡 来源: {source_display}，内容：{summary_text}")
-    parts.append("")
+    parts.append(f" {source_display}：{summary_text}")
     if ai_notes:
-        parts.append(f"📝 备注: {ai_notes}")
+        parts.append(f"备注: {ai_notes}")
         parts.append("")
 
     # 操作要点，仅当有 AI 结果时展示
@@ -251,7 +250,7 @@ def format_forwarded_message(
         confidence_text = (
             f"{ai_confidence:.2f}" if ai_confidence is not None else "未知"
         )
-        parts.append("🎯 操作要点")
+        parts.append("🎯 操作")
 
         asset_line = ""
         if ai_asset or ai_asset_names:
@@ -298,12 +297,9 @@ def format_forwarded_message(
         parts.append("")
 
     # 时间
-    parts.append(f"🕒 时间: {timestamp.strftime('%Y-%m-%d %H:%M:%S')}")
+    parts.append("————————————")
+    parts.append(timestamp.strftime("%Y-%m-%d %H:%M:%S"))
     if context_source and context_source != source_channel:
         parts[-1] += f" | 来源频道: {source_channel}"
-
-    # 过滤掉结尾多余空行
-    while parts and parts[-1] == "":
-        parts.pop()
 
     return "\n".join(parts)
