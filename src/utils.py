@@ -9,11 +9,16 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, Set
 
+import os
 import colorlog
 
 
-def setup_logger(name: str, level: str = "INFO") -> logging.Logger:
+def setup_logger(name: str, level: str = None) -> logging.Logger:
     """Configure a color logger that also writes to file."""
+    # 从环境变量读取日志级别，默认为 INFO
+    if level is None:
+        level = os.getenv("LOG_LEVEL", "INFO")
+
     logger = logging.getLogger(name)
     logger.setLevel(getattr(logging, level.upper(), logging.INFO))
 
