@@ -486,20 +486,28 @@ class AiSignalEngine:
         gemini_result = self._parse_response(response)
 
         # Step 2: Check if high-value signal qualifies for Claude (10%)
-        if (
-            self._claude_enabled
-            and self._claude_client
-            and gemini_result.is_high_value_signal(
-                confidence_threshold=self._high_value_threshold,
-                critical_keywords=self._critical_keywords,
-                message_text=payload.text,
-            )
-        ):
+        is_high_value = gemini_result.is_high_value_signal(
+            confidence_threshold=self._high_value_threshold,
+            critical_keywords=self._critical_keywords,
+            message_text=payload.text,
+        )
+
+        logger.debug(
+            "🤖 Gemini 分析完成: action=%s confidence=%.2f event_type=%s asset=%s is_high_value=%s",
+            gemini_result.action,
+            gemini_result.confidence,
+            gemini_result.event_type,
+            gemini_result.asset,
+            is_high_value,
+        )
+
+        if self._claude_enabled and self._claude_client and is_high_value:
             logger.info(
-                "🧠 触发 Claude 深度分析: event_type=%s confidence=%.2f asset=%s",
+                "🧠 触发 Claude 深度分析: event_type=%s confidence=%.2f asset=%s (阈值: %.2f)",
                 gemini_result.event_type,
                 gemini_result.confidence,
                 gemini_result.asset,
+                self._high_value_threshold,
             )
             try:
                 # Build Claude prompt based on Gemini's initial analysis

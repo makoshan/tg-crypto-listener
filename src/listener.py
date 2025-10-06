@@ -341,6 +341,13 @@ class TelegramListener:
                 if self.config.MEMORY_ENABLED and self.memory_repository:
                     try:
                         # Different backends require different inputs
+                        backend_type = type(self.memory_repository).__name__
+                        logger.debug(
+                            "🧠 记忆检索开始: backend=%s keywords=%s",
+                            backend_type,
+                            keywords_hit,
+                        )
+
                         if isinstance(self.memory_repository, LocalMemoryStore):
                             # Local: keyword-based, no embedding needed
                             memory_entries = self.memory_repository.load_entries(
@@ -349,12 +356,20 @@ class TelegramListener:
                                 min_confidence=self.config.MEMORY_MIN_CONFIDENCE,
                             )
                             memory_context = MemoryContext(entries=memory_entries)
+                            logger.info(
+                                "🧠 Local Memory 检索完成: 找到 %d 条记录",
+                                len(memory_entries),
+                            )
                         elif isinstance(self.memory_repository, HybridMemoryRepository):
                             # Hybrid: try Supabase (embedding), fallback to Local (keywords)
                             memory_context = await self.memory_repository.fetch_memories(
                                 embedding=embedding_vector,
                                 asset_codes=None,
                                 keywords=keywords_hit,
+                            )
+                            logger.info(
+                                "🧠 Hybrid Memory 检索完成: 找到 %d 条记录",
+                                len(memory_context.entries) if memory_context else 0,
                             )
                         else:
                             # Supabase: vector similarity (requires embedding)
@@ -363,15 +378,25 @@ class TelegramListener:
                                     embedding=embedding_vector,
                                     asset_codes=None,
                                 )
+                                logger.info(
+                                    "🧠 Supabase Memory 检索完成: 找到 %d 条记录",
+                                    len(memory_context.entries) if memory_context else 0,
+                                )
                             else:
                                 memory_context = None
+                                logger.debug("🧠 无 embedding，跳过 Supabase 记忆检索")
                     except (SupabaseError, Exception) as exc:
                         logger.warning("记忆检索失败，跳过历史参考: %s", exc)
                         memory_context = None
                 if memory_context and not memory_context.is_empty():
                     historical_reference_entries = memory_context.to_prompt_payload()
+                    logger.info(
+                        "🧠 记忆注入 Prompt: %d 条历史参考",
+                        len(historical_reference_entries),
+                    )
                 else:
                     historical_reference_entries = []
+                    logger.debug("🧠 无历史记忆，使用空上下文")
                 payload = EventPayload(
                     text=message_text,
                     source=source_name,
