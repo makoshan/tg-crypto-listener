@@ -222,6 +222,56 @@ class AnthropicClient:
         """
         tool_turn_count = 0
 
+        # 定义 Memory Tool 的完整 schema
+        memory_tool = {
+            "type": "custom",
+            "name": "memory",
+            "description": "Memory management tool for storing, retrieving, and modifying information. Supports viewing, creating, editing, and deleting files in the memory storage.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "command": {
+                        "type": "string",
+                        "enum": ["view", "create", "str_replace", "insert", "delete", "rename"],
+                        "description": "The command to execute: view (read file/dir), create (write file), str_replace (replace text), insert (insert at line), delete (remove file/dir), rename (move/rename)"
+                    },
+                    "path": {
+                        "type": "string",
+                        "description": "File or directory path (relative to memory root)"
+                    },
+                    "file_text": {
+                        "type": "string",
+                        "description": "Content to write when using 'create' command"
+                    },
+                    "old_str": {
+                        "type": "string",
+                        "description": "Text to replace when using 'str_replace' command"
+                    },
+                    "new_str": {
+                        "type": "string",
+                        "description": "Replacement text when using 'str_replace' command"
+                    },
+                    "insert_line": {
+                        "type": "integer",
+                        "description": "Line number to insert at when using 'insert' command (1-indexed)"
+                    },
+                    "insert_text": {
+                        "type": "string",
+                        "description": "Text to insert when using 'insert' command"
+                    },
+                    "old_path": {
+                        "type": "string",
+                        "description": "Source path when using 'rename' command"
+                    },
+                    "new_path": {
+                        "type": "string",
+                        "description": "Destination path when using 'rename' command"
+                    }
+                },
+                "required": ["command"]
+            }
+        }
+
         while tool_turn_count < self._max_tool_turns:
             # 调用 Claude API
             logger.info(f"🤖 Claude API 调用开始 (轮次: {tool_turn_count + 1}, model: {self._model_name})")
@@ -230,7 +280,7 @@ class AnthropicClient:
                 max_tokens=max_tokens,
                 system=system_prompt or "You are a helpful AI assistant.",
                 messages=messages,
-                tools=[{"type": "memory_20250818", "name": "memory"}]
+                tools=[memory_tool]
             )
             logger.info(
                 f"✅ Claude API 响应完成 (input_tokens: {response.usage.input_tokens}, "
