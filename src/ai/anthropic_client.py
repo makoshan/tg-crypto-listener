@@ -107,9 +107,10 @@ class AnthropicClient:
         self._max_tool_turns = max_tool_turns
 
         logger.info(
-            f"AnthropicClient 初始化: {model_name} "
-            f"(timeout={timeout}s, max_tool_turns={max_tool_turns})"
+            f"🚀 AnthropicClient 初始化完成: model={model_name}, timeout={timeout}s, "
+            f"max_tool_turns={max_tool_turns}, max_retries={max_retries}"
         )
+        logger.debug(f"  context_management: {self._context_management}")
 
     def _default_context_config(
         self,
@@ -182,21 +183,30 @@ class AnthropicClient:
                 last_error_message = "Claude 请求超时"
                 last_error_temporary = True
                 logger.warning(
-                    f"Claude 请求超时 (attempt {attempt + 1}/{self._max_retries + 1})"
+                    f"⏱️ Claude 请求超时 (尝试 {attempt + 1}/{self._max_retries + 1}, timeout={self._timeout}s)"
                 )
 
             except Exception as exc:
                 last_exc = exc
                 last_error_message, last_error_temporary = self._normalize_exception(exc)
                 logger.warning(
-                    f"Claude 调用异常 (attempt {attempt + 1}/{self._max_retries + 1}): {last_error_message}"
+                    f"⚠️ Claude 调用异常 (尝试 {attempt + 1}/{self._max_retries + 1}): "
+                    f"{type(exc).__name__}: {last_error_message}"
                 )
+                # 打印详细的异常信息（DEBUG 模式）
+                if logger.isEnabledFor(logging.DEBUG):
+                    logger.debug(f"  完整异常: {exc}", exc_info=True)
 
             # 重试退避
-            if attempt < self._max_retries and self._retry_backoff > 0:
-                backoff = self._retry_backoff * (2 ** attempt)
-                logger.debug(f"Claude 将在 {backoff:.2f} 秒后重试")
-                await asyncio.sleep(backoff)
+            if attempt < self._max_retries:
+                if self._retry_backoff > 0:
+                    backoff = self._retry_backoff * (2 ** attempt)
+                    logger.info(f"🔄 Claude 将在 {backoff:.2f} 秒后重试...")
+                    await asyncio.sleep(backoff)
+                else:
+                    logger.info(f"🔄 Claude 立即重试...")
+            else:
+                logger.error(f"❌ Claude 调用失败，已达最大重试次数 ({self._max_retries + 1})")
 
         raise AiServiceError(last_error_message, temporary=last_error_temporary) from last_exc
 
@@ -275,17 +285,42 @@ class AnthropicClient:
         while tool_turn_count < self._max_tool_turns:
             # 调用 Claude API
             logger.info(f"🤖 Claude API 调用开始 (轮次: {tool_turn_count + 1}, model: {self._model_name})")
-            response: Message = self._client.messages.create(
-                model=self._model_name,
-                max_tokens=max_tokens,
-                system=system_prompt or "You are a helpful AI assistant.",
-                messages=messages,
-                tools=[memory_tool]
-            )
+            logger.debug(f"📤 请求参数: max_tokens={max_tokens}, messages_count={len(messages)}")
+
+            # 详细打印 messages 内容（DEBUG 模式）
+            if logger.isEnabledFor(logging.DEBUG):
+                for i, msg in enumerate(messages):
+                    role = msg.get("role", "unknown")
+                    content = msg.get("content", "")
+                    content_preview = str(content)[:200] if isinstance(content, str) else f"<{type(content).__name__}>"
+                    logger.debug(f"  消息 [{i}] {role}: {content_preview}...")
+
+            try:
+                response: Message = self._client.messages.create(
+                    model=self._model_name,
+                    max_tokens=max_tokens,
+                    system=system_prompt or "You are a helpful AI assistant.",
+                    messages=messages,
+                    tools=[memory_tool]
+                )
+            except Exception as e:
+                logger.error(f"❌ Claude API 调用失败: {type(e).__name__}: {e}")
+                raise
+
             logger.info(
                 f"✅ Claude API 响应完成 (input_tokens: {response.usage.input_tokens}, "
                 f"output_tokens: {response.usage.output_tokens}, stop_reason: {response.stop_reason})"
             )
+
+            # 详细打印响应内容（DEBUG 模式）
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug(f"📥 响应块数量: {len(response.content)}")
+                for i, block in enumerate(response.content):
+                    if isinstance(block, TextBlock):
+                        text_preview = block.text[:150]
+                        logger.debug(f"  块 [{i}] TextBlock: {text_preview}...")
+                    elif isinstance(block, ToolUseBlock):
+                        logger.debug(f"  块 [{i}] ToolUseBlock: {block.name} (id={block.id})")
 
             # 提取 text blocks 和 tool use blocks
             text_blocks = []
@@ -300,6 +335,10 @@ class AnthropicClient:
             # 如果没有 tool use，说明对话完成
             if not tool_uses:
                 final_text = "\n".join(text_blocks).strip()
+                logger.info(
+                    f"✅ Claude 对话完成 (轮次: {tool_turn_count + 1}, "
+                    f"文本长度: {len(final_text)}, stop_reason: {response.stop_reason})"
+                )
 
                 return AnthropicResponse(
                     text=final_text,
@@ -312,9 +351,9 @@ class AnthropicClient:
 
             # 执行 tool uses
             tool_turn_count += 1
-            logger.debug(
-                f"Tool Use 轮次 {tool_turn_count}/{self._max_tool_turns}: "
-                f"{len(tool_uses)} 个工具调用"
+            logger.info(
+                f"🔧 工具调用轮次 {tool_turn_count}/{self._max_tool_turns}: "
+                f"检测到 {len(tool_uses)} 个工具调用"
             )
 
             # 将 assistant 的响应（含 tool_use）添加到 messages
@@ -325,7 +364,13 @@ class AnthropicClient:
 
             # 执行工具并构造 tool_result
             tool_results = []
-            for tool_use in tool_uses:
+            for idx, tool_use in enumerate(tool_uses, 1):
+                logger.info(f"🔧 执行工具 [{idx}/{len(tool_uses)}]: {tool_use.name} (id={tool_use.id[:8]}...)")
+
+                # 打印工具调用参数
+                if logger.isEnabledFor(logging.DEBUG):
+                    logger.debug(f"  工具参数: {json.dumps(tool_use.input, ensure_ascii=False, indent=2)}")
+
                 try:
                     result = self._memory_handler.execute_tool_use(tool_use.input)
 
@@ -335,13 +380,18 @@ class AnthropicClient:
                         "content": json.dumps(result, ensure_ascii=False)
                     })
 
-                    logger.debug(
-                        f"Memory Tool 执行: {tool_use.input.get('command')} "
+                    logger.info(
+                        f"✅ Memory Tool 执行成功: {tool_use.input.get('command')} "
                         f"{tool_use.input.get('path', '')[:50]}"
                     )
 
+                    # 打印工具结果（DEBUG 模式）
+                    if logger.isEnabledFor(logging.DEBUG):
+                        result_preview = json.dumps(result, ensure_ascii=False)[:300]
+                        logger.debug(f"  工具结果: {result_preview}...")
+
                 except Exception as e:
-                    logger.error(f"Memory Tool 执行失败: {e}")
+                    logger.error(f"❌ Memory Tool 执行失败: {type(e).__name__}: {e}")
                     tool_results.append({
                         "type": "tool_result",
                         "tool_use_id": tool_use.id,
@@ -357,10 +407,12 @@ class AnthropicClient:
                 "role": "user",
                 "content": tool_results
             })
+            logger.debug(f"📥 已将 {len(tool_results)} 个工具结果回填到消息列表")
 
         # 达到最大轮数，返回警告
-        logger.warning(
-            f"Tool Use 循环达到最大轮数 {self._max_tool_turns}，强制终止"
+        logger.error(
+            f"⚠️ Tool Use 循环达到最大轮数 {self._max_tool_turns}，强制终止！"
+            f"可能存在死循环或工具调用链过长"
         )
 
         return AnthropicResponse(

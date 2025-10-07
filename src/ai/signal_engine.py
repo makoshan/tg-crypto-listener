@@ -119,7 +119,7 @@ class SignalResult:
     def is_high_value_signal(
         self,
         *,
-        confidence_threshold: float = 0.8,
+        confidence_threshold: float = 0.75,
     ) -> bool:
         """Determine if signal qualifies for Claude deep analysis.
 
@@ -284,7 +284,7 @@ class AiSignalEngine:
         provider_label: str = "AI",
         claude_client: Optional[AnthropicClient] = None,
         claude_enabled: bool = False,
-        high_value_threshold: float = 0.8,
+        high_value_threshold: float = 0.75,
     ) -> None:
         self.enabled = enabled and client is not None
         self._client = client
@@ -295,7 +295,7 @@ class AiSignalEngine:
         self._claude_enabled = claude_enabled and claude_client is not None
         self._high_value_threshold = high_value_threshold
         self._last_claude_call_time: float = 0.0  # 频率限制
-        self._claude_min_interval: float = 30.0  # 最小间隔 30 秒
+        self._claude_min_interval: float = 15.0  # 最小间隔 15 秒（降低限制以处理更多高价值信号）
         if not self.enabled:
             logger.debug("AiSignalEngine 未启用或缺少客户端，所有消息将跳过 AI 分析")
         if self._claude_enabled:
@@ -422,7 +422,7 @@ class AiSignalEngine:
                     claude_client = None
                     claude_enabled = False
 
-        high_value_threshold = getattr(config, "HIGH_VALUE_CONFIDENCE_THRESHOLD", 0.7)
+        high_value_threshold = getattr(config, "HIGH_VALUE_CONFIDENCE_THRESHOLD", 0.75)
 
         return cls(
             True,
@@ -496,7 +496,7 @@ class AiSignalEngine:
         )
 
         # 排除低价值事件类型（macro、other 触发过多且价值低）
-        excluded_event_types = {"macro", "other"}
+        excluded_event_types = {"macro", "other", "airdrop", "governance"}
         should_skip_claude = gemini_result.event_type in excluded_event_types
 
         # 频率限制检查

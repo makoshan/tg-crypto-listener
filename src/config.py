@@ -125,7 +125,7 @@ class Config:
     MEMORY_LOOKBACK_HOURS: int = int(os.getenv("MEMORY_LOOKBACK_HOURS", "72"))
     MEMORY_MIN_CONFIDENCE: float = float(os.getenv("MEMORY_MIN_CONFIDENCE", "0.6"))
     MEMORY_SIMILARITY_THRESHOLD: float = float(
-        os.getenv("MEMORY_SIMILARITY_THRESHOLD", "0.85")
+        os.getenv("MEMORY_SIMILARITY_THRESHOLD", "0.55")
     )
 
     # Claude configuration (for deep analysis)
@@ -141,7 +141,7 @@ class Config:
     MEMORY_CONTEXT_CLEAR_AT_LEAST: int = int(os.getenv("MEMORY_CONTEXT_CLEAR_AT_LEAST", "1000"))
 
     # Routing strategy (Gemini + Claude hybrid)
-    HIGH_VALUE_CONFIDENCE_THRESHOLD: float = float(os.getenv("HIGH_VALUE_CONFIDENCE_THRESHOLD", "0.8"))
+    HIGH_VALUE_CONFIDENCE_THRESHOLD: float = float(os.getenv("HIGH_VALUE_CONFIDENCE_THRESHOLD", "0.75"))
     CRITICAL_KEYWORDS: Set[str] = {
         keyword.strip().lower()
         for keyword in os.getenv("CRITICAL_KEYWORDS", "上币,listing,hack,黑客,监管,regulation").split(",")
