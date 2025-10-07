@@ -294,6 +294,8 @@ class AiSignalEngine:
         self._claude_client = claude_client
         self._claude_enabled = claude_enabled and claude_client is not None
         self._high_value_threshold = high_value_threshold
+        self._last_claude_call_time: float = 0.0  # 频率限制
+        self._claude_min_interval: float = 30.0  # 最小间隔 30 秒
         if not self.enabled:
             logger.debug("AiSignalEngine 未启用或缺少客户端，所有消息将跳过 AI 分析")
         if self._claude_enabled:
@@ -493,7 +495,30 @@ class AiSignalEngine:
             is_high_value,
         )
 
-        if self._claude_enabled and self._claude_client and is_high_value:
+        # 排除低价值事件类型（macro、other 触发过多且价值低）
+        excluded_event_types = {"macro", "other"}
+        should_skip_claude = gemini_result.event_type in excluded_event_types
+
+        # 频率限制检查
+        import time
+        time_since_last_call = time.time() - self._last_claude_call_time
+        rate_limited = time_since_last_call < self._claude_min_interval
+
+        if should_skip_claude and is_high_value:
+            logger.debug(
+                "⏭️  跳过 Claude 分析（低价值事件类型 %s）: confidence=%.2f asset=%s",
+                gemini_result.event_type,
+                gemini_result.confidence,
+                gemini_result.asset,
+            )
+        elif rate_limited and is_high_value:
+            logger.debug(
+                "⏭️  跳过 Claude 分析（频率限制，距上次调用 %.1f 秒）: confidence=%.2f asset=%s",
+                time_since_last_call,
+                gemini_result.confidence,
+                gemini_result.asset,
+            )
+        elif self._claude_enabled and self._claude_client and is_high_value:
             logger.info(
                 "🧠 触发 Claude 深度分析: event_type=%s confidence=%.2f asset=%s (阈值: %.2f)",
                 gemini_result.event_type,
@@ -502,6 +527,10 @@ class AiSignalEngine:
                 self._high_value_threshold,
             )
             try:
+                # 更新最后调用时间
+                import time
+                self._last_claude_call_time = time.time()
+
                 # Build Claude prompt based on Gemini's initial analysis
                 logger.info("🧠 正在构建 Claude 深度分析 Prompt...")
                 claude_prompt = self._build_claude_deep_analysis_prompt(payload, gemini_result)
@@ -683,23 +712,23 @@ class AiSignalEngine:
         self, payload: EventPayload, gemini_result: SignalResult
     ) -> str:
         """Build enriched prompt for Claude based on Gemini's initial analysis."""
+        # 只保留最相关的历史记录（前2条）
+        historical_ref = payload.historical_reference or {}
+        historical_entries = historical_ref.get("entries", [])
+        if len(historical_entries) > 2:
+            historical_ref = {"entries": historical_entries[:2]}
+
         context = {
-            "original_text": payload.text,
-            "translated_text": payload.translated_text or payload.text,
+            "text": payload.translated_text or payload.text,
             "source": payload.source,
             "timestamp": payload.timestamp.isoformat(),
-            "language": payload.language,
-            "keywords_hit": payload.keywords_hit,
-            "historical_reference": payload.historical_reference,
+            "historical_reference": historical_ref,
             "gemini_analysis": {
                 "summary": gemini_result.summary,
                 "event_type": gemini_result.event_type,
                 "asset": gemini_result.asset,
-                "asset_names": gemini_result.asset_names,
                 "action": gemini_result.action,
-                "direction": gemini_result.direction,
                 "confidence": gemini_result.confidence,
-                "strength": gemini_result.strength,
                 "risk_flags": gemini_result.risk_flags,
                 "notes": gemini_result.notes,
             },
@@ -708,35 +737,18 @@ class AiSignalEngine:
         context_json = json.dumps(context, ensure_ascii=False, indent=2)
 
         system_prompt = (
-            "你是加密交易台的资深分析师，擅长深度分析高价值信号。\n"
-            "当前任务：基于 Gemini 的初步分析，进行深度验证和优化。\n\n"
-            "## 分析要点\n"
-            "1. **验证 Gemini 判断**：检查事件类型、资产识别、置信度是否合理\n"
-            "2. **历史对比**：结合 historical_reference 中的相似案例，判断当前事件的独特性\n"
-            "3. **风险评估**：补充 Gemini 可能遗漏的风险点（如流动性、监管、市场情绪）\n"
-            "4. **置信度校准**：基于历史案例和当前市场环境，调整置信度\n"
-            "5. **可操作性**：明确 action 的具体执行策略（入场点、止损、仓位建议）\n\n"
-            "## 输出要求\n"
-            "严格使用 JSON 格式，字段与 Gemini 一致：\n"
-            "- summary: 深度分析后的精炼摘要（中文）\n"
-            "- event_type: listing | delisting | hack | regulation | funding | whale | liquidation | partnership | product_launch | governance | macro | celebrity | airdrop | other\n"
-            "- asset: 加密资产代码（如 BTC、ETH），非加密资产设为 NONE\n"
-            "- asset_name: 资产名称\n"
-            "- action: buy | sell | observe\n"
-            "- direction: long | short | neutral\n"
-            "- confidence: 0-1 (两位小数)\n"
-            "- strength: low | medium | high\n"
-            "- risk_flags: [price_volatility, liquidity_risk, regulation_risk, confidence_low, data_incomplete]\n"
-            "- notes: 深度分析要点，包括历史对比结论、风险提示、操作建议\n"
-            "- links: 相关链接数组\n\n"
-            "若 Gemini 分析存在明显错误（如误判资产、置信度过高），请在 notes 中说明修正理由。"
+            "你是加密交易台的资深分析师，负责验证和优化 AI 初步分析结果。\n\n"
+            "任务：\n"
+            "1. 验证事件类型、资产识别、置信度是否合理\n"
+            "2. 结合历史案例判断当前事件的独特性\n"
+            "3. 评估风险点（流动性、监管、市场情绪）\n"
+            "4. 调整置信度并给出操作建议\n\n"
+            "输出：JSON 格式，包含 summary、event_type、asset、asset_name、action、direction、"
+            "confidence、strength、risk_flags、notes、links。"
+            "若初步分析有误（如误判资产、置信度过高），在 notes 中说明修正理由。"
         )
 
-        user_prompt = (
-            "请基于以下上下文进行深度分析：\n"
-            f"```json\n{context_json}\n```\n\n"
-            "返回优化后的 JSON 分析结果。"
-        )
+        user_prompt = f"分析以下事件并返回优化后的 JSON：\n```json\n{context_json}\n```"
 
         # Claude expects messages format for generate_signal
         return json.dumps(
