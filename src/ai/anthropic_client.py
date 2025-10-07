@@ -230,9 +230,7 @@ class AnthropicClient:
                 max_tokens=max_tokens,
                 system=system_prompt or "You are a helpful AI assistant.",
                 messages=messages,
-                tools=[{"type": "memory_20250818", "name": "memory"}],
-                betas=["context-management-2025-06-27"],
-                context_management=self._context_management
+                tools=[{"type": "memory_20250818", "name": "memory"}]
             )
             logger.info(
                 f"✅ Claude API 响应完成 (input_tokens: {response.usage.input_tokens}, "
