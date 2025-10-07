@@ -234,7 +234,7 @@ class AnthropicClient:
 
         # 定义 Memory Tool 的完整 schema
         memory_tool = {
-            "type": "memory_20250818",
+            "type": "custom",
             "name": "memory",
             "description": "Memory management tool for storing, retrieving, and modifying information. Supports viewing, creating, editing, and deleting files in the memory storage.",
             "input_schema": {
