@@ -141,7 +141,7 @@ class Config:
     MEMORY_CONTEXT_CLEAR_AT_LEAST: int = int(os.getenv("MEMORY_CONTEXT_CLEAR_AT_LEAST", "1000"))
 
     # Routing strategy (Gemini + Claude hybrid)
-    HIGH_VALUE_CONFIDENCE_THRESHOLD: float = float(os.getenv("HIGH_VALUE_CONFIDENCE_THRESHOLD", "0.9"))
+    HIGH_VALUE_CONFIDENCE_THRESHOLD: float = float(os.getenv("HIGH_VALUE_CONFIDENCE_THRESHOLD", "0.8"))
     CRITICAL_KEYWORDS: Set[str] = {
         keyword.strip().lower()
         for keyword in os.getenv("CRITICAL_KEYWORDS", "上币,listing,hack,黑客,监管,regulation").split(",")
