@@ -281,7 +281,8 @@ class AnthropicClient:
                 system=system_prompt or "You are a helpful AI assistant.",
                 messages=messages,
                 tools=[memory_tool],
-                betas=["context-management-2025-06-27"]
+                betas=["context-management-2025-06-27"],
+                context_management=self._context_management
             )
             logger.info(
                 f"✅ Claude API 响应完成 (input_tokens: {response.usage.input_tokens}, "
