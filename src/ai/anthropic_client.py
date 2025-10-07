@@ -224,7 +224,7 @@ class AnthropicClient:
 
         # 定义 Memory Tool 的完整 schema
         memory_tool = {
-            "type": "custom",
+            "type": "memory_20250818",
             "name": "memory",
             "description": "Memory management tool for storing, retrieving, and modifying information. Supports viewing, creating, editing, and deleting files in the memory storage.",
             "input_schema": {
@@ -280,7 +280,8 @@ class AnthropicClient:
                 max_tokens=max_tokens,
                 system=system_prompt or "You are a helpful AI assistant.",
                 messages=messages,
-                tools=[memory_tool]
+                tools=[memory_tool],
+                betas=["context-management-2025-06-27"]
             )
             logger.info(
                 f"✅ Claude API 响应完成 (input_tokens: {response.usage.input_tokens}, "
