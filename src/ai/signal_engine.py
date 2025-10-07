@@ -295,7 +295,7 @@ class AiSignalEngine:
         self._claude_enabled = claude_enabled and claude_client is not None
         self._high_value_threshold = high_value_threshold
         self._last_claude_call_time: float = 0.0  # 频率限制
-        self._claude_min_interval: float = 15.0  # 最小间隔 15 秒（降低限制以处理更多高价值信号）
+        self._claude_min_interval: float = 25.0  # 最小间隔 25 秒（降低调用频率节省成本）
         if not self.enabled:
             logger.debug("AiSignalEngine 未启用或缺少客户端，所有消息将跳过 AI 分析")
         if self._claude_enabled:
@@ -496,7 +496,7 @@ class AiSignalEngine:
         )
 
         # 排除低价值事件类型（macro、other 触发过多且价值低）
-        excluded_event_types = {"macro", "other", "airdrop", "governance"}
+        excluded_event_types = {"macro", "other", "airdrop", "governance", "celebrity"}
         should_skip_claude = gemini_result.event_type in excluded_event_types
 
         # 频率限制检查

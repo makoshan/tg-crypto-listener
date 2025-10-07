@@ -1,0 +1,26 @@
+{
+  "summary": "莱特币基金会发布纪念推文，庆祝莱特币创世区块挖矿14周年（2011年10月7日），强调其采用Scrypt算法的技术特点。此为周年纪念性质的官方宣传内容。",
+  "event_type": "marketing",
+  "asset": "LTC",
+  "asset_name": "Litecoin",
+  "action": "observe",
+  "direction": "neutral",
+  "confidence": 0.35,
+  "strength": "low",
+  "risk_flags": [
+    "low_market_impact",
+    "routine_marketing"
+  ],
+  "notes": "修正理由：\n1. **事件类型调整**：从'celebrity'改为'marketing' - 这是基金会的常规周年纪念宣传，非KOL/名人背书或突发性事件\n2. **置信度大幅下调**：从0.85降至0.35 - 周年纪念属于可预期的常规营销动作，历史上此类纪念日对价格影响极微，且LTC作为成熟老牌项目，周年效应已被市场消化\n3. **影响评估**：LTC（2011年创立）14周年并非重要里程碑（如10周年/15周年），且该推文仅为基金会官方账号发布，未见市场广泛传播或讨论\n4. **市场情绪**：当前加密市场关注度集中在BTC ETF、以太坊升级等热点，老项目周年纪念难以引发交易兴趣\n5. **操作建议**：维持观察即可，不建议基于此事件进行任何仓位操作。若需交易LTC，应关注技术面突破或宏观流动性变化",
+  "links": [
+    "https://x.com/LTCFoundation/status/1975564228049408212"
+  ],
+  "analysis_metadata": {
+    "original_confidence": 0.85,
+    "adjusted_confidence": 0.35,
+    "adjustment_reason": "周年纪念为常规营销动作，非实质性利好",
+    "historical_impact": "历史上加密项目周年纪念推文对价格影响中位数<1%，持续时间<24小时",
+    "recommended_monitoring_period": "24小时",
+    "alternative_catalysts": "建议关注LTC减半周期（下次约2027年）、支付场景拓展、或与BTC相关性套利机会"
+  }
+}
