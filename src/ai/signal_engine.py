@@ -301,6 +301,7 @@ class AiSignalEngine:
         threshold: float,
         semaphore: asyncio.Semaphore,
         *,
+        provider_label: str = "AI",
         claude_client: Optional[AnthropicClient] = None,
         claude_enabled: bool = False,
         high_value_threshold: float = 0.7,
@@ -310,6 +311,7 @@ class AiSignalEngine:
         self._client = client
         self._threshold = threshold
         self._semaphore = semaphore
+        self._provider_label = provider_label or "AI"
         self._claude_client = claude_client
         self._claude_enabled = claude_enabled and claude_client is not None
         self._high_value_threshold = high_value_threshold
@@ -323,7 +325,13 @@ class AiSignalEngine:
     def from_config(cls, config: Any) -> "AiSignalEngine":
         if not getattr(config, "AI_ENABLED", False):
             logger.debug("配置关闭 AI 功能，采用传统转发流程")
-            return cls(False, None, getattr(config, "AI_SIGNAL_THRESHOLD", 0.0), asyncio.Semaphore(1))
+            return cls(
+                False,
+                None,
+                getattr(config, "AI_SIGNAL_THRESHOLD", 0.0),
+                asyncio.Semaphore(1),
+                provider_label="AI",
+            )
 
         provider_raw = str(getattr(config, "AI_PROVIDER", "gemini")).strip().lower()
         provider_alias = {
@@ -337,6 +345,7 @@ class AiSignalEngine:
             "gemini": "gemini",
         }
         provider = provider_alias.get(provider_raw, provider_raw or "gemini")
+        provider_label = provider.upper() if provider else "AI"
 
         api_key = (
             getattr(config, "AI_API_KEY", None)
@@ -346,7 +355,13 @@ class AiSignalEngine:
 
         if not api_key:
             logger.warning("AI 已启用但未提供 API Key，自动降级为跳过 AI 分析")
-            return cls(False, None, getattr(config, "AI_SIGNAL_THRESHOLD", 0.0), asyncio.Semaphore(1))
+            return cls(
+                False,
+                None,
+                getattr(config, "AI_SIGNAL_THRESHOLD", 0.0),
+                asyncio.Semaphore(1),
+                provider_label=provider_label,
+            )
 
         base_url = getattr(config, "AI_BASE_URL", "").strip()
         if not base_url:
@@ -435,6 +450,7 @@ class AiSignalEngine:
             client,
             getattr(config, "AI_SIGNAL_THRESHOLD", 0.0),
             asyncio.Semaphore(concurrency),
+            provider_label=provider_label,
             claude_client=claude_client,
             claude_enabled=claude_enabled,
             high_value_threshold=high_value_threshold,
@@ -482,7 +498,8 @@ class AiSignalEngine:
                 )
                 return SignalResult(status="error", error=str(exc))
 
-        logger.debug("Gemini 返回长度: %d", len(response.text))
+        logger.debug("%s 返回长度: %d", self._provider_label, len(response.text))
+        self._log_ai_response_debug(self._provider_label, response.text)
         gemini_result = self._parse_response(response)
 
         # Step 2: Check if high-value signal qualifies for Claude (10%)
@@ -493,7 +510,8 @@ class AiSignalEngine:
         )
 
         logger.debug(
-            "🤖 Gemini 分析完成: action=%s confidence=%.2f event_type=%s asset=%s is_high_value=%s",
+            "🤖 %s 分析完成: action=%s confidence=%.2f event_type=%s asset=%s is_high_value=%s",
+            self._provider_label,
             gemini_result.action,
             gemini_result.confidence,
             gemini_result.event_type,
@@ -520,22 +538,42 @@ class AiSignalEngine:
                     f"✅ Claude API 返回完成，响应长度: {len(claude_response.text)} 字符, "
                     f"token 使用: {claude_response.usage}"
                 )
+                self._log_ai_response_debug("Claude", claude_response.text)
 
                 # Parse Claude's response (expects same JSON structure)
                 claude_result = self._parse_response(claude_response)
                 logger.info(
-                    "✅ Claude 深度分析完成: action=%s confidence=%.2f (Gemini: %.2f) asset=%s",
+                    "✅ Claude 深度分析完成: action=%s confidence=%.2f (%s: %.2f) asset=%s",
                     claude_result.action,
                     claude_result.confidence,
+                    self._provider_label,
                     gemini_result.confidence,
                     claude_result.asset,
                 )
                 return claude_result
             except Exception as exc:
-                logger.warning("⚠️ Claude 深度分析失败，回退到 Gemini 结果: %s", exc, exc_info=True)
+                logger.warning(
+                    "⚠️ Claude 深度分析失败，回退到 %s 结果: %s",
+                    self._provider_label,
+                    exc,
+                    exc_info=True,
+                )
                 return gemini_result
 
         return gemini_result
+
+    @staticmethod
+    def _log_ai_response_debug(label: str, text: str) -> None:
+        """Log raw AI responses with truncation to avoid noisy logs."""
+        if not text:
+            logger.debug("%s 原始响应为空字符串", label)
+            return
+
+        snippet = text.strip()
+        max_length = 800
+        if len(snippet) > max_length:
+            snippet = f"{snippet[:max_length]}…(truncated)"
+        logger.debug("%s 原始响应: %s", label, snippet)
 
     def _parse_response(self, response: OpenAIChatResponse) -> SignalResult:
         raw_text = response.text.strip()
