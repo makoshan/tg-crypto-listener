@@ -63,7 +63,7 @@ class AnthropicClient:
         context_management: Optional[Dict[str, Any]] = None,
         max_retries: int = 1,
         retry_backoff_seconds: float = 1.5,
-        max_tool_turns: int = 10,  # 防止 Tool Use 死循环
+        max_tool_turns: int = 5,  # 防止 Tool Use 死循环
         *,
         context_trigger_tokens: Optional[int] = None,
         context_keep_tools: Optional[int] = None,

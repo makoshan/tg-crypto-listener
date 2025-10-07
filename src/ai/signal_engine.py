@@ -119,18 +119,12 @@ class SignalResult:
     def is_high_value_signal(
         self,
         *,
-        confidence_threshold: float = 0.7,
-        critical_event_types: set[str] | None = None,
-        critical_keywords: set[str] | None = None,
-        message_text: str = "",
+        confidence_threshold: float = 0.8,
     ) -> bool:
         """Determine if signal qualifies for Claude deep analysis.
 
         Args:
             confidence_threshold: Minimum confidence for high-value classification
-            critical_event_types: Event types requiring deep analysis
-            critical_keywords: Keywords triggering deep analysis
-            message_text: Original message text for keyword matching
 
         Returns:
             True if signal meets high-value criteria
@@ -138,22 +132,8 @@ class SignalResult:
         if self.status != "success":
             return False
 
-        # Criterion 1: High confidence
-        if self.confidence >= confidence_threshold:
-            return True
-
-        # Criterion 2: Critical event type
-        critical_events = critical_event_types or {"hack", "regulation", "listing", "delisting"}
-        if self.event_type in critical_events:
-            return True
-
-        # Criterion 3: Critical keyword match
-        if critical_keywords and message_text:
-            message_lower = message_text.lower()
-            if any(keyword.lower() in message_lower for keyword in critical_keywords):
-                return True
-
-        return False
+        # Only trigger Claude for high confidence signals
+        return self.confidence >= confidence_threshold
 
 
 @dataclass
@@ -304,8 +284,7 @@ class AiSignalEngine:
         provider_label: str = "AI",
         claude_client: Optional[AnthropicClient] = None,
         claude_enabled: bool = False,
-        high_value_threshold: float = 0.7,
-        critical_keywords: set[str] | None = None,
+        high_value_threshold: float = 0.8,
     ) -> None:
         self.enabled = enabled and client is not None
         self._client = client
@@ -315,11 +294,10 @@ class AiSignalEngine:
         self._claude_client = claude_client
         self._claude_enabled = claude_enabled and claude_client is not None
         self._high_value_threshold = high_value_threshold
-        self._critical_keywords = critical_keywords or set()
         if not self.enabled:
             logger.debug("AiSignalEngine 未启用或缺少客户端，所有消息将跳过 AI 分析")
         if self._claude_enabled:
-            logger.info("🤖 Claude 深度分析已启用 (10% 高价值信号路由)")
+            logger.info("🤖 Claude 深度分析已启用 (高价值信号路由)")
 
     @classmethod
     def from_config(cls, config: Any) -> "AiSignalEngine":
@@ -443,7 +421,6 @@ class AiSignalEngine:
                     claude_enabled = False
 
         high_value_threshold = getattr(config, "HIGH_VALUE_CONFIDENCE_THRESHOLD", 0.7)
-        critical_keywords = getattr(config, "CRITICAL_KEYWORDS", set())
 
         return cls(
             True,
@@ -454,7 +431,6 @@ class AiSignalEngine:
             claude_client=claude_client,
             claude_enabled=claude_enabled,
             high_value_threshold=high_value_threshold,
-            critical_keywords=critical_keywords,
         )
 
     async def analyse(self, payload: EventPayload) -> SignalResult:
@@ -505,8 +481,6 @@ class AiSignalEngine:
         # Step 2: Check if high-value signal qualifies for Claude (10%)
         is_high_value = gemini_result.is_high_value_signal(
             confidence_threshold=self._high_value_threshold,
-            critical_keywords=self._critical_keywords,
-            message_text=payload.text,
         )
 
         logger.debug(
