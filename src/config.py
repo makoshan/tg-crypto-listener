@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
-from typing import List, Set
+from typing import Any, Dict, List, Set
 
 from dotenv import load_dotenv
 
 load_dotenv()
+
+logger = logging.getLogger(__name__)
 
 
 def _as_bool(value: str, default: bool = False) -> bool:
@@ -135,6 +138,27 @@ class Config:
     CLAUDE_TIMEOUT_SECONDS: float = float(os.getenv("CLAUDE_TIMEOUT_SECONDS", "30"))
     CLAUDE_MAX_TOOL_TURNS: int = int(os.getenv("CLAUDE_MAX_TOOL_TURNS", "3"))
 
+    # Deep analysis unified configuration
+    DEEP_ANALYSIS_ENABLED: bool = _as_bool(
+        os.getenv("DEEP_ANALYSIS_ENABLED", os.getenv("CLAUDE_ENABLED", "false"))
+    )
+    DEEP_ANALYSIS_PROVIDER: str = os.getenv(
+        "DEEP_ANALYSIS_PROVIDER",
+        "claude" if CLAUDE_ENABLED else "gemini",
+    ).strip().lower()
+    DEEP_ANALYSIS_FALLBACK_PROVIDER: str = os.getenv(
+        "DEEP_ANALYSIS_FALLBACK_PROVIDER",
+        "",
+    ).strip().lower()
+
+    GEMINI_DEEP_MODEL: str = os.getenv("GEMINI_DEEP_MODEL", "gemini-2.5-pro")
+    GEMINI_DEEP_TIMEOUT_SECONDS: float = float(os.getenv("GEMINI_DEEP_TIMEOUT_SECONDS", "25"))
+    GEMINI_DEEP_MAX_FUNCTION_TURNS: int = int(os.getenv("GEMINI_DEEP_MAX_FUNCTION_TURNS", "6"))
+    GEMINI_DEEP_RETRY_ATTEMPTS: int = int(os.getenv("GEMINI_DEEP_RETRY_ATTEMPTS", "1"))
+    GEMINI_DEEP_RETRY_BACKOFF_SECONDS: float = float(
+        os.getenv("GEMINI_DEEP_RETRY_BACKOFF_SECONDS", "1.5")
+    )
+
     # Context Editing configuration (Claude Memory Tool)
     MEMORY_CONTEXT_TRIGGER_TOKENS: int = int(os.getenv("MEMORY_CONTEXT_TRIGGER_TOKENS", "6000"))
     MEMORY_CONTEXT_KEEP_TOOLS: int = int(os.getenv("MEMORY_CONTEXT_KEEP_TOOLS", "1"))
@@ -215,6 +239,45 @@ class Config:
     OPENAI_EMBEDDING_MODEL: str = os.getenv("OPENAI_EMBEDDING_MODEL", "text-embedding-3-small")
     EMBEDDING_SIMILARITY_THRESHOLD: float = float(os.getenv("EMBEDDING_SIMILARITY_THRESHOLD", "0.85"))
     EMBEDDING_TIME_WINDOW_HOURS: int = int(os.getenv("EMBEDDING_TIME_WINDOW_HOURS", "72"))
+
+    @classmethod
+    def get_deep_analysis_config(cls) -> Dict[str, Any]:
+        """Return normalised deep analysis configuration."""
+
+        provider = (cls.DEEP_ANALYSIS_PROVIDER or "").strip().lower()
+        fallback = (cls.DEEP_ANALYSIS_FALLBACK_PROVIDER or "").strip().lower()
+
+        if cls.CLAUDE_ENABLED and not os.getenv("DEEP_ANALYSIS_ENABLED"):
+            logger.warning(
+                "⚠️ CLAUDE_ENABLED 已废弃，请迁移到 DEEP_ANALYSIS_ENABLED 和 DEEP_ANALYSIS_PROVIDER"
+            )
+
+        enabled = cls.DEEP_ANALYSIS_ENABLED
+        if provider not in {"claude", "gemini"}:
+            if provider:
+                logger.warning("未知的 DEEP_ANALYSIS_PROVIDER=%s，自动回退为 claude", provider)
+            provider = "claude" if cls.CLAUDE_ENABLED else "gemini"
+
+        config: Dict[str, Any] = {
+            "enabled": enabled,
+            "provider": provider,
+            "fallback_provider": fallback if fallback in {"claude", "gemini"} else "",
+            "claude": {
+                "api_key": cls.CLAUDE_API_KEY,
+                "model": cls.CLAUDE_MODEL,
+                "timeout": cls.CLAUDE_TIMEOUT_SECONDS,
+                "max_tool_turns": cls.CLAUDE_MAX_TOOL_TURNS,
+            },
+            "gemini": {
+                "model": cls.GEMINI_DEEP_MODEL,
+                "timeout": cls.GEMINI_DEEP_TIMEOUT_SECONDS,
+                "max_function_turns": cls.GEMINI_DEEP_MAX_FUNCTION_TURNS,
+                "max_retries": cls.GEMINI_DEEP_RETRY_ATTEMPTS,
+                "retry_backoff": cls.GEMINI_DEEP_RETRY_BACKOFF_SECONDS,
+                "api_key": cls.GEMINI_API_KEY,
+            },
+        }
+        return config
 
     @classmethod
     def validate(cls) -> bool:

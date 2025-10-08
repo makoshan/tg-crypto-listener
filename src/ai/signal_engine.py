@@ -11,8 +11,13 @@ from datetime import datetime
 from typing import Any, Dict, Optional, Sequence
 
 from ..utils import setup_logger
-from .gemini_client import AiServiceError, GeminiClient, GeminiResponse
-from .anthropic_client import AnthropicClient, AnthropicResponse
+from ..memory import MemoryBackendBundle, create_memory_backend
+from .gemini_client import AiServiceError, GeminiClient
+from .deep_analysis import (
+    DeepAnalysisEngine,
+    DeepAnalysisError,
+    create_deep_analysis_engine,
+)
 
 try:  # pragma: no cover - optional dependency
     import httpx
@@ -282,8 +287,9 @@ class AiSignalEngine:
         semaphore: asyncio.Semaphore,
         *,
         provider_label: str = "AI",
-        claude_client: Optional[AnthropicClient] = None,
-        claude_enabled: bool = False,
+        deep_analysis_engine: Optional[DeepAnalysisEngine] = None,
+        deep_analysis_fallback: Optional[DeepAnalysisEngine] = None,
+        deep_analysis_min_interval: float = 25.0,
         high_value_threshold: float = 0.75,
     ) -> None:
         self.enabled = enabled and client is not None
@@ -291,15 +297,37 @@ class AiSignalEngine:
         self._threshold = threshold
         self._semaphore = semaphore
         self._provider_label = provider_label or "AI"
-        self._claude_client = claude_client
-        self._claude_enabled = claude_enabled and claude_client is not None
         self._high_value_threshold = high_value_threshold
-        self._last_claude_call_time: float = 0.0  # 频率限制
-        self._claude_min_interval: float = 25.0  # 最小间隔 25 秒（降低调用频率节省成本）
+        self._deep_min_interval = float(deep_analysis_min_interval)
+        self._last_deep_call_time: float = 0.0
+        self._deep_enabled: bool = False
+        self._deep_engine: DeepAnalysisEngine | None = None
+        self._deep_fallback_engine: DeepAnalysisEngine | None = None
+        self._deep_provider_label: str = ""
+        self._deep_fallback_label: str = ""
+        self._memory_bundle: MemoryBackendBundle | None = None
+        self.attach_deep_analysis_engine(deep_analysis_engine, fallback=deep_analysis_fallback)
+
         if not self.enabled:
             logger.debug("AiSignalEngine 未启用或缺少客户端，所有消息将跳过 AI 分析")
-        if self._claude_enabled:
-            logger.info("🤖 Claude 深度分析已启用 (高价值信号路由)")
+
+    def attach_deep_analysis_engine(
+        self,
+        engine: Optional[DeepAnalysisEngine],
+        *,
+        fallback: Optional[DeepAnalysisEngine] = None,
+    ) -> None:
+        self._deep_engine = engine
+        self._deep_fallback_engine = fallback
+        self._deep_provider_label = engine.provider_name if engine else ""
+        self._deep_fallback_label = fallback.provider_name if fallback else ""
+        self._deep_enabled = engine is not None
+
+        if engine:
+            logger.info("🤖 深度分析已启用 (provider=%s)", self._deep_provider_label or "unknown")
+        if fallback:
+            logger.info("🔁 深度分析备用引擎已配置 (provider=%s)", self._deep_fallback_label or "unknown")
+
 
     @classmethod
     def from_config(cls, config: Any) -> "AiSignalEngine":
@@ -393,47 +421,52 @@ class AiSignalEngine:
             return cls(False, None, getattr(config, "AI_SIGNAL_THRESHOLD", 0.0), asyncio.Semaphore(1))
 
         concurrency = max(1, int(getattr(config, "AI_MAX_CONCURRENCY", 1)))
-
-        # Initialize Claude client if enabled
-        claude_client: Optional[AnthropicClient] = None
-        claude_enabled = getattr(config, "CLAUDE_ENABLED", False)
-        if claude_enabled:
-            claude_api_key = getattr(config, "CLAUDE_API_KEY", "").strip()
-            if claude_api_key:
-                try:
-                    from ..memory import MemoryToolHandler
-
-                    memory_dir = getattr(config, "MEMORY_DIR", "./memories")
-                    memory_handler = MemoryToolHandler(base_path=memory_dir)
-
-                    claude_client = AnthropicClient(
-                        api_key=claude_api_key,
-                        model_name=getattr(config, "CLAUDE_MODEL", "claude-sonnet-4-5-20250929"),
-                        timeout=getattr(config, "CLAUDE_TIMEOUT_SECONDS", 30.0),
-                        max_tool_turns=getattr(config, "CLAUDE_MAX_TOOL_TURNS", 10),
-                        memory_handler=memory_handler,
-                        context_trigger_tokens=getattr(config, "MEMORY_CONTEXT_TRIGGER_TOKENS", 10000),
-                        context_keep_tools=getattr(config, "MEMORY_CONTEXT_KEEP_TOOLS", 2),
-                        context_clear_at_least=getattr(config, "MEMORY_CONTEXT_CLEAR_AT_LEAST", 500),
-                    )
-                    logger.info("🧠 Claude 深度分析引擎已初始化")
-                except Exception as exc:
-                    logger.warning("Claude 初始化失败，将禁用深度分析: %s", exc)
-                    claude_client = None
-                    claude_enabled = False
-
         high_value_threshold = getattr(config, "HIGH_VALUE_CONFIDENCE_THRESHOLD", 0.75)
+        deep_min_interval = getattr(config, "DEEP_ANALYSIS_MIN_INTERVAL", 25.0)
 
-        return cls(
+        engine = cls(
             True,
             client,
             getattr(config, "AI_SIGNAL_THRESHOLD", 0.0),
             asyncio.Semaphore(concurrency),
             provider_label=provider_label,
-            claude_client=claude_client,
-            claude_enabled=claude_enabled,
+            deep_analysis_min_interval=deep_min_interval,
             high_value_threshold=high_value_threshold,
         )
+
+        memory_bundle = create_memory_backend(config)
+        engine._memory_bundle = memory_bundle
+
+        deep_config = getattr(config, "get_deep_analysis_config", lambda: {})()
+        deep_engine: DeepAnalysisEngine | None = None
+        fallback_engine: DeepAnalysisEngine | None = None
+
+        if deep_config.get("enabled"):
+            provider_name = deep_config.get("provider", "claude")
+            try:
+                deep_engine = create_deep_analysis_engine(
+                    provider=provider_name,
+                    config=config,
+                    parse_callback=engine._parse_response_text,
+                    memory_bundle=memory_bundle,
+                )
+            except DeepAnalysisError as exc:
+                logger.warning("深度分析引擎 %s 初始化失败: %s", provider_name, exc)
+
+            fallback_name = deep_config.get("fallback_provider")
+            if fallback_name and fallback_name != provider_name:
+                try:
+                    fallback_engine = create_deep_analysis_engine(
+                        provider=fallback_name,
+                        config=config,
+                        parse_callback=engine._parse_response_text,
+                        memory_bundle=memory_bundle,
+                    )
+                except DeepAnalysisError as exc:
+                    logger.warning("备用深度分析引擎 %s 初始化失败: %s", fallback_name, exc)
+
+        engine.attach_deep_analysis_engine(deep_engine, fallback=fallback_engine)
+        return engine
 
     async def analyse(self, payload: EventPayload) -> SignalResult:
         if not self.enabled or not self._client:
@@ -480,7 +513,7 @@ class AiSignalEngine:
         self._log_ai_response_debug(self._provider_label, response.text)
         gemini_result = self._parse_response(response)
 
-        # Step 2: Check if high-value signal qualifies for Claude (10%)
+        # Step 2: Determine whether to trigger deep analysis
         is_high_value = gemini_result.is_high_value_signal(
             confidence_threshold=self._high_value_threshold,
         )
@@ -497,71 +530,80 @@ class AiSignalEngine:
 
         # 排除低价值事件类型（macro、other 触发过多且价值低）
         excluded_event_types = {"macro", "other", "airdrop", "governance", "celebrity"}
-        should_skip_claude = gemini_result.event_type in excluded_event_types
+        should_skip_deep = gemini_result.event_type in excluded_event_types
+
+        deep_engine = self._deep_engine
+        fallback_engine = self._deep_fallback_engine
+        deep_label = self._deep_provider_label or "deep"
+        fallback_label = self._deep_fallback_label or "fallback"
 
         # 频率限制检查
         import time
-        time_since_last_call = time.time() - self._last_claude_call_time
-        rate_limited = time_since_last_call < self._claude_min_interval
 
-        if should_skip_claude and is_high_value:
+        time_since_last_call = time.time() - self._last_deep_call_time
+        rate_limited = time_since_last_call < self._deep_min_interval
+
+        if should_skip_deep and is_high_value:
             logger.debug(
-                "⏭️  跳过 Claude 分析（低价值事件类型 %s）: confidence=%.2f asset=%s",
+                "⏭️  跳过深度分析（低价值事件类型 %s）: confidence=%.2f asset=%s",
                 gemini_result.event_type,
                 gemini_result.confidence,
                 gemini_result.asset,
             )
-        elif rate_limited and is_high_value:
+        elif rate_limited and is_high_value and self._deep_enabled:
             logger.debug(
-                "⏭️  跳过 Claude 分析（频率限制，距上次调用 %.1f 秒）: confidence=%.2f asset=%s",
+                "⏭️  跳过深度分析（频率限制，距上次调用 %.1f 秒）: confidence=%.2f asset=%s",
                 time_since_last_call,
                 gemini_result.confidence,
                 gemini_result.asset,
             )
-        elif self._claude_enabled and self._claude_client and is_high_value:
+        elif self._deep_enabled and deep_engine and is_high_value:
             logger.info(
-                "🧠 触发 Claude 深度分析: event_type=%s confidence=%.2f asset=%s (阈值: %.2f)",
+                "🧠 触发 %s 深度分析: event_type=%s confidence=%.2f asset=%s (阈值: %.2f)",
+                deep_label,
                 gemini_result.event_type,
                 gemini_result.confidence,
                 gemini_result.asset,
                 self._high_value_threshold,
             )
+            self._last_deep_call_time = time.time()
             try:
-                # 更新最后调用时间
-                import time
-                self._last_claude_call_time = time.time()
-
-                # Build Claude prompt based on Gemini's initial analysis
-                logger.info("🧠 正在构建 Claude 深度分析 Prompt...")
-                claude_prompt = self._build_claude_deep_analysis_prompt(payload, gemini_result)
-                logger.info(f"🧠 Claude Prompt 构建完成，长度: {len(str(claude_prompt))} 字符")
-
-                claude_response = await self._claude_client.generate_signal(claude_prompt)
+                deep_result = await deep_engine.analyse(payload, gemini_result)
                 logger.info(
-                    f"✅ Claude API 返回完成，响应长度: {len(claude_response.text)} 字符, "
-                    f"token 使用: {claude_response.usage}"
-                )
-                self._log_ai_response_debug("Claude", claude_response.text)
-
-                # Parse Claude's response (expects same JSON structure)
-                claude_result = self._parse_response(claude_response)
-                logger.info(
-                    "✅ Claude 深度分析完成: action=%s confidence=%.2f (%s: %.2f) asset=%s",
-                    claude_result.action,
-                    claude_result.confidence,
+                    "✅ %s 深度分析完成: action=%s confidence=%.2f (%s 初判: %.2f) asset=%s",
+                    deep_label,
+                    deep_result.action,
+                    deep_result.confidence,
                     self._provider_label,
                     gemini_result.confidence,
-                    claude_result.asset,
+                    deep_result.asset,
                 )
-                return claude_result
-            except Exception as exc:
+                return deep_result
+            except DeepAnalysisError as exc:
                 logger.warning(
-                    "⚠️ Claude 深度分析失败，回退到 %s 结果: %s",
-                    self._provider_label,
+                    "⚠️ %s 深度分析失败，将尝试备用或回退到主分析结果: %s",
+                    deep_label,
                     exc,
                     exc_info=True,
                 )
-                return gemini_result
+                if fallback_engine:
+                    try:
+                        logger.info("🔁 尝试备用深度引擎 %s", fallback_label)
+                        fallback_result = await fallback_engine.analyse(payload, gemini_result)
+                        logger.info(
+                            "✅ 备用引擎 %s 深度分析完成: action=%s confidence=%.2f",
+                            fallback_label,
+                            fallback_result.action,
+                            fallback_result.confidence,
+                        )
+                        return fallback_result
+                    except DeepAnalysisError as fallback_exc:
+                        logger.warning(
+                            "⚠️ 备用深度引擎 %s 失败: %s",
+                            fallback_label,
+                            fallback_exc,
+                            exc_info=True,
+                        )
 
         return gemini_result
 
@@ -579,7 +621,10 @@ class AiSignalEngine:
         logger.debug("%s 原始响应: %s", label, snippet)
 
     def _parse_response(self, response: OpenAIChatResponse) -> SignalResult:
-        raw_text = response.text.strip()
+        return self._parse_response_text(response.text)
+
+    def _parse_response_text(self, text: str) -> SignalResult:
+        raw_text = (text or "").strip()
         normalized_text = self._prepare_json_text(raw_text)
 
         asset = ""
@@ -708,56 +753,6 @@ class AiSignalEngine:
             links=links,
         )
 
-    def _build_claude_deep_analysis_prompt(
-        self, payload: EventPayload, gemini_result: SignalResult
-    ) -> str:
-        """Build enriched prompt for Claude based on Gemini's initial analysis."""
-        # 只保留最相关的历史记录（前2条）
-        historical_ref = payload.historical_reference or {}
-        historical_entries = historical_ref.get("entries", [])
-        if len(historical_entries) > 2:
-            historical_ref = {"entries": historical_entries[:2]}
-
-        context = {
-            "text": payload.translated_text or payload.text,
-            "source": payload.source,
-            "timestamp": payload.timestamp.isoformat(),
-            "historical_reference": historical_ref,
-            "gemini_analysis": {
-                "summary": gemini_result.summary,
-                "event_type": gemini_result.event_type,
-                "asset": gemini_result.asset,
-                "action": gemini_result.action,
-                "confidence": gemini_result.confidence,
-                "risk_flags": gemini_result.risk_flags,
-                "notes": gemini_result.notes,
-            },
-        }
-
-        context_json = json.dumps(context, ensure_ascii=False, indent=2)
-
-        system_prompt = (
-            "你是加密交易台的资深分析师，负责验证和优化 AI 初步分析结果。\n\n"
-            "任务：\n"
-            "1. 验证事件类型、资产识别、置信度是否合理\n"
-            "2. 结合历史案例判断当前事件的独特性\n"
-            "3. 评估风险点（流动性、监管、市场情绪）\n"
-            "4. 调整置信度并给出操作建议\n\n"
-            "输出：JSON 格式，包含 summary、event_type、asset、asset_name、action、direction、"
-            "confidence、strength、risk_flags、notes、links。"
-            "若初步分析有误（如误判资产、置信度过高），在 notes 中说明修正理由。"
-        )
-
-        user_prompt = f"分析以下事件并返回优化后的 JSON：\n```json\n{context_json}\n```"
-
-        # Claude expects messages format for generate_signal
-        return json.dumps(
-            [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-            ensure_ascii=False,
-        )
 
     @staticmethod
     def _prepare_json_text(text: str) -> str:
