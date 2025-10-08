@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import inspect
 from dataclasses import dataclass
 from typing import Any, Iterable, List, Optional, Sequence
 
@@ -74,18 +73,6 @@ class GeminiFunctionCallingClient:
         self._timeout = float(timeout)
         self._max_retries = max(0, int(max_retries))
         self._retry_backoff = max(0.0, float(retry_backoff_seconds))
-        self._tool_generator = getattr(self._client, "responses", None)
-        self._supports_tool_api = bool(self._tool_generator) and hasattr(self._tool_generator, "generate")
-        self._tool_param_name = (self._resolve_content_param(getattr(self._tool_generator, "generate"))
-                                 if self._supports_tool_api else None)
-
-        models = getattr(self._client, "models", None)
-        self._model_generate = None
-        self._model_generate_param = None
-        if models is not None and hasattr(models, "generate_content"):
-            self._model_generate = models.generate_content
-            self._model_generate_param = self._resolve_content_param(self._model_generate)
-
 
     async def generate_content_with_tools(
         self,
@@ -142,124 +129,118 @@ class GeminiFunctionCallingClient:
         messages: Sequence[dict[str, str]] | str,
         tools: Optional[Iterable[Any]],
     ) -> GeminiFunctionResponse:
-        contents = self._convert_messages(messages)
+        contents, system_instruction = self._convert_messages(messages)
 
-        if tools and self._supports_tool_api:
-            try:
-                response = self._call_with_tools(contents, tools)
-            except AiServiceError as exc:
-                logger.debug("Gemini 工具调用不可用，回退普通调用: %s", exc)
-                response = self._call_without_tools(contents)
-        else:
-            response = self._call_without_tools(contents)
+        request_kwargs: dict[str, Any] = {
+            "model": self._model_name,
+            "contents": contents,
+        }
+        if tools:
+            request_kwargs["tools"] = list(tools)
+        if system_instruction:
+            request_kwargs["system_instruction"] = system_instruction
+
+        response = self._generate_with_fallback(request_kwargs)
 
         text = self._extract_text(response)
         function_calls = self._extract_function_calls(response)
         return GeminiFunctionResponse(text=text, function_calls=function_calls)
 
-    def _resolve_content_param(self, method: Any) -> str | None:
-        try:
-            parameters = inspect.signature(method).parameters
-        except (ValueError, TypeError):
-            return None
-        for candidate in ("contents", "input", "content"):
-            if candidate in parameters:
-                return candidate
-        for name in parameters.keys():
-            if name not in {"self", "model"}:
-                return name
-        return None
+    def _generate_with_fallback(self, kwargs: dict[str, Any]) -> Any:
+        """Call available google-genai API entrypoint."""
+        if hasattr(self._client, "responses"):
+            generator = getattr(self._client, "responses")
+            if hasattr(generator, "generate"):
+                return generator.generate(**kwargs)
+        if hasattr(self._client, "models"):
+            models = getattr(self._client, "models")
+            if hasattr(models, "generate_content"):
+                # models.generate_content expects tools and system_instruction in config parameter
+                request_kwargs = {
+                    "model": kwargs["model"],
+                    "contents": kwargs["contents"],
+                }
+                config = {}
+                if "tools" in kwargs:
+                    config["tools"] = kwargs["tools"]
+                if "system_instruction" in kwargs:
+                    config["system_instruction"] = kwargs["system_instruction"]
+                if config:
+                    request_kwargs["config"] = config
+                return models.generate_content(**request_kwargs)
+        raise AiServiceError("当前 google-genai 客户端不支持所需的接口")
 
-    def _invoke_generate(
-        self,
-        method: Any,
-        contents: Any,
-        *,
-        tools: Optional[Iterable[Any]] = None,
-        preferred_param: str | None = None,
-    ) -> Any:
-        candidates: list[str] = []
-        if preferred_param:
-            candidates.append(preferred_param)
-        resolved = self._resolve_content_param(method)
-        if resolved and resolved not in candidates:
-            candidates.append(resolved)
-        for fallback in ("contents", "input", "content"):
-            if fallback not in candidates:
-                candidates.append(fallback)
-        last_exc: TypeError | None = None
-        tool_payload = None
-        if tools is not None:
-            tool_payload = list(tools)
-            if not tool_payload:
-                tool_payload = None
-        for param in candidates:
-            kwargs = {"model": self._model_name, param: contents}
-            if tool_payload is not None:
-                kwargs["tools"] = tool_payload
-            try:
-                return method(**kwargs)
-            except TypeError as exc:  # pragma: no cover - SDK signature mismatch
-                last_exc = exc
-                continue
-        raise AiServiceError(f"Gemini 调用参数错误: {last_exc}") from (last_exc or TypeError("invalid call"))
+    def _convert_messages(self, messages: Sequence[dict[str, str]] | str) -> tuple[Any, str | None]:
+        """Convert messages to Gemini format, extracting system instruction.
 
-    def _call_with_tools(self, contents: Any, tools: Iterable[Any]) -> Any:
-        if not self._supports_tool_api or self._tool_generator is None:
-            raise AiServiceError("当前 google-genai 客户端不支持工具调用")
-        method = getattr(self._tool_generator, "generate")
-        try:
-            return self._invoke_generate(
-                method,
-                contents,
-                tools=tools,
-                preferred_param=self._tool_param_name,
-            )
-        except AiServiceError as exc:
-            raise AiServiceError("当前 google-genai 客户端不支持工具调用") from exc
-
-    def _call_without_tools(self, contents: Any) -> Any:
-        last_error: AiServiceError | None = None
-        if self._model_generate is not None:
-            try:
-                return self._invoke_generate(
-                    self._model_generate,
-                    contents,
-                    preferred_param=self._model_generate_param,
-                )
-            except AiServiceError as exc:  # pragma: no cover - defensive
-                last_error = exc
-        if self._supports_tool_api and self._tool_generator is not None:
-            try:
-                return self._invoke_generate(
-                    getattr(self._tool_generator, "generate"),
-                    contents,
-                    preferred_param=self._tool_param_name,
-                )
-            except AiServiceError as exc:  # pragma: no cover - defensive
-                last_error = exc
-        if last_error is not None:
-            raise last_error
-        raise AiServiceError("当前 google-genai 客户端不支持生成调用")
-
-    def _convert_messages(self, messages: Sequence[dict[str, str]] | str) -> Any:
+        Returns:
+            Tuple of (contents, system_instruction)
+        """
         if isinstance(messages, str):
-            return messages
-        parts: list[Any] = []
+            return messages, None
+
+        try:
+            from google.genai.types import Content, Part
+            use_native_types = True
+        except ImportError:
+            use_native_types = False
+
+        system_instruction = None
+        contents: list[Any] = []
+
         for message in messages:
             role = message.get("role")
             content = message.get("content")
+            name = message.get("name")
+
             if content is None:
                 continue
-            if role == "user":
-                parts.append({"role": "user", "parts": [content]})
-            elif role == "system":
-                parts.append({"role": "system", "parts": [content]})
-            elif role == "tool":
-                parts.append({"role": "tool", "parts": [content]})
+
+            if role == "system":
+                # Extract system message as system_instruction
+                system_instruction = content
+                continue
+
+            if role == "tool":
+                # Tool responses need to use FunctionResponse format
+                if use_native_types:
+                    try:
+                        # Parse content as JSON if possible
+                        try:
+                            response_data = json.loads(content) if isinstance(content, str) else content
+                        except json.JSONDecodeError:
+                            response_data = {"result": content}
+
+                        # Use Part.from_function_response with name and response kwargs
+                        part = Part.from_function_response(
+                            name=name or "unknown",
+                            response=response_data
+                        )
+                        contents.append(Content(
+                            role="user",
+                            parts=[part]
+                        ))
+                    except (ImportError, AttributeError, TypeError) as exc:
+                        # Fallback to text format if function response creation fails
+                        logger.debug("无法创建 FunctionResponse，降级为文本格式: %s", exc)
+                        contents.append(Content(
+                            role="user",
+                            parts=[Part.from_text(text=f"Function {name}: {content}")]
+                        ))
+                else:
+                    contents.append({"role": "user", "parts": [f"Function {name}: {content}"]})
             else:
-                parts.append({"role": role or "user", "parts": [content]})
-        return parts
+                # User or model messages
+                gemini_role = "model" if role == "assistant" else "user"
+                if use_native_types:
+                    contents.append(Content(
+                        role=gemini_role,
+                        parts=[Part.from_text(text=content)]
+                    ))
+                else:
+                    contents.append({"role": gemini_role, "parts": [content]})
+
+        return contents, system_instruction
 
     def _extract_text(self, response: Any) -> Optional[str]:
         text = getattr(response, "text", None)
