@@ -1,0 +1,20 @@
+{
+  "summary": "GraniteShares 向 SEC 提交比特币、以太坊、Solana 和 XRP 的 3 倍杠杆 ETF 申请，延续市场对高杠杆加密产品需求的趋势，但需关注监管审批风险和极端波动性。",
+  "event_type": "regulatory_filing",
+  "asset": "MULTI",
+  "asset_name": "BTC, ETH, SOL, XRP",
+  "action": "observe",
+  "direction": "bullish",
+  "confidence": 0.70,
+  "strength": "medium",
+  "risk_flags": [
+    "regulatory_uncertainty",
+    "extreme_volatility",
+    "liquidity_concerns",
+    "approval_timeline_unknown"
+  ],
+  "notes": "修正理由：\n1. **事件类型修正**：从 'product_launch' 改为 'regulatory_filing' - 这是 SEC 申请阶段，并非产品已推出，审批结果尚不确定。\n2. **资产字段修正**：从单一 'BTC' 改为 'MULTI'，并在 asset_name 中列明所有涉及资产（BTC/ETH/SOL/XRP），更准确反映多资产性质。\n3. **置信度下调**：从 0.85 降至 0.70 - 理由如下：\n   a) 仅为申请阶段，SEC 对 3x 杠杆加密 ETF 的审批历史极为保守\n   b) XRP 仍存在监管争议，可能影响整体审批\n   c) 3x 杠杆产品风险极高，SEC 可能要求额外披露或限制\n4. **历史对比分析**：\n   - Defiance 的类似申请（相似度 0.633）显示这是行业趋势，但未见批准先例\n   - Grayscale 的质押 ETF（相似度 0.598）属于不同产品类型，参考价值有限\n5. **风险评估强化**：\n   - 监管风险：SEC 对杠杆加密产品态度谨慎，批准可能需数月甚至被拒\n   - 流动性风险：3x 杠杆产品需持续对冲，在市场极端波动时可能面临流动性枯竭\n   - 市场情绪：虽显示机构兴趣，但产品适用群体极小，实际需求待验证\n6. **操作建议**：\n   - 短期：观察为主，等待 SEC 正式回应（通常 45-90 天内有初步意见）\n   - 中期：若获批，关注产品上市后的交易量和折溢价情况\n   - 风险提示：不建议散户参与 3x 杠杆产品，日内衰减严重",
+  "links": [
+    "https://x.com/JSeyff/status/1975660310301151727"
+  ]
+}

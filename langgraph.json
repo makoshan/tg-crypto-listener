@@ -1,0 +1,9 @@
+{
+  "dependencies": ["."],
+  "graphs": {
+    "main": "./src/langgraph_app.py:graph"
+  },
+  "env": ".env",
+  "python_version": "3.11",
+  "pip_config_file": "requirements.txt"
+}

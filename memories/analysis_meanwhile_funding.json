@@ -1,0 +1,33 @@
+{
+  "summary": "人寿保险公司 Meanwhile 完成 8200 万美元 B 轮融资，由 Haun Ventures 和 Bain Capital Crypto 领投，用于扩展比特币计价的人寿保险产品及全球业务。累计融资达 1.43 亿美元。",
+  "event_type": "institutional_adoption",
+  "asset": "BTC",
+  "asset_name": "Bitcoin",
+  "action": "observe",
+  "direction": "neutral_to_bullish",
+  "confidence": 0.72,
+  "strength": "medium",
+  "risk_flags": [
+    "indirect_impact",
+    "long_term_narrative",
+    "niche_product_adoption"
+  ],
+  "notes": "【修正理由】\n1. **事件类型调整**：从 'funding' 改为 'institutional_adoption'。理由：此融资的核心意义不在于资金本身，而在于传统金融机构（人寿保险）深度整合比特币作为计价/支付资产，属于机构采用比特币的标志性案例。\n\n2. **置信度下调**：从 0.85 → 0.72。理由：\n   - 该事件对 BTC 价格的影响为**间接且长期**：保险产品需要长周期才能转化为实际 BTC 需求\n   - 历史参考显示该新闻已重复报道 3 次（相似度 0.81/0.767），市场可能已消化此信息\n   - Meanwhile 是小众创业公司，非 MicroStrategy/BlackRock 级别的大型机构\n\n3. **风险点补充**：\n   - **间接影响**：融资不直接购买 BTC，仅扩展产品线\n   - **长期叙事**：需 1-2 年才能观察到保单规模对 BTC 需求的实质影响\n   - **小众产品**：比特币计价保险的市场接受度尚未验证\n\n4. **方向标注**：neutral_to_bullish（中性偏多）\n   - 积极面：顶级 VC（Haun/Bain）背书 + 累计 1.43 亿美元融资显示资本对 BTC 应用场景的信心\n   - 中性面：短期无直接买盘，需观察产品推广后的 BTC 储备增长\n\n【操作建议】\n- **不建议**基于此单一事件开仓\n- **可关注**：Meanwhile 后续是否披露 BTC 储备增持（类似 MicroStrategy 的财报披露）\n- **叙事跟踪**：若更多传统金融机构（大型保险公司）跟进比特币计价产品，可上调至 'bullish' 信号\n\n【历史对比】\n类似案例：MicroStrategy 早期宣布 BTC 储备策略时市场反应温和，但持续增持后形成强叙事。Meanwhile 需证明其商业模式可持续性。",
+  "links": [
+    "https://cointelegraph.com/news/bitcoin-life-insurer-meanwhile-raises-82m-to-expand-btc-denominated-financial-products"
+  ],
+  "metadata": {
+    "original_confidence": 0.85,
+    "adjusted_confidence": 0.72,
+    "adjustment_reason": "间接影响 + 重复报道 + 小众机构",
+    "institutional_tier": "emerging_startup",
+    "funding_round": "Series B",
+    "total_raised": "$143M",
+    "lead_investors": ["Haun Ventures", "Bain Capital Crypto"],
+    "monitoring_metrics": [
+      "Meanwhile BTC 储备余额变化",
+      "保单销售数据（若公开）",
+      "同类竞品出现情况"
+    ]
+  }
+}

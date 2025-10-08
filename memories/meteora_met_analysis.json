@@ -1,0 +1,79 @@
+{
+  "text": "**Meteora公布MET代币经济学：48%的供应量将在TGE时流通**\n\n深潮 TechFlow 消息，10 月 8 日，Solana 生态流动性协议 Meteora 公布 MET 代币经济学，48% 总供应量将在 TGE 时流通。根据 Meteora 计划，20% 的代币分配给 Mercurial 质押者，15% 分配给 Meteora 用户（通过 LP 刺激计划），3% 分配给 Launchpads 与 Launchpool 生态，2% 分配给链下贡献者，3% 分配给 Jupiter 质押刺激计划，3% 分配给中心化交易平台、做市商等，2% 分配给 M 3 M 3 质押者。剩余部分中，18% 分配给团队，6 年线性归属，34% 分配给 Meteora 储备，同样线性归属 6 年。\n \n https://www.techflowpost.com/newsletter/detail_101014.html",
+  "source": "TechFlow 深潮 ｜ 加密货币&区块链新闻",
+  "timestamp": "2024-10-08T11:30:43.646894",
+  "historical_reference": {
+    "entries": [],
+    "enabled": true
+  },
+  "initial_analysis": {
+    "summary": "Solana生态流动性协议Meteora公布MET代币经济学，TGE时48%供应量流通（高流通率）。分配：20% Mercurial质押者、15% LP用户、18%团队（6年归属）、34%储备（6年归属）。涉及Jupiter质押激励和CEX做市。",
+    "event_type": "tokenomics_announcement",
+    "asset": "MET",
+    "blockchain": "Solana",
+    "related_entities": [
+      "Meteora",
+      "Mercurial",
+      "Jupiter"
+    ],
+    "action": "observe",
+    "confidence": 0.80,
+    "risk_flags": [
+      "high_initial_circulation",
+      "tge_imminent"
+    ],
+    "opportunity_flags": [
+      "long_term_vesting",
+      "ecosystem_incentives"
+    ],
+    "key_metrics": {
+      "tge_circulation_rate": "48%",
+      "team_allocation": "18%",
+      "team_vesting": "6 years linear",
+      "reserve_allocation": "34%",
+      "reserve_vesting": "6 years linear",
+      "community_allocation": "48%"
+    },
+    "token_distribution": {
+      "mercurial_stakers": "20%",
+      "meteora_lp_users": "15%",
+      "launchpads_launchpool": "3%",
+      "offchain_contributors": "2%",
+      "jupiter_staking": "3%",
+      "cex_market_makers": "3%",
+      "m3m3_stakers": "2%",
+      "team": "18%",
+      "reserve": "34%"
+    },
+    "notes": "48%的TGE流通率属于中等偏高水平，可能在初期造成抛压。积极因素：团队和储备代币有6年长期归属期，显示长期承诺；社区分配占比高（48%），有利于去中心化。涉及Solana生态重要项目Jupiter的质押激励，可能带来协同效应。建议观察TGE后的价格表现和流动性情况。",
+    "links": [
+      "https://www.techflowpost.com/newsletter/detail_101014.html"
+    ],
+    "tags": [
+      "tokenomics",
+      "TGE",
+      "Solana",
+      "DeFi",
+      "liquidity_protocol",
+      "token_launch"
+    ]
+  },
+  "optimization_notes": {
+    "corrections": [
+      "timestamp年份从2025修正为2024（原始数据错误）",
+      "event_type从'product_launch'优化为'tokenomics_announcement'更准确",
+      "增加blockchain字段标识为Solana生态项目"
+    ],
+    "enhancements": [
+      "添加related_entities字段关联Mercurial和Jupiter等重要生态项目",
+      "添加risk_flags标识高初始流通率和TGE临近的风险",
+      "添加opportunity_flags标识长期归属和生态激励的机会",
+      "添加key_metrics提取关键数据指标",
+      "添加token_distribution完整列出代币分配明细",
+      "优化summary使其更简洁并包含关键信息",
+      "增加tags便于分类检索",
+      "notes中增加更深入的利弊分析和建议",
+      "confidence从0.75提升到0.80，因信息完整且来源可靠"
+    ]
+  }
+}

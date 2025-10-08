@@ -1,20 +1,19 @@
 {
-  "summary": "Forward Industries ($FORD) 宣布推出 Solana 验证器并与 DoubleZero 光纤网络集成，旨在优化网络性能、增加收入和带宽、减少延迟。DoubleZero 强调互联网资本市场需要专用基础设施而非公共互联网。",
-  "event_type": "partnership",
-  "asset": "SOL",
-  "asset_name": "Solana",
-  "action": "observe",
-  "direction": "neutral_to_bullish",
-  "confidence": 0.68,
-  "strength": "low_to_medium",
+  "summary": "Canary已为LTC和HBAR现货ETF提交S-1修正案，费率0.95%，彭博分析师称这是上线前最后一步。ETF获批将为两种资产带来传统金融资金流入渠道，利好中长期价格表现。",
+  "event_type": "regulatory_approval",
+  "asset": "LTC,HBAR",
+  "asset_name": "Litecoin,Hedera",
+  "action": "buy",
+  "direction": "bullish",
+  "confidence": 0.72,
+  "strength": "medium",
   "risk_flags": [
-    "limited_direct_price_impact",
-    "technical_narrative_vs_fundamental",
-    "forward_industries_relevance_unclear"
+    "regulatory_uncertainty",
+    "dual_asset_dilution",
+    "market_timing_risk"
   ],
-  "notes": "**修正理由**：\n1. **置信度下调（0.85 → 0.68）**：虽然合作方向积极，但历史案例显示类似技术整合事件（10-05 案例 377 个验证器部署占 24.5% 权益）并未引发 SOL 价格显著波动。Forward Industries 作为传统制造企业进入加密领域的影响力有限，市场对此类"试点验证器"公告反应通常滞后。\n\n2. **风险点补充**：\n   - **流动性风险低**：SOL 作为主流资产流动性充足，但此事件非需求驱动型催化剂。\n   - **市场情绪**：DoubleZero 的基础设施叙事（专用光纤网络）属于长期主题，短期难以转化为交易量或价格动能。历史案例中 2Z 代币关注度（0.8 置信度）高于此次事件对 SOL 的影响。\n   - **监管中性**：无直接监管风险，但传统企业（FORD）涉足区块链可能面临合规审查。\n\n3. **操作建议逻辑**：\n   - 此事件属于「基础设施升级」而非「生态爆发性增长」，对 SOL 的影响更多体现在网络质量改善而非投机需求。\n   - 若后续数据显示验证器收益显著提升或 DoubleZero 网络被更多主流项目采用，可上调至 buy 信号。\n   - 当前阶段建议**观察 Solana 网络指标变化**（如 TPS、延迟改善数据）和 DoubleZero 客户增长情况。\n\n4. **历史对比**：\n   - 10-05 案例（377 验证器，24.5% 权益）影响有限，本次单一企业试点规模更小。\n   - 10-02 案例中 2Z 代币上线 DFlow 协议的置信度为 0.8，说明市场对 DoubleZero **原生代币** 的关注度高于其对 SOL 的间接利好。",
+  "notes": "【修正说明】\n1. 事件类型修正：从'product_launch'改为'regulatory_approval' - S-1修正案提交属于监管审批流程的最后阶段，而非产品已上线\n2. 置信度下调：从0.85降至0.72 - 理由如下：\n   a) S-1提交≠必然获批，仍存在监管不确定性\n   b) LTC和HBAR市场热度不如BTC/ETH，ETF需求待验证\n   c) 0.95%费率偏高（BTC现货ETF多为0.2-0.5%），可能影响吸引力\n3. 资产识别优化：同时标记LTC和HBAR，避免单一资产偏向\n4. 风险点补充：\n   - 双资产同时推进可能分散市场关注度\n   - 若SEC审批延迟或要求进一步修改，可能引发失望情绪\n   - 当前加密市场整体波动性较高，需关注宏观环境\n\n【操作建议】\n- 建议小仓位布局（5-10%配置），优先选择LTC（流动性更好）\n- 设置止损位：LTC跌破关键支撑位或SEC发布负面信号时减仓\n- 关注后续催化剂：SEC最终批复时间、ETF上市首日资金流向\n- 对比参考：BTC/ETH现货ETF获批后首月平均涨幅20-35%，但LTC/HBAR体量较小，预期涨幅可能更高但波动更大",
   "links": [
-    "https://x.com/doublezero/status/1975566093881340004",
-    "businesswire.com/news/home/2025"
+    "https://www.jinse.cn/lives/480980.html"
   ]
 }
