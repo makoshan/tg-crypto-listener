@@ -36,6 +36,7 @@ from .memory import (
     LocalMemoryStore,
     HybridMemoryRepository,
 )
+from .pipeline import LangGraphMessagePipeline, PipelineDependencies, PipelineResult
 from .db.models import AiSignalPayload, NewsEventPayload
 
 logger = setup_logger(__name__)
@@ -54,6 +55,8 @@ class TelegramListener:
         self.translator: Translator | None = None
         self.ai_engine = AiSignalEngine.from_config(self.config)
         self.running = False
+        self.pipeline_enabled = getattr(self.config, "USE_LANGGRAPH_PIPELINE", False)
+        self.pipeline: LangGraphMessagePipeline | None = None
         self.stats = {
             "total_received": 0,
             "filtered_out": 0,
@@ -167,6 +170,9 @@ class TelegramListener:
             else:
                 self.translator = None
 
+        if self.pipeline_enabled:
+            self._initialize_pipeline()
+
         logger.info("🚀 正在连接到 Telegram...")
         await self.client.start(phone=self.config.TG_PHONE)
 
@@ -192,6 +198,37 @@ class TelegramListener:
             logger.info(f"✅ 目标频道验证成功: {title}")
         except Exception as exc:  # pylint: disable=broad-except
             logger.warning(f"⚠️ 目标频道验证失败: {exc}")
+
+    def _initialize_pipeline(self) -> None:
+        if not self.pipeline_enabled:
+            return
+        if not self.forwarder:
+            logger.warning("🚫 无法初始化 LangGraph 管线：转发器未准备就绪")
+            return
+
+        dependencies = PipelineDependencies(
+            config=self.config,
+            deduplicator=self.deduplicator,
+            translator=self.translator,
+            ai_engine=self.ai_engine,
+            forwarder=self.forwarder,
+            news_repository=self.news_repository,
+            signal_repository=self.signal_repository,
+            memory_repository=self.memory_repository,
+            db_enabled=self.db_enabled,
+            stats=self.stats,
+            logger=logger,
+            collect_keywords=self._collect_keywords,
+            extract_media=self._extract_media,
+            build_ai_kwargs=self._build_ai_kwargs,
+            should_include_original=self._should_include_original,
+            append_links=self._append_links,
+            collect_links=self._collect_links,
+            persist_event=self._persist_event,
+            update_ai_stats=self._update_ai_stats,
+        )
+        self.pipeline = LangGraphMessagePipeline(dependencies)
+        logger.info("🧭 LangGraph 管线已启用")
 
     async def start_listening(self) -> None:
         """Register handlers and start event loop."""
@@ -225,6 +262,35 @@ class TelegramListener:
             await self._cleanup()
 
     async def _handle_new_message(self, event) -> None:
+        if self.pipeline_enabled and self.pipeline:
+            try:
+                result = await self.pipeline.run(event)
+            except Exception as exc:  # pylint: disable=broad-except
+                logger.error("LangGraph 管线执行失败，回退到传统流程: %s", exc, exc_info=True)
+                await self._handle_new_message_legacy(event)
+                return
+
+            self._log_pipeline_result(result)
+            return
+
+        await self._handle_new_message_legacy(event)
+
+    def _log_pipeline_result(self, result: PipelineResult) -> None:
+        if result.status == "dropped":
+            logger.debug("LangGraph 管线丢弃消息: reason=%s", result.drop_reason)
+        elif result.status == "forwarded":
+            logger.debug("LangGraph 管线转发完成")
+        elif result.status == "processed":
+            logger.debug("LangGraph 管线处理完成，无需转发")
+        else:
+            logger.debug(
+                "LangGraph 管线完成: status=%s forwarded=%s reason=%s",
+                result.status,
+                result.forwarded,
+                result.drop_reason,
+            )
+
+    async def _handle_new_message_legacy(self, event) -> None:
         try:
             self.stats["total_received"] += 1
 

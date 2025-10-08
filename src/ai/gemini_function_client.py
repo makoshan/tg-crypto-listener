@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import inspect
 from dataclasses import dataclass
 from typing import Any, Iterable, List, Optional, Sequence
 
@@ -73,6 +74,18 @@ class GeminiFunctionCallingClient:
         self._timeout = float(timeout)
         self._max_retries = max(0, int(max_retries))
         self._retry_backoff = max(0.0, float(retry_backoff_seconds))
+        self._tool_generator = getattr(self._client, "responses", None)
+        self._supports_tool_api = bool(self._tool_generator) and hasattr(self._tool_generator, "generate")
+        self._tool_param_name = (self._resolve_content_param(getattr(self._tool_generator, "generate"))
+                                 if self._supports_tool_api else None)
+
+        models = getattr(self._client, "models", None)
+        self._model_generate = None
+        self._model_generate_param = None
+        if models is not None and hasattr(models, "generate_content"):
+            self._model_generate = models.generate_content
+            self._model_generate_param = self._resolve_content_param(self._model_generate)
+
 
     async def generate_content_with_tools(
         self,
@@ -131,30 +144,103 @@ class GeminiFunctionCallingClient:
     ) -> GeminiFunctionResponse:
         contents = self._convert_messages(messages)
 
-        request_kwargs: dict[str, Any] = {
-            "model": self._model_name,
-            "contents": contents,
-        }
-        if tools:
-            request_kwargs["tools"] = list(tools)
-
-        response = self._generate_with_fallback(request_kwargs)
+        if tools and self._supports_tool_api:
+            try:
+                response = self._call_with_tools(contents, tools)
+            except AiServiceError as exc:
+                logger.debug("Gemini 工具调用不可用，回退普通调用: %s", exc)
+                response = self._call_without_tools(contents)
+        else:
+            response = self._call_without_tools(contents)
 
         text = self._extract_text(response)
         function_calls = self._extract_function_calls(response)
         return GeminiFunctionResponse(text=text, function_calls=function_calls)
 
-    def _generate_with_fallback(self, kwargs: dict[str, Any]) -> Any:
-        """Call available google-genai API entrypoint."""
-        if hasattr(self._client, "responses"):
-            generator = getattr(self._client, "responses")
-            if hasattr(generator, "generate"):
-                return generator.generate(**kwargs)
-        if hasattr(self._client, "models"):
-            models = getattr(self._client, "models")
-            if hasattr(models, "generate_content"):
-                return models.generate_content(**kwargs)
-        raise AiServiceError("当前 google-genai 客户端不支持所需的接口")
+    def _resolve_content_param(self, method: Any) -> str | None:
+        try:
+            parameters = inspect.signature(method).parameters
+        except (ValueError, TypeError):
+            return None
+        for candidate in ("contents", "input", "content"):
+            if candidate in parameters:
+                return candidate
+        for name in parameters.keys():
+            if name not in {"self", "model"}:
+                return name
+        return None
+
+    def _invoke_generate(
+        self,
+        method: Any,
+        contents: Any,
+        *,
+        tools: Optional[Iterable[Any]] = None,
+        preferred_param: str | None = None,
+    ) -> Any:
+        candidates: list[str] = []
+        if preferred_param:
+            candidates.append(preferred_param)
+        resolved = self._resolve_content_param(method)
+        if resolved and resolved not in candidates:
+            candidates.append(resolved)
+        for fallback in ("contents", "input", "content"):
+            if fallback not in candidates:
+                candidates.append(fallback)
+        last_exc: TypeError | None = None
+        tool_payload = None
+        if tools is not None:
+            tool_payload = list(tools)
+            if not tool_payload:
+                tool_payload = None
+        for param in candidates:
+            kwargs = {"model": self._model_name, param: contents}
+            if tool_payload is not None:
+                kwargs["tools"] = tool_payload
+            try:
+                return method(**kwargs)
+            except TypeError as exc:  # pragma: no cover - SDK signature mismatch
+                last_exc = exc
+                continue
+        raise AiServiceError(f"Gemini 调用参数错误: {last_exc}") from (last_exc or TypeError("invalid call"))
+
+    def _call_with_tools(self, contents: Any, tools: Iterable[Any]) -> Any:
+        if not self._supports_tool_api or self._tool_generator is None:
+            raise AiServiceError("当前 google-genai 客户端不支持工具调用")
+        method = getattr(self._tool_generator, "generate")
+        try:
+            return self._invoke_generate(
+                method,
+                contents,
+                tools=tools,
+                preferred_param=self._tool_param_name,
+            )
+        except AiServiceError as exc:
+            raise AiServiceError("当前 google-genai 客户端不支持工具调用") from exc
+
+    def _call_without_tools(self, contents: Any) -> Any:
+        last_error: AiServiceError | None = None
+        if self._model_generate is not None:
+            try:
+                return self._invoke_generate(
+                    self._model_generate,
+                    contents,
+                    preferred_param=self._model_generate_param,
+                )
+            except AiServiceError as exc:  # pragma: no cover - defensive
+                last_error = exc
+        if self._supports_tool_api and self._tool_generator is not None:
+            try:
+                return self._invoke_generate(
+                    getattr(self._tool_generator, "generate"),
+                    contents,
+                    preferred_param=self._tool_param_name,
+                )
+            except AiServiceError as exc:  # pragma: no cover - defensive
+                last_error = exc
+        if last_error is not None:
+            raise last_error
+        raise AiServiceError("当前 google-genai 客户端不支持生成调用")
 
     def _convert_messages(self, messages: Sequence[dict[str, str]] | str) -> Any:
         if isinstance(messages, str):

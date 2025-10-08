@@ -100,6 +100,7 @@ class Config:
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
 
     SESSION_PATH: str = "./session/tg_session"
+    USE_LANGGRAPH_PIPELINE: bool = _as_bool(os.getenv("USE_LANGGRAPH_PIPELINE", "false"))
 
     # AI configuration
     AI_ENABLED: bool = _as_bool(os.getenv("AI_ENABLED", "false"))

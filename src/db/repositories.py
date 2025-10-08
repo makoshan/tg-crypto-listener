@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Dict, List, Optional
 
 from .models import AiSignalPayload, NewsEventPayload, StrategyInsightPayload
 from .supabase_client import SupabaseClient, SupabaseError
@@ -37,21 +36,11 @@ class NewsEventRepository:
         threshold: float = 0.92,
         time_window_hours: int = 72,
     ) -> Optional[Dict[str, Any]]:
-        """Check for semantically similar events using vector similarity.
-
-        Args:
-            embedding: Vector to compare against
-            threshold: Similarity threshold (0-1), default 0.92
-            time_window_hours: Only search within this time window
-
-        Returns:
-            Dict with 'id', 'content_text' and 'similarity' if found, None otherwise
-        """
+        """Check for semantically similar events using vector similarity."""
         if not embedding:
             return None
 
         try:
-            # Call PostgreSQL RPC function for vector similarity search
             response = await self._client.rpc(
                 "find_similar_events",
                 {
@@ -59,31 +48,25 @@ class NewsEventRepository:
                     "similarity_threshold": threshold,
                     "time_window_hours": time_window_hours,
                     "max_results": 1,
-                }
+                },
             )
-
-            if isinstance(response, list) and response:
-                result = response[0]
-                return {
-                    "id": int(result["id"]),
-                    "content_text": result.get("content_text", ""),
-                    "similarity": float(result.get("similarity", 0.0)),
-                }
-
-            return None
-
         except SupabaseError:
-            # RPC function might not exist yet, return None
             return None
         except Exception:
-            # Fallback: return None on any error
             return None
 
+        if isinstance(response, list) and response:
+            result = response[0]
+            return {
+                "id": int(result["id"]),
+                "content_text": result.get("content_text", ""),
+                "similarity": float(result.get("similarity", 0.0)),
+            }
+        return None
+
     async def insert_event(self, payload: NewsEventPayload) -> Optional[int]:
-        # Convert embedding list to PostgreSQL vector format string
         embedding_str = None
         if payload.embedding:
-            # PostgreSQL vector format: "[0.1,0.2,0.3,...]"
             embedding_str = "[" + ",".join(str(v) for v in payload.embedding) + "]"
 
         data = {
@@ -98,7 +81,7 @@ class NewsEventRepository:
             "media_refs": payload.media_refs or [],
             "hash_raw": payload.hash_raw,
             "hash_canonical": payload.hash_canonical,
-            "embedding": embedding_str,  # Convert list to PostgreSQL vector string
+            "embedding": embedding_str,
             "keywords_hit": payload.keywords_hit or [],
             "ingest_status": payload.ingest_status,
             "metadata": payload.metadata or {},

@@ -9,3 +9,5 @@ deepl>=1.17.0
 openai>=1.0.0
 anthropic>=0.34.0
 supabase>=2.0.0
+langchain-core>=0.3.0
+langgraph>=0.1.8

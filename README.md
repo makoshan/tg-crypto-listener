@@ -29,6 +29,7 @@
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
+source ./.venv/bin/activate  # macOS/Linux 切换已存在的虚拟环境
 pip install -r requirements.txt
 python -m src.listener
 ```
@@ -58,6 +59,7 @@ PM2 会读取 `.env`，守护进程并在崩溃后自动拉起，也可配合 `p
 | `AI_TIMEOUT_SECONDS` / `AI_RETRY_ATTEMPTS` / `AI_RETRY_BACKOFF_SECONDS` | AI 调用超时与重试策略。|
 | `AI_MAX_CONCURRENCY` | 同时运行的 Gemini 请求数；遇到 503 可调低。|
 | `AI_SKIP_NEUTRAL_FORWARD` | 当 AI 判定为观望/低优先级时是否直接跳过转发。|
+| `USE_LANGGRAPH_PIPELINE` | 启用 LangGraph 消息处理管线（实验特性，默认 `false`）。|
 | `TRANSLATION_ENABLED` | 是否启用翻译聚合模块。|
 | `TRANSLATION_PROVIDERS` | 翻译服务优先级列表，默认包含 `deepl,azure,google,amazon,baidu,alibaba,tencent,huawei,volcano,niutrans`。|
 | `TRANSLATION_TARGET_LANGUAGE` | 目标语言（默认 `zh`，使用 ISO 639-1）。|
