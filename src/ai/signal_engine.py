@@ -663,6 +663,9 @@ class AiSignalEngine:
                 links = [str(item).strip() for item in links_raw if str(item).strip()]
             else:
                 links = []
+            if links:
+                # 去重同时保持顺序，避免同一来源被重复渲染
+                links = list(dict.fromkeys(links))
             if isinstance(asset_field, (list, tuple)):
                 asset = ",".join(str(item).strip() for item in asset_field if str(item).strip())
             else:
