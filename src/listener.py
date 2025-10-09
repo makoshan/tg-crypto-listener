@@ -687,7 +687,7 @@ class TelegramListener:
         normalized = []
         for match in matches:
             # Strip Markdown link syntax residue: ](url) or [text](url)
-            cleaned = match.lstrip('](').rstrip('.,!?)\]\"\'')
+            cleaned = match.lstrip('](').rstrip(r'.,!?)\]"\'')
             # Skip if still contains invalid prefixes
             if cleaned and not cleaned.startswith((']', '[')):
                 normalized.append(cleaned)
