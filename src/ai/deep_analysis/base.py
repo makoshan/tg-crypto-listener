@@ -97,7 +97,7 @@ def build_deep_analysis_messages(
         "- 内容含糊（"大事件"、"重要更新"）无具体细节 → 添加 speculative，降低 confidence 至 ≤0.4\n"
         "- 无法验证的声明或预期 → 添加 unverifiable\n"
         "- 仅基于社交媒体发言但无实质内容 → 标记为 speculative，即使发言者是知名人士\n"
-        "- "一夜暴富"等故事 → 识别为 scam_alert，confidence ≤0.4，添加 speculative 和 liquidity_risk\n\n"
+        "- Meme 币暴富案例（如 BNBHolder、PEPE、SHIB 巨额获利）→ **必须**识别为 scam_alert，confidence ≤0.4，添加 speculative 和 liquidity_risk，即使有具体链上数据也不可复制，不应作为交易建议\n\n"
         "输出：JSON 格式，包含 summary、event_type、asset、asset_name、action、direction、"
         "confidence、strength、risk_flags、notes、links。"
         "event_type 可选值：listing、delisting、hack、regulation、funding、whale、liquidation、partnership、product_launch、governance、macro、celebrity、airdrop、scam_alert、other。"
