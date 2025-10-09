@@ -510,11 +510,18 @@ class TelegramListener:
                     and signal_result.status == "skip"
                     and signal_result.summary != "AI disabled"
                 )
-                if low_confidence_skip or neutral_skip:
+                # 二次过滤：观望类信号且置信度 < 0.85 不转发（降低噪音）
+                low_value_observe = (
+                    signal_result.action == "observe"
+                    and signal_result.confidence < 0.85
+                )
+                if low_confidence_skip or neutral_skip or low_value_observe:
                     should_skip_forward = True
                     self.stats["ai_skipped"] += 1
+                    reason = "低价值观望信号" if low_value_observe else "低优先级"
                     logger.info(
-                        "🤖 AI 评估为低优先级，跳过转发: source=%s action=%s confidence=%.2f",
+                        "🤖 AI 评估为%s，跳过转发: source=%s action=%s confidence=%.2f",
+                        reason,
                         source_name,
                         signal_result.action,
                         signal_result.confidence,
@@ -543,11 +550,17 @@ class TelegramListener:
 
             ai_kwargs = self._build_ai_kwargs(signal_result, source_name)
             if not ai_kwargs:
-                # 强制要求每条推送包含 AI 摘要，若缺失则跳过
+                # AI 分析未返回成功结果（可能是 asset=NONE 或其他原因）
                 self.stats["ai_skipped"] += 1
+                reason = (
+                    f"status={signal_result.status}"
+                    if signal_result and signal_result.status != "success"
+                    else "缺少 AI 摘要"
+                )
                 logger.info(
-                    "🤖 缺少 AI 摘要，跳过转发: source=%s",
+                    "🤖 AI 分析未通过，跳过转发: source=%s reason=%s",
                     source_name,
+                    reason,
                 )
                 await self._persist_event(
                     source_name,
@@ -668,12 +681,15 @@ class TelegramListener:
     def _extract_links(text: str | None) -> list[str]:
         if not text:
             return []
+        # Match URLs, excluding common Markdown artifacts
         pattern = re.compile(r"https?://[\w\-._~:/?#\[\]@!$&'()*+,;=%]+", re.IGNORECASE)
         matches = pattern.findall(text)
         normalized = []
         for match in matches:
-            cleaned = match.rstrip('.,!?)\]\"\'')
-            if cleaned:
+            # Strip Markdown link syntax residue: ](url) or [text](url)
+            cleaned = match.lstrip('](').rstrip('.,!?)\]\"\'')
+            # Skip if still contains invalid prefixes
+            if cleaned and not cleaned.startswith((']', '[')):
                 normalized.append(cleaned)
         return normalized
 

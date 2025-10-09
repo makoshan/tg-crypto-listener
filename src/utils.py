@@ -175,6 +175,7 @@ EVENT_TYPE_LABELS = {
     "macro": "宏观动向",
     "celebrity": "名人言论",
     "airdrop": "空投激励",
+    "scam_alert": "⚠️ 高风险警告",
     "other": "其他",
 }
 
@@ -184,6 +185,9 @@ RISK_FLAG_LABELS = {
     "regulation_risk": "合规风险",
     "confidence_low": "置信度低",
     "data_incomplete": "信息不完整",
+    "vague_timeline": "时间线模糊",
+    "speculative": "投机性内容",
+    "unverifiable": "无法验证",
 }
 
 

@@ -69,6 +69,7 @@ ALLOWED_EVENT_TYPES = {
     "macro",
     "celebrity",
     "airdrop",
+    "scam_alert",      # 疑似骗局或高风险投机（rug pull、pump & dump 等）
     "other",
 }
 ALLOWED_RISK_FLAGS = {
@@ -77,6 +78,9 @@ ALLOWED_RISK_FLAGS = {
     "regulation_risk",
     "confidence_low",
     "data_incomplete",
+    "vague_timeline",      # 时间线模糊（"即将"、"近期"、"不久"等）
+    "speculative",         # 投机性/无实质内容（"大事件"、"重要更新"等）
+    "unverifiable",        # 无法验证的声明或预期
 }
 
 
@@ -528,8 +532,8 @@ class AiSignalEngine:
             is_high_value,
         )
 
-        # 排除低价值事件类型（macro、other 触发过多且价值低）
-        excluded_event_types = {"macro", "other", "airdrop", "governance", "celebrity"}
+        # 排除低价值事件类型（macro、other 触发过多且价值低，scam_alert 已经是风险警告）
+        excluded_event_types = {"macro", "other", "airdrop", "governance", "celebrity", "scam_alert"}
         should_skip_deep = gemini_result.event_type in excluded_event_types
 
         deep_engine = self._deep_engine
@@ -733,7 +737,20 @@ class AiSignalEngine:
         effective_threshold = max(self._threshold, 0.4)
         # 仅当模型识别到加密货币标的时才推送
         has_crypto_asset = asset != "NONE"
-        status = "success" if (confidence >= effective_threshold and has_crypto_asset) else "skip"
+
+        # 检查是否包含噪音标志（speculative、vague_timeline、unverifiable）
+        noise_flags = {"speculative", "vague_timeline", "unverifiable"}
+        has_noise_flag = any(flag in noise_flags for flag in filtered_flags)
+
+        # 如果包含噪音标志且置信度不足，自动降级为 skip
+        # 注：即使有噪音标志，如果置信度 >= 0.7 仍可能是有价值的信号（如知名人士的模糊预告）
+        if has_noise_flag and confidence < 0.7:
+            status = "skip"
+        elif confidence >= effective_threshold and has_crypto_asset:
+            status = "success"
+        else:
+            status = "skip"
+
         if not has_crypto_asset and "data_incomplete" not in filtered_flags:
             filtered_flags.append("data_incomplete")
 
@@ -789,12 +806,25 @@ def build_signal_prompt(payload: EventPayload) -> list[dict[str, str]]:
         "你是加密交易台的资深分析师。"
         "需从多语种快讯中快速提炼可交易信号，并严格使用 JSON 结构输出结果。"
         "输出字段固定为 summary、event_type、asset、asset_name、action、direction、confidence、strength、risk_flags、notes。"
-        "event_type 仅能取 listing、delisting、hack、regulation、funding、whale、liquidation、partnership、product_launch、governance、macro、celebrity、airdrop、other。"
+        "event_type 仅能取 listing、delisting、hack、regulation、funding、whale、liquidation、partnership、product_launch、governance、macro、celebrity、airdrop、scam_alert、other。"
         "action 为 buy、sell 或 observe；direction 为 long、short 或 neutral。"
-        "confidence 范围 0-1，保留两位小数，并与 high/medium/low 的 strength 保持一致性。"
-        "risk_flags 为数组，枚举 price_volatility、liquidity_risk、regulation_risk、confidence_low、data_incomplete。"
+        "\n\n## 置信度（confidence）的语义定义\n"
+        "confidence 表示**该信号作为交易建议的可靠性**，而非事件真实性：\n"
+        "- 0.7-1.0：高质量买入/卖出信号，有充分数据支撑，可直接交易\n"
+        "- 0.4-0.7：中等质量信号，需结合其他信息判断\n"
+        "- 0.0-0.4：低质量信号或风险警告，不建议交易\n"
+        "**关键**：即使事件真实性高（如确实有交易员暴富），但若这不是一个好的交易机会（如高风险投机、无法复制的个案），confidence 应设为低值（≤0.4）。\n\n"
+        "risk_flags 为数组，枚举 price_volatility、liquidity_risk、regulation_risk、confidence_low、data_incomplete、vague_timeline、speculative、unverifiable。"
         "historical_reference.entries 提供近似历史案例，包含时间、资产、动作、置信度与相似度；若列表非空，务必结合这些案例比较当前事件并在 notes 中说明与历史是否一致，若为空可直接按照当前事实判断。"
         "仅当事件直接涉及可识别的加密货币或代币（通常为 2-10 位大写字母/数字的代码，如 BTC、ETH、SOL、BNB、XRP 等）时，输出准确的币种代码；若提及股票、股指、ETF（如特斯拉、S&P500、纳指、恒生指数等）或无法确定具体加密资产，请将 asset 设置为 NONE 并在 notes 中说明原因，禁止返回 GENERAL、CRYPTO、MARKET 等泛化词。"
+        "\n\n## 信号质量评估准则（Signal vs Noise）\n"
+        "严格区分可交易信号与市场噪音，优先考虑可验证性和具体性：\n"
+        "1. **时间线明确性**：若事件时间模糊（如"即将"、"近期"、"不久"、"soon"），添加 vague_timeline 标志并降低 confidence（建议 ≤0.5）。\n"
+        "2. **内容具体性**：若描述含糊（如"大事件"、"重要更新"、"major announcement"）而无具体细节，添加 speculative 标志并降低 confidence（建议 ≤0.4）。\n"
+        "3. **可验证性**：若声明无法通过客观数据验证（仅为预期、猜测或未经证实的传言），添加 unverifiable 标志。\n"
+        "4. **数据支撑**：优先考虑有链上数据、交易量、价格变化、官方公告等客观证据的信号；仅基于社交媒体发言（即使是创始人）但无实质内容的，应标记为 speculative。\n"
+        "5. **置信度调整**：模糊表述应显著降低 confidence，即使发言者是知名人士，若缺乏具体细节，置信度不应超过 0.6。\n"
+        "6. **高风险投机事件**：对于"一夜暴富"、"快速翻倍"等故事，应识别为 scam_alert 事件类型，设置 action=observe，confidence ≤0.4，添加 speculative 和 liquidity_risk 标志，并在 notes 中警告风险。这类事件通常不可复制，极易引发 FOMO 情绪，不应作为交易建议。\n"
         "\n\n## 图片分析指南\n"
         "当消息包含图片时，请仔细识别图片内容类型并提取关键信息：\n"
         "1. **交易所截图**（订单明细、持仓、成交记录等）：识别交易对、成交价格、成交数量、时间戳，提取资产代码（如 2Z/KRW 中的 2Z），分析交易行为（大额买入/卖出）。\n"
