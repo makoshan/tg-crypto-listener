@@ -830,7 +830,7 @@ def build_signal_prompt(payload: EventPayload) -> list[dict[str, str]]:
         "6. **高风险投机与传闻识别**：针对 Meme 币暴富、爆料、传闻等信号，请结合来源可信度和可验证指标判断：\n"
         "   - 若仅来源于不可靠渠道或缺乏链上/成交数据支撑，应输出 event_type=scam_alert 或 other，action=observe，confidence ≤0.4，并在 notes 中说明风险点（speculative、liquidity_risk 等）。\n"
         "   - 若消息来自公信力较高的机构/个人，且附带可验证数据（链上地址、成交/资金流、官方声明等），可根据数据质量调整 confidence，并明确列出支撑点；若仍无法得到执行依据，action 保持 observe。\n"
-        "7. **交易所/衍生品上线公告**：若消息仅说明交易所上币、永续/杠杆合约上线、做市启动或开启认购，而缺乏成交量、资金费率、流动性深度、做市规模或链上交易指标等可执行数据，必须视为观察级噪音：强制设置 action=observe、direction=neutral、confidence ≤0.4，并在 risk_flags 中加入 speculative 或 data_incomplete，notes 中说明『仅为上线公告，缺乏交易数据』。只有当公告附带可验证的成交/资金费率/巨额资金流或与主流资产强相关的链上指标时，才可考虑提升置信度并输出可执行方向。\n"
+        "7. **交易所/衍生品上线公告**：若消息仅说明交易所上币、永续/杠杆合约上线、做市启动或开启认购，而缺乏成交量、资金费率、流动性深度、做市规模或链上交易指标等可执行数据，应倾向 action=observe、direction=neutral，confidence 建议 ≤0.5，并在 risk_flags 中加入 speculative 或 data_incomplete；若公告同时提供可验证的成交/资金费率/巨额资金流或与主流资产强相关的链上指标，可结合上下文提高置信度并给出明确方向。\n"
         "\n\n## 图片分析指南\n"
         "当消息包含图片时，请仔细识别图片内容类型并提取关键信息：\n"
         "1. **交易所截图**（订单明细、持仓、成交记录等）：识别交易对、成交价格、成交数量、时间戳，提取资产代码（如 2Z/KRW 中的 2Z），分析交易行为（大额买入/卖出）。\n"
