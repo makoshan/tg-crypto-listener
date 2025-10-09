@@ -2,14 +2,15 @@
 
 from __future__ import annotations
 
-import logging
 import hashlib
+import logging
+import os
 import re
+import unicodedata
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, Set
 
-import os
 import colorlog
 
 
@@ -76,13 +77,20 @@ class MessageDeduplicator:
             del self.seen_hashes[key]
 
 
+def _normalize_text(text: str) -> str:
+    if not text:
+        return ""
+    normalized = unicodedata.normalize("NFKC", text)
+    return normalized.lower()
+
+
 def contains_keywords(text: str, keywords: Set[str]) -> bool:
-    """Check if text contains any keyword (case-insensitive)."""
+    """Check if text contains any keyword (case-insensitive, unicode-normalized)."""
     if not keywords:
         return True
 
-    text_lower = text.lower()
-    return any(keyword in text_lower for keyword in keywords)
+    normalized_text = _normalize_text(text)
+    return any(keyword in normalized_text for keyword in keywords)
 
 
 def compute_sha256(text: str) -> str:

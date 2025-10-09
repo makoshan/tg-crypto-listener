@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import unicodedata
 from pathlib import Path
 from typing import Any, Dict, List, Set
 
@@ -24,9 +25,16 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_KEYWORDS_FILE = PROJECT_ROOT / "keywords.txt"
 
 
+def _normalize_keyword(value: str) -> str:
+    if not value:
+        return ""
+    normalized = unicodedata.normalize("NFKC", value.strip())
+    return normalized.lower()
+
+
 def _load_keywords_from_env() -> Set[str]:
     return {
-        keyword.strip().lower()
+        _normalize_keyword(keyword)
         for keyword in os.getenv("FILTER_KEYWORDS", "").split(",")
         if keyword.strip()
     }
@@ -61,9 +69,9 @@ def _load_keywords_from_file(path: str | None) -> Set[str]:
                 if not line:
                     continue
                 for token in line.split(","):
-                    keyword = token.strip()
+                    keyword = _normalize_keyword(token)
                     if keyword:
-                        keywords.add(keyword.lower())
+                        keywords.add(keyword)
     except OSError as exc:
         print(f"⚠️ 无法读取关键词文件 {keywords_file}: {exc}")
 
