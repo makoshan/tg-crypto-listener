@@ -634,10 +634,21 @@ class AiSignalEngine:
         asset = ""
         try:
             data = json.loads(normalized_text)
+            # Parse confidence safely for debug log
+            confidence_debug = data.get("confidence", 0.0)
+            if isinstance(confidence_debug, str):
+                confidence_map = {"high": 0.8, "medium": 0.5, "low": 0.3}
+                confidence_debug = confidence_map.get(confidence_debug.lower(), 0.0)
+            else:
+                try:
+                    confidence_debug = float(confidence_debug)
+                except (ValueError, TypeError):
+                    confidence_debug = 0.0
+
             logger.debug(
                 "AI JSON 解析成功: action=%s confidence=%.2f",
                 data.get("action"),
-                float(data.get("confidence", 0.0)),
+                confidence_debug,
             )
             summary = str(data.get("summary", "")).strip()
             event_type = str(data.get("event_type", "other")).lower()
@@ -651,7 +662,27 @@ class AiSignalEngine:
             action = str(data.get("action", "observe")).lower()
             direction = str(data.get("direction", "neutral")).lower()
             strength = str(data.get("strength", "low")).lower()
-            confidence = float(data.get("confidence", 0.0))
+
+            # Handle confidence - should be float but AI sometimes returns string like "high"
+            confidence_raw = data.get("confidence", 0.0)
+            if isinstance(confidence_raw, str):
+                # Map string values to numeric confidence
+                confidence_map = {"high": 0.8, "medium": 0.5, "low": 0.3}
+                confidence = confidence_map.get(confidence_raw.lower(), 0.0)
+                logger.warning(
+                    "AI 返回了字符串 confidence '%s'，已转换为数字 %.2f",
+                    confidence_raw,
+                    confidence,
+                )
+            else:
+                try:
+                    confidence = float(confidence_raw)
+                except (ValueError, TypeError):
+                    logger.warning(
+                        "无法解析 confidence 值 '%s'，使用默认值 0.0",
+                        confidence_raw,
+                    )
+                    confidence = 0.0
             risk_flags = data.get("risk_flags", []) or []
             if not isinstance(risk_flags, list):
                 risk_flags = [str(risk_flags)]
