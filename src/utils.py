@@ -163,6 +163,12 @@ STRENGTH_LABELS = {
     "high": "高",
 }
 
+TIMEFRAME_LABELS = {
+    "short": "短期",
+    "medium": "中期",
+    "long": "长期",
+}
+
 DIRECTION_LABELS = {
     "long": "做多",
     "short": "做空",
@@ -215,6 +221,7 @@ def format_forwarded_message(
     ai_asset_names: str | None = None,
     ai_confidence: float | None = None,
     ai_strength: str | None = None,
+    ai_timeframe: str | None = None,
     ai_risk_flags: list[str] | None = None,
     ai_notes: str | None = None,
     context_source: str | None = None,
@@ -284,6 +291,8 @@ def format_forwarded_message(
         direction_cn = DIRECTION_LABELS.get(direction_key, ai_direction) if ai_direction else None
         strength_key = (ai_strength or "").lower()
         strength_cn = STRENGTH_LABELS.get(strength_key, ai_strength) if ai_strength else None
+        timeframe_key = (ai_timeframe or "").lower()
+        timeframe_cn = TIMEFRAME_LABELS.get(timeframe_key, ai_timeframe) if ai_timeframe else None
 
         line_parts: list[str] = []
         if asset_line:
@@ -299,6 +308,8 @@ def format_forwarded_message(
         line_parts.append(f"置信度: {confidence_text}")
         if strength_cn:
             line_parts.append(f"强度: {strength_cn}")
+        if timeframe_cn:
+            line_parts.append(f"周期: {timeframe_cn}")
 
         parts.append("- " + "，".join(line_parts))
 

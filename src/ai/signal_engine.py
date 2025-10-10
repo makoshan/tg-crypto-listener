@@ -29,6 +29,7 @@ logger = setup_logger(__name__)
 ALLOWED_ACTIONS = {"buy", "sell", "observe"}
 ALLOWED_DIRECTIONS = {"long", "short", "neutral"}
 ALLOWED_STRENGTH = {"low", "medium", "high"}
+ALLOWED_TIMEFRAMES = {"short", "medium", "long"}  # 短期（<1周）、中期（1周-1月）、长期（>1月）
 NO_ASSET_TOKENS = {
     "",
     "NONE",
@@ -112,6 +113,7 @@ class SignalResult:
     direction: str = "neutral"
     confidence: float = 0.0
     strength: str = "low"
+    timeframe: str = "medium"  # short/medium/long - 建议持仓时间范围
     risk_flags: list[str] = field(default_factory=list)
     raw_response: str = ""
     notes: str = ""
@@ -662,6 +664,7 @@ class AiSignalEngine:
             action = str(data.get("action", "observe")).lower()
             direction = str(data.get("direction", "neutral")).lower()
             strength = str(data.get("strength", "low")).lower()
+            timeframe = str(data.get("timeframe", "medium")).lower()
 
             # Handle confidence - should be float but AI sometimes returns string like "high"
             confidence_raw = data.get("confidence", 0.0)
@@ -719,6 +722,7 @@ class AiSignalEngine:
             action = "observe"
             direction = "neutral"
             strength = "low"
+            timeframe = "medium"
             confidence = 0.0
             risk_flags = ["confidence_low"]
             notes = ""
@@ -729,6 +733,8 @@ class AiSignalEngine:
         direction = direction if direction in ALLOWED_DIRECTIONS else "neutral"
         if strength not in ALLOWED_STRENGTH:
             strength = "low"
+        if timeframe not in ALLOWED_TIMEFRAMES:
+            timeframe = "medium"
 
         asset = asset.upper().strip()
         asset_tokens = [token.strip() for token in asset.split(",") if token.strip()]
@@ -798,6 +804,7 @@ class AiSignalEngine:
             direction=direction,
             confidence=confidence,
             strength=strength,
+            timeframe=timeframe,
             risk_flags=filtered_flags,
             raw_response=raw_text,
             notes=notes,
@@ -839,12 +846,18 @@ def build_signal_prompt(payload: EventPayload) -> list[dict[str, str]]:
     system_prompt = (
         "你是加密交易台的资深分析师，需要从多语种快讯中快速提炼可交易信号。\n"
         "务必仅输出一个 JSON 对象，禁止生成多段 JSON、列表外层或 Markdown 代码块，输出前后不得附加 ```、#、说明文字或额外段落。\n"
-        "JSON 字段固定为 summary、event_type、asset、asset_name、action、direction、confidence、strength、risk_flags、notes。\n"
+        "JSON 字段固定为 summary、event_type、asset、asset_name、action、direction、confidence、strength、timeframe、risk_flags、notes。\n"
         "event_type 仅能取 listing、delisting、hack、regulation、funding、whale、liquidation、partnership、product_launch、governance、macro、celebrity、airdrop、scam_alert、other。\n"
-        "action 为 buy、sell、observe；direction 为 long、short、neutral；strength 仅取 high、medium、low。\n"
+        "action 为 buy、sell、observe；direction 为 long、short、neutral；strength 仅取 high、medium、low；timeframe 仅取 short、medium、long。\n"
         "如事件涉及多个币种，asset 可为数组（如 [\"BTC\",\"ETH\"]），asset_name 用简体中文名以顿号或逗号分隔；若无法确认币种则 asset=NONE、asset_name=无，并在 notes 解释原因。\n"
         "\n## 置信度（confidence）\n"
         "confidence 衡量该信号是否值得执行：0.7-1.0 高可信、0.4-0.7 中等、0.0-0.4 仅提示风险或噪音；即使事件真实但不可执行，也应降低 confidence 至 ≤0.4。\n"
+        "\n## 时间范围（timeframe）\n"
+        "timeframe 表示建议持仓时间或影响周期：\n"
+        "- short（短期，<1周）：链上数据突变、巨鲸短期操作、短期事件催化（如空投、IDO）、技术面信号等需快速反应的机会\n"
+        "- medium（中期，1周-1月）：产品上线、合作公告、季度财报、中短期叙事（如某赛道热点）\n"
+        "- long（长期，>1月）：监管政策、宏观采用率提升、基础设施建设、长期叙事（如机构入场、ETF 净流入持续）\n"
+        "根据事件性质判断影响持续时间，例如：机构采用率提升→long；交易所上线→medium；巨鲸 24h 内买入→short。\n"
         "\n## 风险标志（risk_flags）\n"
         "risk_flags 数组仅允许 price_volatility、liquidity_risk、regulation_risk、confidence_low、data_incomplete、vague_timeline、speculative、unverifiable。\n"
         "仅在实际触发时添加标志，避免堆砌；当 confidence <0.4 或缺少关键数据，可加入 confidence_low 或 data_incomplete。\n"

@@ -711,7 +711,7 @@ class TelegramListener:
             return {}
 
         if signal_result.status != "success":
-            logger.info(
+            logger.debug(
                 "AI 状态为 %s，非成功结果，source=%s",
                 signal_result.status,
                 source,
@@ -739,6 +739,7 @@ class TelegramListener:
             "ai_asset_names": signal_result.asset_names,
             "ai_confidence": signal_result.confidence,
             "ai_strength": signal_result.strength,
+            "ai_timeframe": signal_result.timeframe,
             "ai_risk_flags": signal_result.risk_flags,
             "ai_notes": signal_result.notes,
         }
