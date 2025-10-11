@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import Any
 try:  # pragma: no cover - optional dependency
     from google import genai
     from google.genai import errors as genai_errors
@@ -22,10 +24,20 @@ class AiServiceError(RuntimeError):
 
 
 @dataclass
+class GeminiContentPart:
+    """Normalized Gemini content part."""
+
+    type: str
+    text: str | None = None
+    data: dict[str, Any] | None = None
+
+
+@dataclass
 class GeminiResponse:
     """Structured response returned by the Gemini client."""
 
     text: str
+    parts: list[GeminiContentPart] = field(default_factory=list)
 
 
 logger = logging.getLogger(__name__)
@@ -72,7 +84,7 @@ class GeminiClient:
 
         for attempt in range(self._max_retries + 1):
             try:
-                text = await asyncio.wait_for(
+                response = await asyncio.wait_for(
                     asyncio.to_thread(self._call_model, prompt, images),
                     timeout=self._timeout,
                 )
@@ -99,9 +111,9 @@ class GeminiClient:
                 debug_hint = "Gemini 暂时性异常详情" if last_error_temporary else "Gemini 非暂时性异常详情"
                 logger.debug(debug_hint, exc_info=True)
             else:
-                if not text:
+                if not response.text and not response.parts:
                     raise AiServiceError("Gemini 返回空响应")
-                return GeminiResponse(text=text)
+                return response
 
             if attempt < self._max_retries and self._retry_backoff > 0:
                 backoff = self._retry_backoff * (2 ** attempt)
@@ -115,7 +127,7 @@ class GeminiClient:
 
         raise AiServiceError(last_error_message, temporary=last_error_temporary) from last_exc
 
-    def _call_model(self, prompt: str | list, images: list[dict] = None) -> str:
+    def _call_model(self, prompt: str | list, images: list[dict] = None) -> GeminiResponse:
         import base64
 
         # Convert OpenAI-style messages to Gemini format
@@ -154,25 +166,179 @@ class GeminiClient:
             contents=contents,
         )
 
-        if hasattr(response, "text") and response.text:
-            return str(response.text)
+        parts = self._extract_parts(response)
+        text = self._combine_text_from_parts(parts)
 
-        candidates = getattr(response, "candidates", None)
-        if not candidates:
-            return ""
+        if not text:
+            direct_text = getattr(response, "text", None)
+            if direct_text:
+                text = str(direct_text)
+
+        return GeminiResponse(text=text or "", parts=parts)
+
+    def _extract_parts(self, response: Any) -> list[GeminiContentPart]:
+        candidates = getattr(response, "candidates", None) or []
+        normalized_parts: list[GeminiContentPart] = []
 
         for candidate in candidates:
             content = getattr(candidate, "content", None)
             if not content:
                 continue
-            parts = getattr(content, "parts", None)
-            if not parts:
+            parts = getattr(content, "parts", None) or []
+            for part in parts:
+                normalized_parts.append(self._normalize_part(part))
+            if normalized_parts:
+                break  # 优先取第一候选项，其余通常重复
+        return normalized_parts
+
+    def _normalize_part(self, part: Any) -> GeminiContentPart:
+        part_type = getattr(part, "type_", None) or getattr(part, "type", None)
+        text_value = getattr(part, "text", None)
+
+        raw_payload: dict[str, Any] | None = None
+
+        if isinstance(part, dict):
+            raw_payload = {k: v for k, v in part.items() if k != "text"}
+            if text_value is None and "text" in part:
+                text_value = part.get("text")
+            part_type = part_type or part.get("type") or part.get("kind")
+        else:
+            for attr in (
+                "function_call",
+                "inline_data",
+                "file_data",
+                "executable_code",
+                "code_execution_result",
+                "thought",
+                "thought_signature",
+                "json",
+                "parsed_json",
+                "metadata",
+            ):
+                if hasattr(part, attr):
+                    value = getattr(part, attr)
+                    if value is not None:
+                        raw_payload = raw_payload or {}
+                        raw_payload[attr] = self._safe_to_dict(value)
+
+            if raw_payload is None and hasattr(part, "to_dict"):
+                try:
+                    raw_payload = self._safe_to_dict(part.to_dict())
+                except Exception:
+                    raw_payload = None
+
+            if raw_payload is None:
+                extracted: dict[str, Any] = {}
+                for attr in dir(part):
+                    if attr.startswith("_") or attr in {"text", "type", "type_"}:
+                        continue
+                    value = getattr(part, attr)
+                    if callable(value):
+                        continue
+                    extracted[attr] = self._safe_to_dict(value)
+                raw_payload = extracted or None
+
+        sanitized_payload = self._sanitize_part_data(raw_payload)
+
+        if not part_type and sanitized_payload:
+            if isinstance(sanitized_payload, dict):
+                for candidate_key in ("type", "kind", "role", "mime_type"):
+                    candidate_value = sanitized_payload.get(candidate_key)
+                    if candidate_value:
+                        part_type = candidate_value
+                        break
+                if not part_type and len(sanitized_payload) == 1:
+                    part_type = next(iter(sanitized_payload.keys()))
+
+        if not part_type:
+            part_type = "text" if text_value is not None else (
+                part.__class__.__name__.lower() if not isinstance(part, dict) else "dict"
+            )
+
+        return GeminiContentPart(
+            type=str(part_type),
+            text=str(text_value) if text_value is not None else None,
+            data=sanitized_payload,
+        )
+
+    def _combine_text_from_parts(self, parts: list[GeminiContentPart]) -> str:
+        text_chunks = [
+            chunk.strip()
+            for chunk in (part.text or "" for part in parts)
+            if chunk and chunk.strip()
+        ]
+        if text_chunks:
+            return "\n".join(text_chunks)
+
+        for part in parts:
+            payload = part.data
+            if not isinstance(payload, dict):
                 continue
-            text_chunks = [getattr(part, "text", "") for part in parts]
-            concatenated = "".join(chunk for chunk in text_chunks if chunk)
-            if concatenated:
-                return concatenated
+
+            candidate: Any | None = None
+            if part.type == "function_call":
+                args = payload.get("args")
+                if isinstance(args, (dict, list)):
+                    candidate = args
+            elif "json" in payload and isinstance(payload["json"], (dict, list)):
+                candidate = payload["json"]
+            elif "parsed_json" in payload and isinstance(payload["parsed_json"], (dict, list)):
+                candidate = payload["parsed_json"]
+            elif "thought_signature" in payload and isinstance(
+                payload["thought_signature"], (dict, list, str)
+            ):
+                candidate = payload["thought_signature"]
+
+            if candidate is not None:
+                try:
+                    if isinstance(candidate, str):
+                        return candidate
+                    return json.dumps(candidate, ensure_ascii=False)
+                except (TypeError, ValueError):
+                    continue
+
         return ""
+
+    def _safe_to_dict(self, value: Any) -> Any:
+        if value is None or isinstance(value, (str, int, float, bool)):
+            return value
+        if isinstance(value, dict):
+            return {k: self._safe_to_dict(v) for k, v in value.items()}
+        if isinstance(value, (list, tuple, set)):
+            return [self._safe_to_dict(v) for v in value]
+        to_dict_method = getattr(value, "to_dict", None)
+        if callable(to_dict_method):
+            try:
+                return self._safe_to_dict(to_dict_method())
+            except Exception:
+                return str(value)
+        if hasattr(value, "__dict__"):
+            collected: dict[str, Any] = {}
+            for attr, attr_value in value.__dict__.items():
+                if attr.startswith("_"):
+                    continue
+                collected[attr] = self._safe_to_dict(attr_value)
+            if collected:
+                return collected
+        return str(value)
+
+    def _sanitize_part_data(self, data: dict[str, Any] | None) -> dict[str, Any] | None:
+        if data is None:
+            return None
+
+        sanitized: dict[str, Any] = {}
+        for key, value in data.items():
+            if key == "inline_data" and isinstance(value, dict):
+                inline_sanitized: dict[str, Any] = {}
+                for inline_key, inline_value in value.items():
+                    if inline_key == "data" and isinstance(inline_value, (bytes, str)):
+                        inline_sanitized["data_length"] = len(inline_value)
+                    elif inline_key != "data":
+                        inline_sanitized[inline_key] = inline_value
+                sanitized[key] = inline_sanitized
+            else:
+                sanitized[key] = value
+        return sanitized or None
 
     def _normalize_exception(self, exc: Exception) -> tuple[str, bool]:
         """Return a human-readable message and whether the error is temporary."""
