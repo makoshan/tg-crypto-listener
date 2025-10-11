@@ -22,6 +22,7 @@ from ..memory import (
 from ..memory.types import MemoryEntry
 from ..utils import (
     MessageDeduplicator,
+    analyze_event_intensity,
     compute_canonical_hash,
     compute_embedding,
     compute_sha256,
@@ -138,6 +139,7 @@ class LangGraphMessagePipeline:
         self.deps = dependencies
         self.state_graph = None
         self._graph = self._build_graph()
+        self._log_filter_config()
 
     def _build_graph(self):
         graph = StateGraph(PipelineState)
@@ -200,6 +202,19 @@ class LangGraphMessagePipeline:
 
         self.state_graph = graph
         return graph.compile()
+
+    def _log_filter_config(self) -> None:
+        deps = self.deps
+        config = deps.config
+        keyword_count = len(config.FILTER_KEYWORDS)
+        deps.logger.info(
+            "LangGraph 过滤配置: 关键词=%d, 内存去重窗口=%dh, 语义阈值=%.3f (窗口=%dh), 数据库持久化=%s",
+            keyword_count,
+            config.DEDUP_WINDOW_HOURS,
+            config.EMBEDDING_SIMILARITY_THRESHOLD,
+            config.EMBEDDING_TIME_WINDOW_HOURS,
+            "enabled" if deps.db_enabled else "disabled",
+        )
 
     async def run(self, telegram_event: Any) -> PipelineResult:
         """Execute the pipeline for a single Telegram event."""
@@ -365,6 +380,7 @@ class LangGraphMessagePipeline:
             control.drop = True
             control.status = "dropped"
             deps.stats["duplicates"] = deps.stats.get("duplicates", 0) + 1
+            deps.stats["dup_memory"] = deps.stats.get("dup_memory", 0) + 1
             deps.logger.debug("🔄 内存去重命中，跳过消息")
 
         return {
@@ -404,6 +420,7 @@ class LangGraphMessagePipeline:
             control.drop = True
             control.status = "dropped"
             deps.stats["duplicates"] = deps.stats.get("duplicates", 0) + 1
+            deps.stats["dup_hash"] = deps.stats.get("dup_hash", 0) + 1
             deps.logger.debug("🔁 数据库哈希去重命中: event_id=%s", existing_event_id)
 
         return {
@@ -435,11 +452,27 @@ class LangGraphMessagePipeline:
             )
 
         if embedding:
+            threshold = deps.config.EMBEDDING_SIMILARITY_THRESHOLD
+            time_window_hours = deps.config.EMBEDDING_TIME_WINDOW_HOURS
+            intensity = analyze_event_intensity(
+                content.original_text,
+                content.translated_text or "",
+            )
+            if intensity["has_high_impact"]:
+                threshold = max(threshold, 0.95)
+                time_window_hours = min(time_window_hours, 3)
+                deps.logger.debug(
+                    "⚠️ 高影响事件降低语义去重敏感度: threshold=%.2f window=%sh",
+                    threshold,
+                    time_window_hours,
+                )
+            threshold = max(0.0, min(1.0, threshold))
+            time_window_hours = max(1, int(time_window_hours))
             try:
                 similar = await deps.news_repository.check_duplicate_by_embedding(
                     embedding=embedding,
-                    threshold=deps.config.EMBEDDING_SIMILARITY_THRESHOLD,
-                    time_window_hours=deps.config.EMBEDDING_TIME_WINDOW_HOURS,
+                    threshold=threshold,
+                    time_window_hours=time_window_hours,
                 )
             except Exception as exc:  # pylint: disable=broad-except
                 deps.logger.warning("语义去重检查失败: %s", exc)
@@ -451,6 +484,7 @@ class LangGraphMessagePipeline:
                     control.drop = True
                     control.status = "dropped"
                     deps.stats["duplicates"] = deps.stats.get("duplicates", 0) + 1
+                    deps.stats["dup_semantic"] = deps.stats.get("dup_semantic", 0) + 1
                     deps.logger.info(
                         "🔁 语义去重命中: event_id=%s similarity=%.3f",
                         similar.get("id"),

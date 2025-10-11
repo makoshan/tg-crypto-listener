@@ -58,8 +58,11 @@ def _build_ai_kwargs_stub(signal_result: Any, _source: str) -> Dict[str, Any]:
         "ai_asset_names": getattr(signal_result, "asset_names", ""),
         "ai_confidence": getattr(signal_result, "confidence", 0.0),
         "ai_strength": getattr(signal_result, "strength", "low"),
+        "ai_timeframe": getattr(signal_result, "timeframe", "short"),
         "ai_risk_flags": getattr(signal_result, "risk_flags", []),
         "ai_notes": getattr(signal_result, "notes", ""),
+        "ai_alert": getattr(signal_result, "alert", None),
+        "ai_severity": getattr(signal_result, "severity", None),
     }
 
 

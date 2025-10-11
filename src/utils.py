@@ -6,12 +6,24 @@ import hashlib
 import logging
 import os
 import re
+import sys
 import unicodedata
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, Set
 
 import colorlog
+
+
+class _MaxLevelFilter(logging.Filter):
+    """Filter that only allows records up to a specific level."""
+
+    def __init__(self, max_level: int) -> None:
+        super().__init__()
+        self._max_level = max_level
+
+    def filter(self, record: logging.LogRecord) -> bool:  # pragma: no cover - logging helper
+        return record.levelno <= self._max_level
 
 
 def setup_logger(name: str, level: str = None) -> logging.Logger:
@@ -26,21 +38,30 @@ def setup_logger(name: str, level: str = None) -> logging.Logger:
     if logger.handlers:
         return logger
 
-    console_handler = colorlog.StreamHandler()
-    console_handler.setFormatter(
-        colorlog.ColoredFormatter(
-            "%(log_color)s%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-            datefmt="%Y-%m-%d %H:%M:%S",
-            log_colors={
-                "DEBUG": "cyan",
-                "INFO": "green",
-                "WARNING": "yellow",
-                "ERROR": "red",
-                "CRITICAL": "red,bg_white",
-            },
-        )
+    color_formatter = colorlog.ColoredFormatter(
+        "%(log_color)s%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+        log_colors={
+            "DEBUG": "cyan",
+            "INFO": "green",
+            "WARNING": "yellow",
+            "ERROR": "red",
+            "CRITICAL": "red,bg_white",
+        },
     )
+
+    console_handler = colorlog.StreamHandler(stream=sys.stdout)
+    console_handler.setLevel(logging.DEBUG)
+    console_handler.addFilter(_MaxLevelFilter(logging.INFO))
+    console_handler.setFormatter(color_formatter)
     logger.addHandler(console_handler)
+
+    stderr_handler = logging.StreamHandler(stream=sys.stderr)
+    stderr_handler.setLevel(logging.WARNING)
+    stderr_handler.setFormatter(
+        logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+    )
+    logger.addHandler(stderr_handler)
 
     Path("./logs").mkdir(exist_ok=True)
     file_handler = logging.FileHandler("./logs/app.log", encoding="utf-8")
@@ -91,6 +112,89 @@ def contains_keywords(text: str, keywords: Set[str]) -> bool:
 
     normalized_text = _normalize_text(text)
     return any(keyword in normalized_text for keyword in keywords)
+
+
+HIGH_IMPACT_TERMS: Set[str] = {
+    "脱锚",
+    "depeg",
+    "暴跌",
+    "大幅下跌",
+    "清算",
+    "强制平仓",
+    "强制平倉",
+    "强制清算",
+    "闪崩",
+    "flash crash",
+    "跌至",
+    "跌破",
+    "跌到",
+    "低于",
+    "跌穿",
+    "溢价",
+    "折价",
+    "liquidation",
+    "liquidations",
+}
+
+CRITICAL_ASSET_TOKENS: Set[str] = {
+    "usde",
+    "wbeth",
+    "wbtc",
+    "wbsol",
+    "stablecoin",
+    "稳定币",
+    "包裹",
+    "wrapped beacon eth",
+    "wrapped btc",
+}
+
+DROP_CONTEXT_TERMS: Set[str] = {
+    "跌至",
+    "跌破",
+    "跌到",
+    "低于",
+    "跌穿",
+    "跌落",
+    "跌幅",
+    "跌去了",
+    "plunged to",
+    "dropped to",
+    "trading at",
+    "crashed to",
+}
+
+PERCENT_CHANGE_PATTERN = re.compile(r"\d{1,3}(?:\.\d+)?\s*%")
+PRICE_LEVEL_PATTERN = re.compile(
+    r"(?:跌至|跌破|跌到|低于|跌穿|plunged to|dropped to|trading at)\s*[\d,]+(?:\.\d+)?"
+)
+
+
+def analyze_event_intensity(*texts: str) -> Dict[str, bool]:
+    """Inspect free-form texts and return high-impact risk signals for downstream heuristics."""
+    normalized_segments = [_normalize_text(text) for text in texts if text]
+    if not normalized_segments:
+        return {
+            "has_high_impact": False,
+            "mentions_critical_asset": False,
+            "has_percent_change": False,
+            "has_price_level_change": False,
+            "has_drop_keyword": False,
+        }
+
+    combined = " ".join(segment for segment in normalized_segments if segment)
+    has_high_impact = any(term in combined for term in HIGH_IMPACT_TERMS)
+    mentions_critical_asset = any(token in combined for token in CRITICAL_ASSET_TOKENS)
+    has_percent_change = bool(PERCENT_CHANGE_PATTERN.search(combined))
+    has_price_level_change = bool(PRICE_LEVEL_PATTERN.search(combined))
+    has_drop_keyword = any(term in combined for term in DROP_CONTEXT_TERMS)
+
+    return {
+        "has_high_impact": has_high_impact,
+        "mentions_critical_asset": mentions_critical_asset,
+        "has_percent_change": has_percent_change,
+        "has_price_level_change": has_price_level_change,
+        "has_drop_keyword": has_drop_keyword,
+    }
 
 
 def compute_sha256(text: str) -> str:
@@ -175,6 +279,16 @@ DIRECTION_LABELS = {
     "neutral": "中性",
 }
 
+ALERT_LABELS = {
+    "extreme_market_move": "极端行情",
+}
+
+SEVERITY_LABELS = {
+    "high": "高",
+    "medium": "中",
+    "low": "低",
+}
+
 EVENT_TYPE_LABELS = {
     "listing": "上线/挂牌",
     "delisting": "下架/退市",
@@ -225,6 +339,8 @@ def format_forwarded_message(
     ai_risk_flags: list[str] | None = None,
     ai_notes: str | None = None,
     context_source: str | None = None,
+    ai_alert: str | None = None,
+    ai_severity: str | None = None,
 ) -> str:
     """Compose a compact forwarding message emphasising actionable insights."""
 
@@ -232,6 +348,8 @@ def format_forwarded_message(
     ai_notes = (ai_notes or "").strip()
     ai_asset = (ai_asset or "").strip()
     ai_asset_names = (ai_asset_names or "").strip()
+    ai_alert = (ai_alert or "").strip()
+    ai_severity = (ai_severity or "").strip()
     translated_text = (translated_text or "").strip()
     original_text = (original_text or "").strip()
 
@@ -266,6 +384,18 @@ def format_forwarded_message(
     if ai_notes:
         parts.append("")
         parts.append(f"备注: {ai_notes}")
+        parts.append("")
+
+    if ai_alert:
+        alert_key = ai_alert.lower()
+        alert_label = ALERT_LABELS.get(alert_key, ai_alert)
+        severity_label = ""
+        if ai_severity:
+            severity_label = SEVERITY_LABELS.get(ai_severity.lower(), ai_severity)
+        if severity_label:
+            parts.append(f"🚨 {alert_label} | 等级: {severity_label}")
+        else:
+            parts.append(f"🚨 {alert_label}")
         parts.append("")
 
     # 操作要点，仅当有 AI 结果时展示

@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Dict, Optional, Sequence
 
-from ..utils import setup_logger
+from ..utils import analyze_event_intensity, setup_logger
 from ..memory import MemoryBackendBundle, create_memory_backend
 from .gemini_client import AiServiceError, GeminiClient
 from .deep_analysis import (
@@ -119,6 +119,8 @@ class SignalResult:
     notes: str = ""
     error: Optional[str] = None
     links: list[str] = field(default_factory=list)
+    alert: str = ""
+    severity: str = ""
 
     @property
     def should_execute_hot_path(self) -> bool:
@@ -515,9 +517,12 @@ class AiSignalEngine:
                 )
                 return SignalResult(status="error", error=str(exc))
 
-        logger.debug("%s 返回长度: %d", self._provider_label, len(response.text))
-        self._log_ai_response_debug(self._provider_label, response.text)
+        response_text = getattr(response, "text", "") or ""
+        logger.debug("%s 返回长度: %d", self._provider_label, len(response_text))
+        parts = getattr(response, "parts", None)
+        self._log_ai_response_debug(self._provider_label, response_text, parts)
         gemini_result = self._parse_response(response)
+        gemini_result = self._apply_extreme_event_overrides(payload, gemini_result)
 
         # Step 2: Determine whether to trigger deep analysis
         is_high_value = gemini_result.is_high_value_signal(
@@ -614,8 +619,20 @@ class AiSignalEngine:
         return gemini_result
 
     @staticmethod
-    def _log_ai_response_debug(label: str, text: str) -> None:
+    def _log_ai_response_debug(label: str, text: str, parts: Sequence[Any] | None = None) -> None:
         """Log raw AI responses with truncation to avoid noisy logs."""
+        if parts:
+            try:
+                part_types = [
+                    getattr(part, "type", None)
+                    or getattr(part, "type_", None)
+                    or type(part).__name__
+                    for part in parts
+                ]
+                logger.debug("%s 响应包含结构化分段: %s", label, part_types)
+            except Exception:
+                logger.debug("%s 结构化分段类型统计失败", label, exc_info=True)
+
         if not text:
             logger.debug("%s 原始响应为空字符串", label)
             return
@@ -763,7 +780,7 @@ class AiSignalEngine:
             if not asset_names:
                 asset_names = ",".join(normalized_assets)
         confidence = max(0.0, min(1.0, round(confidence, 2)))
-        filtered_flags = []
+        filtered_flags: list[str] = []
         for flag in risk_flags:
             if not isinstance(flag, str):
                 continue
@@ -773,29 +790,12 @@ class AiSignalEngine:
         if not filtered_flags and confidence < 0.3:
             filtered_flags.append("confidence_low")
 
-        # 保证所有推送附带摘要，但置信度低于 0.4 会被上层过滤
-        effective_threshold = max(self._threshold, 0.4)
-        # 仅当模型识别到加密货币标的时才推送
         has_crypto_asset = asset != "NONE"
-
-        # 检查是否包含噪音标志（speculative、vague_timeline、unverifiable）
         noise_flags = {"speculative", "vague_timeline", "unverifiable"}
         has_noise_flag = any(flag in noise_flags for flag in filtered_flags)
 
-        # 如果包含噪音标志且置信度不足，自动降级为 skip
-        # 注：即使有噪音标志，如果置信度 >= 0.7 仍可能是有价值的信号（如知名人士的模糊预告）
-        if has_noise_flag and confidence < 0.7:
-            status = "skip"
-        elif confidence >= effective_threshold and has_crypto_asset:
-            status = "success"
-        else:
-            status = "skip"
-
-        if not has_crypto_asset and "data_incomplete" not in filtered_flags:
-            filtered_flags.append("data_incomplete")
-
-        return SignalResult(
-            status=status,
+        result = SignalResult(
+            status="skip",
             summary=summary,
             event_type=event_type,
             asset=asset,
@@ -810,6 +810,12 @@ class AiSignalEngine:
             notes=notes,
             links=links,
         )
+        self._finalize_signal_status(
+            result,
+            has_crypto_asset=has_crypto_asset,
+            has_noise_flag=has_noise_flag,
+        )
+        return result
 
 
     @staticmethod
@@ -826,6 +832,93 @@ class AiSignalEngine:
         if candidate.startswith("{") or candidate.startswith("["):
             return candidate
         return candidate
+
+    def _apply_extreme_event_overrides(
+        self,
+        payload: EventPayload,
+        result: SignalResult,
+    ) -> SignalResult:
+        """Adjust AI output for extreme depeg/liquidation scenarios."""
+        if not payload.text and not payload.translated_text:
+            return result
+
+        analysis = analyze_event_intensity(
+            payload.text or "",
+            payload.translated_text or "",
+        )
+        has_extreme_move = analysis["has_high_impact"] and (
+            analysis["has_percent_change"]
+            or analysis["has_price_level_change"]
+            or analysis["has_drop_keyword"]
+        )
+
+        asset_tokens = {
+            token.strip().lower()
+            for token in (result.asset or "").split(",")
+            if token.strip()
+        }
+        mentions_critical_asset = analysis["mentions_critical_asset"] or bool(
+            asset_tokens & {"usde", "wbeth", "wbtc", "wbsol", "stablecoin"}
+        )
+
+        modified = False
+
+        if has_extreme_move:
+            result.confidence = min(1.0, max(result.confidence + 0.2, 0.0))
+            if not result.alert:
+                result.alert = "extreme_market_move"
+            if not result.severity:
+                result.severity = "high"
+            if "price_volatility" not in result.risk_flags:
+                result.risk_flags.append("price_volatility")
+            modified = True
+
+        if has_extreme_move and mentions_critical_asset:
+            if result.action != "sell":
+                result.action = "sell"
+                modified = True
+            if result.direction != "short":
+                result.direction = "short"
+                modified = True
+            if result.confidence < 0.8:
+                result.confidence = min(1.0, max(result.confidence, 0.8))
+                modified = True
+
+        if result.alert or result.severity or modified:
+            self._refresh_signal_status(result)
+
+        return result
+
+    def _finalize_signal_status(
+        self,
+        result: SignalResult,
+        *,
+        has_crypto_asset: bool,
+        has_noise_flag: bool,
+    ) -> None:
+        """Evaluate signal eligibility after confidence/action adjustments."""
+        effective_threshold = max(self._threshold, 0.4)
+
+        if has_noise_flag and result.confidence < 0.7:
+            result.status = "skip"
+        elif result.confidence >= effective_threshold and has_crypto_asset:
+            result.status = "success"
+        else:
+            result.status = "skip"
+
+        if not has_crypto_asset and "data_incomplete" not in result.risk_flags:
+            result.risk_flags.append("data_incomplete")
+
+    def _refresh_signal_status(self, result: SignalResult) -> None:
+        """Re-run status gating using current signal attributes."""
+        has_crypto_asset = bool(result.asset and result.asset != "NONE")
+        noise_flags = {"speculative", "vague_timeline", "unverifiable"}
+        has_noise_flag = any(flag in noise_flags for flag in result.risk_flags)
+        self._finalize_signal_status(
+            result,
+            has_crypto_asset=has_crypto_asset,
+            has_noise_flag=has_noise_flag,
+        )
 
 
 def build_signal_prompt(payload: EventPayload) -> list[dict[str, str]]:
@@ -861,6 +954,9 @@ def build_signal_prompt(payload: EventPayload) -> list[dict[str, str]]:
         "\n## 风险标志（risk_flags）\n"
         "risk_flags 数组仅允许 price_volatility、liquidity_risk、regulation_risk、confidence_low、data_incomplete、vague_timeline、speculative、unverifiable。\n"
         "仅在实际触发时添加标志，避免堆砌；当 confidence <0.4 或缺少关键数据，可加入 confidence_low 或 data_incomplete。\n"
+        "当稳定币或包裹资产（如 USDE、WBETH、WBTC、WBSOL 等）出现脱锚、暴跌、折价、清算或强制平仓风险时，必须返回 action=sell、direction=short，confidence ≥0.8，并在 notes 说明触发原因与核心数据。\n"
+        "若文本包含“脱锚、depeg、暴跌、大幅下跌、跌至、低于、清算、强制平仓”等词汇且伴随百分比或价格变动，请视为极端行情，重点描述跌幅、价格区间，并相应提升 confidence。\n"
+        "对于极端行情，请在 risk_flags 中至少加入 price_volatility；如数据来源或链上细节缺失，额外标记 data_incomplete。\n"
         "\n## 信号判断规则\n"
         "1. 时间模糊（\"近期\"、\"soon\" 等）→ 添加 vague_timeline，并降低 confidence。\n"
         "2. 内容笼统、缺乏指标或只是情绪表述 → 添加 speculative，并将 action 设为 observe 或 confidence ≤0.5。\n"

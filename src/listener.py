@@ -21,6 +21,7 @@ from .config import Config
 from .forwarder import MessageForwarder
 from .utils import (
     MessageDeduplicator,
+    analyze_event_intensity,
     contains_keywords,
     format_forwarded_message,
     compute_canonical_hash,
@@ -61,6 +62,9 @@ class TelegramListener:
             "total_received": 0,
             "filtered_out": 0,
             "duplicates": 0,
+            "dup_memory": 0,
+            "dup_hash": 0,
+            "dup_semantic": 0,
             "forwarded": 0,
             "errors": 0,
             "ai_processed": 0,
@@ -323,6 +327,7 @@ class TelegramListener:
 
             if self.deduplicator.is_duplicate(message_text):
                 self.stats["duplicates"] += 1
+                self.stats["dup_memory"] += 1
                 logger.debug("🔄 重复消息，已跳过")
                 return
 
@@ -344,6 +349,7 @@ class TelegramListener:
                 else:
                     if existing_event_id:
                         self.stats["duplicates"] += 1
+                        self.stats["dup_hash"] += 1
                         logger.debug(
                             "🔁 数据库哈希去重命中: event_id=%s", existing_event_id
                         )
@@ -360,17 +366,34 @@ class TelegramListener:
                     model=self.config.OPENAI_EMBEDDING_MODEL,
                 )
                 if embedding_vector:
+                    intensity = analyze_event_intensity(
+                        message_text,
+                        translated_text or "",
+                    )
+                    threshold = self.config.EMBEDDING_SIMILARITY_THRESHOLD
+                    time_window_hours = self.config.EMBEDDING_TIME_WINDOW_HOURS
+                    if intensity["has_high_impact"]:
+                        threshold = max(threshold, 0.95)
+                        time_window_hours = min(time_window_hours, 3)
+                        logger.debug(
+                            "⚠️ 高影响事件启用宽松语义去重: threshold=%.2f window=%sh",
+                            threshold,
+                            time_window_hours,
+                        )
+                    threshold = max(0.0, min(1.0, threshold))
+                    time_window_hours = max(1, int(time_window_hours))
                     try:
                         similar = await self.news_repository.check_duplicate_by_embedding(
                             embedding=embedding_vector,
-                            threshold=self.config.EMBEDDING_SIMILARITY_THRESHOLD,
-                            time_window_hours=self.config.EMBEDDING_TIME_WINDOW_HOURS,
+                            threshold=threshold,
+                            time_window_hours=time_window_hours,
                         )
                     except Exception as exc:  # pylint: disable=broad-except
                         logger.warning("语义去重检查失败，继续处理: %s", exc)
                     else:
                         if similar:
                             self.stats["duplicates"] += 1
+                            self.stats["dup_semantic"] += 1
                             logger.info(
                                 "🔁 语义去重命中: event_id=%s similarity=%.3f",
                                 similar["id"],
@@ -742,6 +765,8 @@ class TelegramListener:
             "ai_timeframe": signal_result.timeframe,
             "ai_risk_flags": signal_result.risk_flags,
             "ai_notes": signal_result.notes,
+            "ai_alert": signal_result.alert or None,
+            "ai_severity": signal_result.severity or None,
         }
 
     def _should_include_original(
@@ -845,6 +870,8 @@ class TelegramListener:
                         "ai_confidence": signal_result.confidence,
                         "ai_strength": signal_result.strength,
                         "ai_direction": signal_result.direction,
+                        "ai_alert": signal_result.alert,
+                        "ai_severity": signal_result.severity,
                     }
                 )
                 if signal_result.error:
@@ -858,10 +885,26 @@ class TelegramListener:
 
             # Level 2: Semantic embedding dedup
             if embedding_vector:
+                intensity = analyze_event_intensity(
+                    original_text,
+                    translated_text or "",
+                )
+                threshold = self.config.EMBEDDING_SIMILARITY_THRESHOLD
+                time_window_hours = self.config.EMBEDDING_TIME_WINDOW_HOURS
+                if intensity["has_high_impact"]:
+                    threshold = max(threshold, 0.95)
+                    time_window_hours = min(time_window_hours, 3)
+                    logger.info(
+                        "⚠️ 高影响事件启用宽松语义去重: threshold=%.2f window=%sh",
+                        threshold,
+                        time_window_hours,
+                    )
+                threshold = max(0.0, min(1.0, threshold))
+                time_window_hours = max(1, int(time_window_hours))
                 similar = await self.news_repository.check_duplicate_by_embedding(
                     embedding=embedding_vector,
-                    threshold=self.config.EMBEDDING_SIMILARITY_THRESHOLD,
-                    time_window_hours=self.config.EMBEDDING_TIME_WINDOW_HOURS,
+                    threshold=threshold,
+                    time_window_hours=time_window_hours,
                 )
                 if similar:
                     logger.info(
@@ -1025,12 +1068,26 @@ class TelegramListener:
             await asyncio.sleep(300)
             runtime = datetime.now() - self.stats["start_time"]
             logger.info(
-                "\n📊 **运行统计** (运行时间: %s)\n   • 总接收: %s\n   • 已转发: %s\n   • 关键词过滤: %s\n   • 重复消息: %s\n   • 错误次数: %s\n   • 翻译成功: %s\n   • 翻译错误: %s\n   • AI 已处理: %s\n   • AI 行动: %s\n   • AI 跳过: %s\n   • AI 错误: %s\n",
+                "\n📊 **运行统计** (运行时间: %s)\n"
+                "   • 总接收: %s\n"
+                "   • 已转发: %s\n"
+                "   • 关键词过滤: %s\n"
+                "   • 重复消息: %s (内存: %s / 哈希: %s / 语义: %s)\n"
+                "   • 错误次数: %s\n"
+                "   • 翻译成功: %s\n"
+                "   • 翻译错误: %s\n"
+                "   • AI 已处理: %s\n"
+                "   • AI 行动: %s\n"
+                "   • AI 跳过: %s\n"
+                "   • AI 错误: %s\n",
                 str(runtime).split(".")[0],
                 self.stats["total_received"],
                 self.stats["forwarded"],
                 self.stats["filtered_out"],
                 self.stats["duplicates"],
+                self.stats["dup_memory"],
+                self.stats["dup_hash"],
+                self.stats["dup_semantic"],
                 self.stats["errors"],
                 self.stats["translations"],
                 self.stats["translation_errors"],
