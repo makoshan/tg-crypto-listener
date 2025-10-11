@@ -1,6 +1,0 @@
-# Copy this file to keywords.txt and edit as needed.
-# Lines starting with # are ignored. Use commas to add aliases on the same line.
-bitcoin
-btc
-eth
-ethereum
