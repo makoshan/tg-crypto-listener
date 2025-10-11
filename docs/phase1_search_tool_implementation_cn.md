@@ -96,6 +96,209 @@ class DeepAnalysisState(TypedDict, total=False):
 
 ---
 
+## ⚠️ 重要修改建议（实施前必读）
+
+基于现有代码审查，以下修改建议应在实施前纳入考虑：
+
+### 🔴 必须修改（避免技术债）
+
+#### 1. 记忆检索逻辑重构
+
+**问题**: `_node_context_gather` 实现会与现有 `_tool_fetch_memories` (gemini.py:122-193) 逻辑重复
+
+**解决方案**: 将记忆检索重构为独立的异步 Helper 方法
+
+```python
+async def _fetch_memory_entries(
+    self,
+    *,
+    payload: "EventPayload",
+    preliminary: "SignalResult",
+    limit: int | None = None,
+) -> list[dict]:
+    """独立的记忆检索 Helper，在两处复用：
+    1. _tool_fetch_memories (Function Calling 工具)
+    2. _node_context_gather (LangGraph 节点)
+    """
+    # 提取现有 _tool_fetch_memories 的核心逻辑
+    # 返回格式化的 prompt_entries
+```
+
+**实施位置**: 任务 3.2 - Context Gather 节点实现时
+
+---
+
+#### 2. Tool Planner 使用 Function Calling
+
+**问题**: 原方案第 122 行明确"不使用 Function Calling,采用文本 JSON 返回"，容易出现解析失败
+
+**解决方案**: 使用 Gemini Function Calling 定义专用工具决策函数
+
+```python
+# 在 _build_tools() 中添加
+{
+    "name": "decide_next_tools",
+    "description": "根据已有证据决定下一步需要调用的工具",
+    "parameters": {
+        "type": "OBJECT",
+        "properties": {
+            "tools": {
+                "type": "ARRAY",
+                "items": {"type": "STRING"},
+                "description": "需要调用的工具列表,可选值: search"
+            },
+            "reason": {
+                "type": "STRING",
+                "description": "决策理由"
+            }
+        },
+        "required": ["tools", "reason"]
+    }
+}
+```
+
+**优势**:
+- 保证输出结构一致性，减少 JSON 解析失败风险
+- 复用已验证可靠的 Gemini Function Calling 能力
+- 便于后续扩展多工具决策（Phase 2）
+
+**实施位置**: 任务 3.3 - Tool Planner 节点实现时
+
+---
+
+### 🟡 强烈建议（提升质量）
+
+#### 3. 搜索关键词生成优化
+
+**问题**: 当前设计 (第 749 行) 直接拼接 `asset + event_type`，对中文消息不够友好
+
+**改进方案**: 添加语言检测逻辑
+
+```python
+def _build_search_keyword(self, payload: EventPayload, preliminary: SignalResult) -> str:
+    """根据消息语言生成优化的搜索关键词"""
+    base = f"{preliminary.asset} {preliminary.event_type}"
+
+    # 中文环境添加中文关键词
+    if payload.language in ["zh", "zh-CN", "zh-TW"]:
+        event_cn_map = {
+            "hack": "黑客攻击",
+            "regulation": "监管政策",
+            "partnership": "合作伙伴",
+            "listing": "上线",
+            "delisting": "下架",
+            # ... 其他映射
+        }
+        event_cn = event_cn_map.get(preliminary.event_type, preliminary.event_type)
+        base = f"{preliminary.asset} {event_cn} 新闻"
+
+    # 高优先级事件添加 official 关键词
+    if preliminary.event_type in ["hack", "regulation", "partnership"]:
+        base += " official statement" if payload.language == "en" else " 官方声明"
+
+    return base
+```
+
+**实施位置**: 任务 3.4 - Tool Executor 节点中的 `_execute_search_tool` 方法
+
+---
+
+#### 4. Synthesis Prompt 量化规则
+
+**问题**: 原方案第 991 行的置信度调整规则过于笼统（"提升置信度"、"降低置信度"）
+
+**改进方案**: 添加明确的量化规则
+
+```python
+【置信度调整规则】
+- 基准: Gemini Flash 初判置信度 = {preliminary.confidence}
+
+- 搜索多源确认 (multi_source=true) AND 官方确认 (official_confirmed=true):
+  → 提升 +0.15 to +0.20
+
+- 搜索多源确认但无官方确认:
+  → 提升 +0.05 to +0.10
+
+- 搜索结果 < 3 条或无官方确认:
+  → 降低 -0.10 to -0.20
+
+- 搜索结果冲突 (不同来源说法矛盾):
+  → 降低 -0.20 并标记 data_incomplete
+
+- 历史记忆存在高相似度案例 (similarity > 0.8):
+  → 参考历史案例最终置信度,调整 ±0.10
+
+【最终约束】
+- 置信度范围: 0.0 - 1.0
+- 如果最终置信度 < 0.4, 必须添加 confidence_low 风险标志
+- 在 notes 中说明: "初判 {preliminary.confidence:.2f} → 最终 {final_confidence:.2f}, 依据: [搜索/记忆/冲突]"
+```
+
+**实施位置**: 任务 3.5 - Synthesis 节点的 `_build_synthesis_prompt` 方法
+
+---
+
+### 🟢 可选优化（后续迭代）
+
+#### 5. 工具调用每日配额限制
+
+添加成本控制机制:
+
+```python
+# 在 __init__ 中添加
+self._tool_call_daily_limit = getattr(config, "DEEP_ANALYSIS_TOOL_DAILY_LIMIT", 500)
+self._tool_call_count_today = 0
+self._tool_call_reset_date = datetime.now(timezone.utc).date()
+
+# 在 _node_tool_executor 中添加检查
+def _check_tool_quota(self) -> bool:
+    today = datetime.now(timezone.utc).date()
+    if today != self._tool_call_reset_date:
+        self._tool_call_count_today = 0
+        self._tool_call_reset_date = today
+
+    if self._tool_call_count_today >= self._tool_call_daily_limit:
+        logger.warning("⚠️ 今日工具调用配额已用尽 (%d/%d)",
+                      self._tool_call_count_today, self._tool_call_daily_limit)
+        return False
+
+    self._tool_call_count_today += 1
+    return True
+```
+
+**实施位置**: 任务 6.3 - 成本测试完成后添加
+
+---
+
+#### 6. 单元测试 Mock/集成测试分离
+
+**问题**: 第 615 行 "测试真实 API 调用 (需要 API Key)" 会导致 CI/CD 依赖外部服务
+
+**改进方案**:
+- 保留 1 个真实 API 集成测试 (标记 `@pytest.mark.integration`)
+- 添加完整的 Mock 测试覆盖所有分支
+
+```python
+@pytest.mark.integration
+async def test_tavily_real_api(provider):
+    """真实 API 集成测试（需要 TAVILY_API_KEY）"""
+    result = await provider.search(keyword="Bitcoin", max_results=5)
+    assert result.success is True
+
+@pytest.mark.asyncio
+async def test_tavily_mock_success(provider):
+    """Mock 测试 - 成功场景"""
+    with patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post:
+        mock_post.return_value.status_code = 200
+        mock_post.return_value.json.return_value = {"results": [...]}
+        result = await provider.search(keyword="test", max_results=5)
+        assert result.success is True
+```
+
+**实施位置**: 任务 1.4 - 单元测试实现时
+
+---
+
 ## 实施任务
 
 ### 第 1 天：工具基础架构
@@ -1399,6 +1602,380 @@ curl -X POST https://api.tavily.com/search \
 
 ---
 
+## 💰 成本与风险控制
+
+### 成本预估（基于 Gemini 2.5 Flash）
+
+#### 单条消息成本拆解
+
+**现有深度分析流程** (使用 Gemini 2.5 Flash Function Calling):
+```
+Gemini Flash 初步分析 (AiSignalEngine): $0.0015 (输入 1K tokens × $0.00001875 + 输出 500 tokens × $0.000075)
++ Gemini 2.5 Flash 深度分析 (Function Calling): $0.003 (输入 2K tokens + 输出 800 tokens)
+────────────────────────────────────────────────────────────────
+现有成本: ~$0.0045/条 (触发深度分析的高价值消息)
+```
+
+**Phase 1 新增成本** (触发 LangGraph 工具流程):
+```
+Context Gather (记忆检索): $0 (不调用 AI，仅数据库查询)
+
++ Tool Planner (Gemini 2.5 Flash 决策):
+  输入: ~1.5K tokens (消息内容 + 初步结果 + 证据槽位 + 决策规则)
+  输出: ~100 tokens (JSON: {"tools": ["search"], "reason": "..."})
+  成本: $0.00003 (输入) + $0.00001 (输出) = $0.00004
+
++ Tavily API:
+  - 免费层: $0 (1000 次/月)
+  - Pro 层均摊: $0.02 (假设 1000 次/月，$20/月)
+
++ Synthesis (Gemini 2.5 Flash 综合推理):
+  输入: ~2.5K tokens (消息 + 初判 + 记忆 + 搜索结果 + 详细规则)
+  输出: ~600 tokens (完整 JSON 信号)
+  成本: $0.00005 (输入) + $0.00005 (输出) = $0.0001
+
+────────────────────────────────────────────────────────────────
+Phase 1 新增成本: $0.00014 (不含 Tavily) 或 $0.02014 (含 Tavily Pro 均摊)
+```
+
+**总成本**:
+```
+场景 1: Tool Planner 决定不搜索 (预计 60% 概率)
+  = 现有成本 + Planner 成本
+  = $0.0045 + $0.00004
+  = $0.00454/条 (+1%)
+
+场景 2: Tool Planner 决定搜索 (预计 40% 概率)
+  = 现有成本 + Planner + Tavily + Synthesis
+  = $0.0045 + $0.00004 + $0 + $0.0001  (使用 Tavily 免费层)
+  = $0.00564/条 (+25%)
+
+  或 $0.0045 + $0.00004 + $0.02 + $0.0001 = $0.02464/条 (+448%)  (Pro 层均摊)
+
+────────────────────────────────────────────────────────────────
+加权平均成本 (使用 Tavily 免费层):
+  $0.00454 × 60% + $0.00564 × 40% = $0.00498/条 (+11%)
+
+加权平均成本 (Tavily Pro 层):
+  $0.00454 × 60% + $0.02464 × 40% = $0.01258/条 (+180%)
+```
+
+**成本增幅总结**:
+- **最优场景** (使用 Tavily 免费层): **+11%** ($0.0045 → $0.00498)
+- **Pro 场景** (超出免费层): **+180%** ($0.0045 → $0.01258)
+
+---
+
+#### 月度成本预估
+
+假设每天 **50 条**高价值消息触发深度分析:
+
+| 场景 | 现有成本/月 | Phase 1 成本/月 (免费层) | Phase 1 成本/月 (Pro) | 增量 |
+|------|------------|------------------------|---------------------|------|
+| 保守估算 (30% 搜索率) | **$6.75** | **$7.31** | **$17.01** | +$0.56 / +$10.26 |
+| 中等估算 (40% 搜索率) | **$6.75** | **$7.47** | **$18.87** | +$0.72 / +$12.12 |
+| 激进估算 (60% 搜索率) | **$6.75** | **$7.79** | **$22.59** | +$1.04 / +$15.84 |
+
+**Tavily API 额外成本**:
+- 如果月搜索次数 ≤ 1000: **$0/月** (免费层)
+- 如果月搜索次数 > 1000: **$20/月** (Pro 层)
+
+**关键结论**:
+- ✅ **如果使用免费层 (月搜索 < 1000 次)**: 成本增量仅 **$0.72 - $1.04/月** (+11%)
+- ⚠️ **如果需要 Pro 层 (月搜索 > 1000 次)**: 成本增量为 **$12.12 - $15.84/月** (+180%)
+
+**月搜索次数预估**:
+```
+每天 50 条深度分析消息 × 40% 搜索率 × 30 天 = 600 次/月
+```
+→ **不需要 Pro 层**，可完全使用免费层
+
+---
+
+### 成本优化策略
+
+#### 🔴 必须实施（避免超出免费配额）
+
+##### 1. 搜索结果缓存
+
+**目标**: 相同关键词 10 分钟内复用结果，减少 Tavily API 调用
+
+**实现** (在 `SearchTool` 添加):
+```python
+import hashlib
+import time
+from typing import Optional, Dict
+
+class SearchTool:
+    def __init__(self, config) -> None:
+        # ... 现有代码
+        self._cache: Dict[str, tuple[ToolResult, float]] = {}  # {keyword_hash: (result, timestamp)}
+        self._cache_ttl = getattr(config, "SEARCH_CACHE_TTL_SECONDS", 600)  # 10 分钟
+
+    async def fetch(self, *, keyword: str, max_results: Optional[int] = None) -> ToolResult:
+        # 检查缓存
+        cache_key = hashlib.md5(f"{keyword}:{max_results}".encode()).hexdigest()
+        if cache_key in self._cache:
+            cached_result, cached_time = self._cache[cache_key]
+            if time.time() - cached_time < self._cache_ttl:
+                logger.info("🔧 使用缓存的搜索结果: keyword='%s'", keyword)
+                return cached_result
+            else:
+                del self._cache[cache_key]  # 清理过期缓存
+
+        # 调用 Provider
+        result = await self._provider.search(keyword=keyword, max_results=max_results or self._max_results)
+
+        # 存入缓存
+        if result.success:
+            self._cache[cache_key] = (result, time.time())
+
+        return result
+```
+
+**收益**: 假设缓存命中率 30%，可节省 **180 次 Tavily 调用/月**
+
+---
+
+##### 2. 每日调用配额限制
+
+**目标**: 限制每天最多 50 次工具调用，防止意外超限
+
+**实现** (在 `GeminiDeepAnalysisEngine.__init__` 和 `_node_tool_executor` 添加):
+
+```python
+from datetime import datetime, timezone
+
+def __init__(self, ...):
+    # ... 现有代码
+    self._tool_call_daily_limit = getattr(config, "DEEP_ANALYSIS_TOOL_DAILY_LIMIT", 50)
+    self._tool_call_count_today = 0
+    self._tool_call_reset_date = datetime.now(timezone.utc).date()
+
+def _check_tool_quota(self) -> bool:
+    """检查是否超出每日配额"""
+    today = datetime.now(timezone.utc).date()
+
+    # 跨天重置计数器
+    if today != self._tool_call_reset_date:
+        self._tool_call_count_today = 0
+        self._tool_call_reset_date = today
+
+    # 检查配额
+    if self._tool_call_count_today >= self._tool_call_daily_limit:
+        logger.warning(
+            "⚠️ 今日工具调用配额已用尽 (%d/%d)，跳过本次调用",
+            self._tool_call_count_today,
+            self._tool_call_daily_limit
+        )
+        return False
+
+    self._tool_call_count_today += 1
+    return True
+
+async def _node_tool_executor(self, state: DeepAnalysisState) -> dict:
+    """执行 planner 决定的工具（异步，第一阶段仅搜索）"""
+    tools_to_call = state.get("next_tools", [])
+    logger.info("🔧 Tool Executor: 调用工具: %s", tools_to_call)
+
+    # 检查配额（新增）
+    if not self._check_tool_quota():
+        logger.warning("⚠️ 超出每日配额，跳过工具调用")
+        return {"tool_call_count": state["tool_call_count"] + 1}  # 直接跳过
+
+    # ... 原有逻辑
+```
+
+**配置**:
+```bash
+# 在 .env 添加
+DEEP_ANALYSIS_TOOL_DAILY_LIMIT=50  # 每天最多 50 次工具调用
+```
+
+**收益**: 确保月搜索次数 ≤ 1500 (50/天 × 30天)，留有安全余量
+
+---
+
+##### 3. 白名单 + 黑名单策略
+
+**目标**: 仅对必需的事件类型触发搜索，避免过度调用
+
+**实现** (在 `_node_tool_planner` 添加):
+```python
+# 在 _node_tool_planner 方法开头添加
+FORCE_SEARCH_EVENT_TYPES = {"hack", "regulation", "partnership"}  # 强制搜索
+NEVER_SEARCH_EVENT_TYPES = {"macro", "governance", "airdrop", "celebrity"}  # 永不搜索
+
+async def _node_tool_planner(self, state: DeepAnalysisState) -> dict:
+    """AI 决定是否调用搜索工具（异步）"""
+    logger.info("🤖 Tool Planner: 决策下一步工具")
+
+    preliminary = state["preliminary"]
+
+    # 黑名单：直接跳过
+    if preliminary.event_type in NEVER_SEARCH_EVENT_TYPES:
+        logger.info("🤖 Tool Planner: 事件类型 '%s' 在黑名单，跳过搜索", preliminary.event_type)
+        return {"next_tools": []}
+
+    # 白名单：强制搜索（仅首轮）
+    if preliminary.event_type in FORCE_SEARCH_EVENT_TYPES and state["tool_call_count"] == 0:
+        logger.info("🤖 Tool Planner: 事件类型 '%s' 在白名单，强制搜索", preliminary.event_type)
+        return {"next_tools": ["search"]}
+
+    # 已有搜索结果：不再重复搜索
+    if state.get("search_evidence"):
+        logger.info("🤖 Tool Planner: 已有搜索结果，无需再搜索")
+        return {"next_tools": []}
+
+    # 其他情况：让 AI 决策（保留原逻辑）
+    # ...
+```
+
+**收益**: 减少约 40% 不必要的搜索调用
+
+---
+
+#### 🟡 建议实施（提升性价比）
+
+##### 4. Tool Planner Prompt 添加成本意识
+
+在 `_build_planner_prompt` 的决策规则中添加:
+```python
+【决策规则】（按优先级）
+0. ⚠️ 成本意识：每次搜索消耗配额，请谨慎决策
+1. 如果已有搜索结果 → 证据充分，无需再搜索
+2. 如果事件类型是 hack/regulation/partnership → 需要搜索验证
+3. 如果 tool_call_count >= 2 → 避免过度搜索
+4. 如果是数值类事件 (depeg/liquidation) → 暂不需要搜索
+5. 如果记忆中已有高相似度案例 (similarity > 0.8) → 优先使用记忆，减少搜索
+```
+
+---
+
+##### 5. 渐进式 Rollout
+
+**Week 1-2**: 5% 流量
+```python
+# 在 analyse() 方法添加
+import random
+if random.random() > 0.05:  # 95% 流量走原流程
+    return await self._analyse_with_function_calling(payload, preliminary)
+```
+
+**Week 3-4**: 监控指标
+- 每日 Tavily 调用次数
+- 平均成本
+- 置信度改善幅度
+- 误报率变化
+
+**Month 2**: 如果指标良好，扩展到 100%
+
+---
+
+### 成本监控与预警
+
+#### 实时成本追踪
+
+在 `GeminiDeepAnalysisEngine.__init__` 添加:
+```python
+from collections import defaultdict
+
+def __init__(self, ...):
+    # ... 现有代码
+    self._cost_tracker = {
+        "daily_calls": 0,
+        "daily_cost_usd": 0.0,
+        "monthly_budget_usd": 30.0,  # $30/月预算
+        "cost_by_tool": defaultdict(float),  # {"search": 0.02, "planner": 0.0001, ...}
+    }
+
+def _track_cost(self, tool_name: str, cost_usd: float):
+    """记录工具调用成本"""
+    self._cost_tracker["daily_calls"] += 1
+    self._cost_tracker["daily_cost_usd"] += cost_usd
+    self._cost_tracker["cost_by_tool"][tool_name] += cost_usd
+
+    # 预警：每日成本超过月预算 1/30
+    daily_budget = self._cost_tracker["monthly_budget_usd"] / 30
+    if self._cost_tracker["daily_cost_usd"] > daily_budget:
+        logger.warning(
+            "💰 今日成本超预算: $%.4f (预算: $%.4f/天)",
+            self._cost_tracker["daily_cost_usd"],
+            daily_budget
+        )
+```
+
+在 `_node_tool_executor` 中调用:
+```python
+async def _node_tool_executor(self, state: DeepAnalysisState) -> dict:
+    # ... 调用工具后
+    if result.success:
+        self._track_cost("search", 0.0 if self._is_free_tier() else 0.02)
+    # ...
+```
+
+---
+
+### 风险缓解
+
+| 风险 | 影响 | 缓解措施 | 状态 |
+|------|------|---------|------|
+| **Tavily 免费配额耗尽** | 需要 $20/月升级 Pro | 搜索缓存 + 每日限额 + 白名单 | ✅ 已设计 |
+| **Tool Planner 过度调用** | 不必要的搜索成本 | Prompt 优化 + 白名单强制规则 | ✅ 已设计 |
+| **成本失控** | 月成本超预算 | 实时成本追踪 + 预警 + 降级开关 | ✅ 已设计 |
+| **Tavily API 故障** | 无法搜索 | 完整降级机制 + 错误处理 | ✅ 已实现 |
+| **Tool Planner 错误决策** | 错过关键搜索 | 白名单强制搜索 + 决策日志审计 | ✅ 已设计 |
+
+---
+
+### ROI 分析
+
+#### 价值量化
+
+**提升的能力**:
+1. **传闻过滤**: 多源验证减少虚假传闻
+   - 假设每月避免 1 次错误交易 → 节省损失 $500+
+   - Phase 1 月成本: ~$1 (免费层) 或 ~$12 (Pro)
+   - **ROI: 50x - 500x**
+
+2. **黑客事件快速确认**: 官方声明 + 情绪分析
+   - 提前 5-10 分钟确认 → 抢先做空
+   - 潜在收益: 单次 > $200
+   - **ROI: 16x - 200x**
+
+3. **监管政策实时性**: 搜索最新政策
+   - 避免信息滞后 → 难以量化，但重要
+
+**质量指标改善** (预期):
+- 传闻消息准确性: **+15-20%**
+- 误报率: **-20-30%**
+- 信号置信度: **+10%**
+
+**结论**: **价值远大于成本，ROI > 50x**
+
+---
+
+### 配置更新
+
+在 `.env` 添加成本控制配置:
+```bash
+# ==================== 成本控制 ====================
+
+# 每日工具调用配额
+DEEP_ANALYSIS_TOOL_DAILY_LIMIT=50
+
+# 搜索缓存 TTL（秒）
+SEARCH_CACHE_TTL_SECONDS=600  # 10 分钟
+
+# 月度预算（美元）
+DEEP_ANALYSIS_MONTHLY_BUDGET=30.0
+
+# 渐进式 Rollout 比例（0.0-1.0）
+PHASE1_ROLLOUT_PERCENTAGE=0.05  # 5% 流量
+```
+
+---
+
 ## 第一阶段后的下一步
 
 完成第一阶段后，根据生产数据评估：
@@ -1433,3 +2010,7 @@ curl -X POST https://api.tavily.com/search \
 ## 变更日志
 
 - **2025-10-11**: 创建第一阶段实施指南（中文版）
+- **2025-10-11**: 添加"⚠️ 重要修改建议"章节，基于现有代码审查提出 6 项改进:
+  - 🔴 必须修改: 记忆检索逻辑重构、Tool Planner 使用 Function Calling
+  - 🟡 强烈建议: 搜索关键词优化、Synthesis Prompt 量化规则
+  - 🟢 可选优化: 每日配额限制、Mock/集成测试分离
