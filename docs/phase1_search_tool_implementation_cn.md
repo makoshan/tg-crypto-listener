@@ -87,6 +87,7 @@ class DeepAnalysisState(TypedDict, total=False):
 
     # 控制流
     next_tools: list[str]                 # ["search"] 或 []
+    search_keywords: str                  # 🆕 AI 生成的搜索关键词
     tool_call_count: int                  # 0-3
     max_tool_calls: int                   # 固定为 3
 
@@ -128,17 +129,19 @@ async def _fetch_memory_entries(
 
 ---
 
-#### 2. Tool Planner 使用 Function Calling
+#### 2. Tool Planner 使用 Function Calling + AI 生成搜索关键词
 
-**问题**: 原方案第 122 行明确"不使用 Function Calling,采用文本 JSON 返回"，容易出现解析失败
+**问题 1**: 原方案第 122 行明确"不使用 Function Calling,采用文本 JSON 返回"，容易出现解析失败
 
-**解决方案**: 使用 Gemini Function Calling 定义专用工具决策函数
+**问题 2**: 原方案第 1142-1144 行的搜索关键词是硬编码的（`f"{asset} {event_type}"`），无法处理中文消息、复杂事件、特定实体，不够智能
+
+**解决方案**: 使用 Gemini Function Calling 定义专用工具决策函数，**同时让 AI 生成最优搜索关键词**
 
 ```python
 # 在 _build_tools() 中添加
 {
     "name": "decide_next_tools",
-    "description": "根据已有证据决定下一步需要调用的工具",
+    "description": "根据已有证据决定下一步需要调用的工具，并为搜索生成最优关键词",
     "parameters": {
         "type": "OBJECT",
         "properties": {
@@ -146,6 +149,10 @@ async def _fetch_memory_entries(
                 "type": "ARRAY",
                 "items": {"type": "STRING"},
                 "description": "需要调用的工具列表,可选值: search"
+            },
+            "search_keywords": {
+                "type": "STRING",
+                "description": "如果需要搜索，生成最优搜索关键词（中英文混合，包含关键实体、官方来源标识）。示例：'USDC Circle depeg official statement 脱锚 官方声明'"
             },
             "reason": {
                 "type": "STRING",
@@ -160,6 +167,8 @@ async def _fetch_memory_entries(
 **优势**:
 - 保证输出结构一致性，减少 JSON 解析失败风险
 - 复用已验证可靠的 Gemini Function Calling 能力
+- **零额外成本和延迟** - Planner 本来就要调用 AI，顺便生成关键词
+- **充分利用 AI 能力** - 根据消息内容动态生成最优关键词，自动处理中英文混合
 - 便于后续扩展多工具决策（Phase 2）
 
 **实施位置**: 任务 3.3 - Tool Planner 节点实现时
@@ -168,38 +177,15 @@ async def _fetch_memory_entries(
 
 ### 🟡 强烈建议（提升质量）
 
-#### 3. 搜索关键词生成优化
+#### 3. ~~搜索关键词生成优化~~ → 已整合到修改建议 #2
 
-**问题**: 当前设计 (第 749 行) 直接拼接 `asset + event_type`，对中文消息不够友好
+**原问题**: 当前设计 (第 1142 行) 直接拼接 `asset + event_type`，对中文消息不够友好
 
-**改进方案**: 添加语言检测逻辑
+**✅ 已解决**: 通过修改建议 #2，让 Tool Planner 的 Function Calling 直接生成最优关键词，**无需单独实现语言检测逻辑**
 
-```python
-def _build_search_keyword(self, payload: EventPayload, preliminary: SignalResult) -> str:
-    """根据消息语言生成优化的搜索关键词"""
-    base = f"{preliminary.asset} {preliminary.event_type}"
+**降级方案**: 如果 AI 未生成 `search_keywords` 字段，Tool Executor 回退到基础拼接逻辑（见任务 3.4）
 
-    # 中文环境添加中文关键词
-    if payload.language in ["zh", "zh-CN", "zh-TW"]:
-        event_cn_map = {
-            "hack": "黑客攻击",
-            "regulation": "监管政策",
-            "partnership": "合作伙伴",
-            "listing": "上线",
-            "delisting": "下架",
-            # ... 其他映射
-        }
-        event_cn = event_cn_map.get(preliminary.event_type, preliminary.event_type)
-        base = f"{preliminary.asset} {event_cn} 新闻"
-
-    # 高优先级事件添加 official 关键词
-    if preliminary.event_type in ["hack", "regulation", "partnership"]:
-        base += " official statement" if payload.language == "en" else " 官方声明"
-
-    return base
-```
-
-**实施位置**: 任务 3.4 - Tool Executor 节点中的 `_execute_search_tool` 方法
+**实施位置**: 任务 3.3（Planner 生成关键词）+ 任务 3.4（Executor 使用关键词，提供降级）
 
 ---
 
@@ -834,6 +820,7 @@ class DeepAnalysisState(TypedDict, total=False):
 
     # 控制流
     next_tools: list[str]        # ["search"] 或 []
+    search_keywords: str         # 🆕 AI 生成的搜索关键词
     tool_call_count: int         # 0-3
     max_tool_calls: int          # 固定为 3
 
@@ -1034,37 +1021,79 @@ async def _fetch_memory_entries(
     return prompt_entries
 ```
 
-#### 任务 3.3：实现 Tool Planner 节点
+#### 任务 3.3：实现 Tool Planner 节点（使用 Function Calling）
 
 ```python
 async def _node_tool_planner(self, state: DeepAnalysisState) -> dict:
-    """AI 决定是否调用搜索工具（异步）"""
+    """AI 决定是否调用搜索工具，并生成搜索关键词（异步，使用 Function Calling）"""
     logger.info("🤖 Tool Planner: 决策下一步工具")
 
     prompt = self._build_planner_prompt(state)
-    decision_text = await self._invoke_text_model(prompt)
 
-    import json
+    # 使用 Function Calling 保证结构化输出
+    tool_definition = {
+        "name": "decide_next_tools",
+        "description": "根据已有证据决定下一步需要调用的工具，并为搜索生成最优关键词",
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "tools": {
+                    "type": "ARRAY",
+                    "items": {"type": "STRING"},
+                    "description": "需要调用的工具列表,可选值: search"
+                },
+                "search_keywords": {
+                    "type": "STRING",
+                    "description": "如果需要搜索，生成最优搜索关键词（中英文混合，包含关键实体、官方来源标识）。示例：'USDC Circle depeg official statement 脱锚 官方声明'"
+                },
+                "reason": {
+                    "type": "STRING",
+                    "description": "决策理由"
+                }
+            },
+            "required": ["tools", "reason"]
+        }
+    }
+
     try:
-        decision = json.loads(decision_text)
-        tools = decision.get("tools", [])
-        reason = decision.get("reason", "")
-        logger.info("🤖 Tool Planner 决策: %s, 理由: %s", tools, reason)
-        return {"next_tools": tools}
-    except json.JSONDecodeError:
-        logger.warning("无法解析 planner 决策: %s", decision_text)
+        response = await self._client.generate_content_with_tools(
+            messages=[{"role": "user", "content": prompt}],
+            tools=[tool_definition]
+        )
+
+        # 解析 Function Calling 结果
+        if response and response.tool_calls:
+            decision = response.tool_calls[0].arguments
+            tools = decision.get("tools", [])
+            search_keywords = decision.get("search_keywords", "")
+            reason = decision.get("reason", "")
+
+            logger.info("🤖 Tool Planner 决策: tools=%s, keywords='%s', 理由: %s",
+                       tools, search_keywords, reason)
+
+            return {
+                "next_tools": tools,
+                "search_keywords": search_keywords  # 🆕 传递 AI 生成的关键词
+            }
+        else:
+            logger.warning("Tool Planner 未返回工具调用")
+            return {"next_tools": []}
+
+    except Exception as exc:
+        logger.error("Tool Planner 执行失败: %s", exc)
         return {"next_tools": []}
 
 def _build_planner_prompt(self, state: DeepAnalysisState) -> str:
-    """构建工具规划 prompt"""
+    """构建工具规划 prompt（包含关键词生成规则）"""
     payload = state["payload"]
     preliminary = state["preliminary"]
     memory_ev = state.get("memory_evidence", {})
     search_ev = state.get("search_evidence", {})
 
-    return f"""你是工具调度专家,判断是否需要搜索新闻验证。
+    return f"""你是工具调度专家,判断是否需要搜索新闻验证,并生成最优搜索关键词。
 
 【消息内容】{payload.text}
+【消息语言】{payload.language or '未知'}
 【事件类型】{preliminary.event_type}
 【资产】{preliminary.asset}
 【初步置信度】{preliminary.confidence}
@@ -1079,15 +1108,40 @@ def _build_planner_prompt(self, state: DeepAnalysisState) -> str:
 3. 如果 tool_call_count >= 2 → 证据充分,无需再搜索
 4. 如果是数值类事件 (depeg/liquidation) → 暂不需要搜索（第一阶段限制）
 
+【关键词生成规则】（仅当决定搜索时）
+1. **中英文混合**: 如果消息是中文,生成中英文混合关键词,提高搜索覆盖率
+   示例: "比特币 Bitcoin ETF 批准 approval"
+
+2. **包含关键实体**: 提取消息中的具体公司名、协议名、金额等
+   示例: "Circle USDC $3B depeg"
+
+3. **官方来源标识**: 对 hack/regulation/partnership 事件,添加官方关键词
+   - 中文: "官方声明 官方公告"
+   - 英文: "official statement announcement"
+
+4. **事件类型关键词**:
+   - hack → "黑客攻击 hack exploit breach"
+   - regulation → "监管政策 regulation SEC CFTC"
+   - listing → "上线 listing announce"
+   - partnership → "合作 partnership collaboration"
+
+5. **避免泛化词**: 不要使用 "新闻" "消息" "报道" 等低价值词
+
+【示例】
+- 消息: "Circle 确认 USDC 储备安全,脱锚已恢复"
+  → 关键词: "USDC Circle depeg official statement 脱锚 官方声明"
+
+- 消息: "XXX DeFi 协议遭受闪电贷攻击,损失 $50M"
+  → 关键词: "XXX protocol flash loan hack exploit $50M 攻击"
+
+- 消息: "SEC 批准比特币现货 ETF,将于下周开始交易"
+  → 关键词: "Bitcoin spot ETF SEC approval 比特币 现货 批准"
+
 【当前状态】
 - 已调用工具次数: {state['tool_call_count']}
 - 最大调用次数: {state['max_tool_calls']}
 
-返回 JSON:
-- 需要搜索: {{"tools": ["search"], "reason": "传闻类事件需多源验证"}}
-- 无需搜索: {{"tools": [], "reason": "已有充分证据"}}
-
-只返回 JSON,不要其他文字。"""
+请调用 decide_next_tools 函数返回决策和关键词。"""
 
 
 async def _invoke_text_model(self, prompt: str) -> str:
@@ -1139,11 +1193,18 @@ async def _execute_search_tool(self, state: DeepAnalysisState) -> Optional[dict]
     """执行 SearchTool 并转换为 LangGraph 状态格式"""
     preliminary = state["preliminary"]
 
-    keyword = f"{preliminary.asset} {preliminary.event_type}"
-    if preliminary.event_type in ["hack", "regulation"]:
-        keyword += " news official"
+    # 🆕 优先使用 Tool Planner 生成的 AI 关键词
+    keyword = state.get("search_keywords", "").strip()
+    keyword_source = "AI生成"
 
-    logger.info("🔧 调用搜索工具: keyword='%s'", keyword)
+    # 降级方案：如果 AI 未生成关键词，使用基础拼接
+    if not keyword:
+        keyword = f"{preliminary.asset} {preliminary.event_type}"
+        if preliminary.event_type in ["hack", "regulation"]:
+            keyword += " news official"
+        keyword_source = "硬编码降级"
+
+    logger.info("🔧 调用搜索工具: keyword='%s' (来源: %s)", keyword, keyword_source)
 
     try:
         result = await self._search_tool.fetch(keyword=keyword, max_results=5)
@@ -1297,6 +1358,7 @@ async def analyse(self, payload, preliminary):
             search_evidence=None,
             memory_evidence=None,
             next_tools=[],
+            search_keywords="",  # 🆕 初始化为空，由 Tool Planner 填充
             tool_call_count=0,
             max_tool_calls=max_calls,
             final_response="",
@@ -1380,9 +1442,9 @@ test_hack = "XXX DeFi 协议遭受闪电贷攻击,损失超过 $100M USDC"
 **日志检查点**：
 ```
 [INFO] 🧠 Context Gather: 找到 2 条历史事件
-[INFO] 🤖 Tool Planner 决策: ['search'], 理由: 传闻类事件需多源验证
-[INFO] 🔧 SearchTool(provider=tavily) 请求: keyword='XYZ listing'
-[INFO] 🔧 SearchTool 返回 4 条结果
+[INFO] 🤖 Tool Planner 决策: tools=['search'], keywords='XYZ listing Coinbase official announcement 上线 官方公告', 理由: 传闻类事件需多源验证
+[INFO] 🔧 调用搜索工具: keyword='XYZ listing Coinbase official announcement 上线 官方公告' (来源: AI生成)
+[INFO] 🔧 SearchTool 返回 4 条结果 (multi_source=True, official=True)
 [INFO] 📊 Synthesis: 最终置信度 0.65 (初步 0.80)
 ```
 
@@ -1430,7 +1492,7 @@ test_hack = "XXX DeFi 协议遭受闪电贷攻击,损失超过 $100M USDC"
 logger.info(f"🧠 Context Gather: 找到 {len(memory_entries)} 条记忆, 最高相似度: {top_similarity:.2f}")
 
 # 在 _node_tool_planner 中
-logger.info(f"🤖 Tool Planner: 决策={next_tools}, 理由={reason}, 轮次={tool_call_count+1}/3")
+logger.info(f"🤖 Tool Planner: 决策={next_tools}, keywords='{search_keywords}', 理由={reason}, 轮次={tool_call_count+1}/3")
 
 # 在 _node_tool_executor 中
 logger.info(f"🔧 Tool Executor: Tavily keyword='{keyword}', 结果数={len(results)}, 触发={triggered}")
@@ -2014,3 +2076,11 @@ PHASE1_ROLLOUT_PERCENTAGE=0.05  # 5% 流量
   - 🔴 必须修改: 记忆检索逻辑重构、Tool Planner 使用 Function Calling
   - 🟡 强烈建议: 搜索关键词优化、Synthesis Prompt 量化规则
   - 🟢 可选优化: 每日配额限制、Mock/集成测试分离
+- **2025-10-11**: **重大更新 - AI 智能关键词生成**:
+  - 修改建议 #2: 扩展为 "Tool Planner 使用 Function Calling + AI 生成搜索关键词"
+  - 修改建议 #3: 标记为已整合到 #2，删除独立的语言检测逻辑
+  - 更新 `DeepAnalysisState`: 添加 `search_keywords: str` 字段
+  - 更新任务 3.3: `_node_tool_planner` 使用 Function Calling 返回 `search_keywords`
+  - 更新 `_build_planner_prompt`: 添加详细的关键词生成规则（中英文混合、实体提取、官方标识、事件类型关键词）
+  - 更新任务 3.4: `_execute_search_tool` 优先使用 AI 生成的关键词，提供硬编码降级
+  - 优势: **零额外成本和延迟**，充分利用现有 AI 调用，实现端到端智能搜索
