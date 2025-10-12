@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 from abc import ABC, abstractmethod
+from textwrap import dedent
 from typing import Any, Callable, Iterable, Mapping, Sequence
 
 logger = logging.getLogger(__name__)
@@ -107,9 +108,9 @@ def build_deep_analysis_messages(
         "    - 将 action 设为 observe，direction=neutral 或 up（若确有反弹），confidence ≤0.5\n"
         "    - 在 notes 中说明：『短线反弹，24h 涨幅有限（或仍为负），尚未扭转趋势，需警惕假突破』\n"
         "    - 若 1h 为正但 24h/7d 为负，补充：『1h 反弹 +X%，但 24h/7d 仍跌 Y%，未收复关键位，保持观望』\n"
-        "  - **对比判断**：若新闻报道"突破/上涨"但多时间周期数据显示涨幅极小或仅单一时间周期为正，应重点提示"反弹力度不足"\n"
+        "  - **对比判断**：若新闻报道“突破/上涨”但多时间周期数据显示涨幅极小或仅单一时间周期为正，应重点提示“反弹力度不足”\n"
         "  - **真正的上涨**：若 24h 涨幅 >3% 且多个时间周期持续为正，可考虑更积极评估（confidence 可提高，action 可调整为 buy 或更明确的方向）\n"
-        "  - 关键原则：**标题中的"突破""上涨"可能是短线噪音，必须结合多时间周期价格变化判断真实趋势**\n\n"
+        "  - 关键原则：**标题中的“突破”“上涨”可能是短线噪音，必须结合多时间周期价格变化判断真实趋势**\n\n"
         "输出：JSON 格式，包含 summary、event_type、asset、asset_name、action、direction、"
         "confidence、strength、risk_flags、notes、links。"
         "event_type 可选值：listing、delisting、hack、regulation、funding、whale、liquidation、partnership、product_launch、governance、macro、celebrity、airdrop、scam_alert、other。"
