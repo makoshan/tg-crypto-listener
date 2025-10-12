@@ -2066,6 +2066,13 @@ PHASE1_ROLLOUT_PERCENTAGE=0.05  # 5% 流量
 - 如果搜索工具效果显著 → 优先实现价格工具（脱锚场景）
 - 如果传闻验证需求不高 → 跳过第二阶段，专注优化现有流程
 
+#### Phase 2 价格工具预研摘要（2025-10-11 新增）
+- 主数据源：CoinGecko API (`/simple/price`, `/coins/{id}/market_chart`)，Header 使用 `x-cg-demo-api-key: ${COINGECKO_API_KEY}`
+- 核心指标：`price_usd`、`deviation_pct`、`price_change_1h_pct`/`24h_pct`、`volatility_24h`、`volume_24h_usd`
+- 异常判定：偏离阈值 ≥ `PRICE_DEVIATION_THRESHOLD`、稳定币锚定价容忍区间（±0.5%）、24h 波动率暴涨（≥3 倍）
+- 降级方案：CoinGecko 不可用时尝试 Binance `/api/v3/ticker/price`，缺少历史数据时降低 `confidence`
+- Demo Key：`CG-jqfVyg8KDjKCcKRkpkg1Bc3p`（写入 `.env` 的 `COINGECKO_API_KEY`），更多细节见 `docs/deep_analysis_tools_integration_plan.md#phase-2-价格工具-第-3-周`
+
 ---
 
 ## 参考资料

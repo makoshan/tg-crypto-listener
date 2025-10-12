@@ -85,3 +85,40 @@ def format_search_detail(search_ev: dict | None) -> str:
         lines.append(f"{i}. {title} (来源: {source}, 评分: {score})")
 
     return "\n".join(lines)
+
+
+def format_price_evidence(price_ev: dict | None) -> str:
+    """
+    详细格式化价格证据（用于 Synthesis prompt）
+
+    Args:
+        price_ev: 价格证据字典
+
+    Returns:
+        str: 详细描述，包含价格指标和异常标志
+    """
+    if not price_ev or not price_ev.get("success"):
+        return "无价格数据或获取失败"
+
+    data = price_ev.get("data", {})
+    metrics = data.get("metrics", {})
+    anomalies = data.get("anomalies", {})
+    notes = data.get("notes", "")
+
+    lines = [
+        f"资产: {data.get('asset', 'N/A')}",
+        f"当前价格: ${metrics.get('price_usd', 'N/A')}",
+        f"偏离锚定价: {metrics.get('deviation_pct', 'N/A')}%",
+        f"24h 价格变动: {metrics.get('price_change_24h_pct', 'N/A')}%",
+        f"24h 成交量: ${metrics.get('volume_24h_usd', 'N/A')}",
+        f"波动率 (24h): {metrics.get('volatility_24h', 'N/A')}%",
+        "",
+        "异常检测:",
+        f"- 稳定币脱锚: {anomalies.get('price_depeg', False)}",
+        f"- 波动率异常: {anomalies.get('volatility_spike', False)}",
+        f"- 资金费率极端: {anomalies.get('funding_extreme', False)}",
+        "",
+        f"备注: {notes}"
+    ]
+
+    return "\n".join(lines)

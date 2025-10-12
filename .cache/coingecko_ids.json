@@ -1,0 +1,19 @@
+{
+  "ada": "cardano",
+  "arb": "arbitrum",
+  "avax": "avalanche-2",
+  "bnb": "binancecoin",
+  "btc": "bitcoin",
+  "bch": "bitcoin-cash",
+  "doge": "dogecoin",
+  "eth": "ethereum",
+  "matic": "matic-network",
+  "sol": "solana",
+  "steth": "staked-ether",
+  "usdc": "usd-coin",
+  "usdt": "tether",
+  "wbtc": "wrapped-bitcoin",
+  "weth": "weth",
+  "xrp": "ripple",
+  "xyz": "universe-xyz"
+}

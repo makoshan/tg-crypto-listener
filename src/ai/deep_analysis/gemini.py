@@ -34,6 +34,7 @@ class DeepAnalysisState(TypedDict, total=False):
 
     # Evidence slots
     search_evidence: Optional[dict]
+    price_evidence: Optional[dict]
     memory_evidence: Optional[dict]
 
     # Control flow
@@ -71,6 +72,7 @@ class GeminiDeepAnalysisEngine(DeepAnalysisEngine):
         # Store config for tool-enhanced flow
         self._config = config or SimpleNamespace()
         self._search_tool = None
+        self._price_tool = None
 
         # Daily quota tracking for cost control
         self._tool_call_daily_limit = getattr(config, "DEEP_ANALYSIS_TOOL_DAILY_LIMIT", 50)
@@ -96,6 +98,26 @@ class GeminiDeepAnalysisEngine(DeepAnalysisEngine):
                 self._search_tool = None
         else:
             logger.debug("搜索工具未初始化: config存在=%s, TOOL_SEARCH_ENABLED=%s", config is not None, tool_search_enabled)
+
+        # Initialize price tool if enabled
+        tool_price_enabled = getattr(config, "TOOL_PRICE_ENABLED", False) if config else False
+        logger.debug("GeminiDeepAnalysisEngine 初始化: TOOL_PRICE_ENABLED=%s", tool_price_enabled)
+
+        if config and tool_price_enabled:
+            try:
+                from src.ai.tools import PriceTool
+
+                self._price_tool = PriceTool(config)
+                provider = getattr(config, "DEEP_ANALYSIS_PRICE_PROVIDER", "coingecko")
+                logger.info("💰 价格工具已初始化，Provider=%s", provider)
+            except ValueError as exc:
+                logger.warning("⚠️ 价格工具初始化失败: %s", exc)
+                self._price_tool = None
+            except Exception as exc:
+                logger.warning("⚠️ 价格工具初始化异常: %s", exc)
+                self._price_tool = None
+        else:
+            logger.debug("价格工具未初始化: config存在=%s, TOOL_PRICE_ENABLED=%s", config is not None, tool_price_enabled)
 
     async def analyse(
         self,
@@ -131,6 +153,7 @@ class GeminiDeepAnalysisEngine(DeepAnalysisEngine):
                 payload=payload,
                 preliminary=preliminary,
                 search_evidence=None,
+                price_evidence=None,
                 memory_evidence=None,
                 next_tools=[],
                 search_keywords="",

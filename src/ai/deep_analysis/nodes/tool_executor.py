@@ -28,6 +28,10 @@ class ToolExecutorNode(BaseNode):
                 result = await self._execute_search(state)
                 if result:
                     updates["search_evidence"] = result
+            elif tool_name == "price":
+                result = await self._execute_price(state)
+                if result:
+                    updates["price_evidence"] = result
             else:
                 logger.warning("未知工具: %s", tool_name)
 
@@ -81,6 +85,43 @@ class ToolExecutorNode(BaseNode):
 
         except Exception as exc:
             logger.error("搜索工具异常: %s", exc)
+            return None
+
+    async def _execute_price(self, state: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Execute price tool to fetch market data for the asset."""
+        if not self.engine._price_tool:
+            logger.warning("价格工具未初始化")
+            return None
+
+        preliminary = state["preliminary"]
+        asset = preliminary.asset
+
+        # Skip if no valid asset
+        if not asset or asset.upper() == "NONE":
+            logger.info("跳过价格查询: 无有效资产")
+            return None
+
+        try:
+            result = await self.engine._price_tool.snapshot(asset=asset)
+
+            if result.success:
+                logger.info(
+                    "💰 价格工具返回数据 (triggered=%s, confidence=%.2f)",
+                    result.triggered,
+                    result.confidence,
+                )
+                return {
+                    "success": True,
+                    "data": result.data,
+                    "triggered": result.triggered,
+                    "confidence": result.confidence,
+                }
+
+            logger.warning("价格工具失败: %s", result.error)
+            return None
+
+        except Exception as exc:
+            logger.error("价格工具异常: %s", exc)
             return None
 
     def _check_quota(self) -> bool:

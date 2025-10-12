@@ -275,6 +275,16 @@ class Config:
     TOOL_PRICE_ENABLED: bool = _as_bool(os.getenv("TOOL_PRICE_ENABLED", "false"))
     TOOL_MACRO_ENABLED: bool = _as_bool(os.getenv("TOOL_MACRO_ENABLED", "false"))
     TOOL_ONCHAIN_ENABLED: bool = _as_bool(os.getenv("TOOL_ONCHAIN_ENABLED", "false"))
+    DEEP_ANALYSIS_PRICE_PROVIDER: str = os.getenv("DEEP_ANALYSIS_PRICE_PROVIDER", "coingecko")
+    COINGECKO_API_KEY: str = os.getenv("COINGECKO_API_KEY", "")
+    COINGECKO_API_BASE_URL: str = os.getenv("COINGECKO_API_BASE_URL", "https://api.coingecko.com/api/v3")
+    PRICE_CACHE_TTL_SECONDS: int = int(os.getenv("PRICE_CACHE_TTL_SECONDS", "60"))
+    PRICE_MARKET_CHART_CACHE_SECONDS: int = int(os.getenv("PRICE_MARKET_CHART_CACHE_SECONDS", "300"))
+    PRICE_DEVIATION_THRESHOLD: float = float(os.getenv("PRICE_DEVIATION_THRESHOLD", "2.0"))
+    PRICE_STABLECOIN_TOLERANCE: float = float(os.getenv("PRICE_STABLECOIN_TOLERANCE", "0.5"))
+    PRICE_VOLATILITY_SPIKE_MULTIPLIER: float = float(os.getenv("PRICE_VOLATILITY_SPIKE_MULTIPLIER", "3.0"))
+    PRICE_BINANCE_FALLBACK_ENABLED: bool = _as_bool(os.getenv("PRICE_BINANCE_FALLBACK_ENABLED", "true"))
+    BINANCE_REST_BASE_URL: str = os.getenv("BINANCE_REST_BASE_URL", "https://api.binance.com")
 
     @classmethod
     def get_deep_analysis_config(cls) -> Dict[str, Any]:

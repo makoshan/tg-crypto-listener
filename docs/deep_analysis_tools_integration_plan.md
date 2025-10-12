@@ -507,6 +507,9 @@ TOOL_MACRO_ENABLED=false                 # 默认关闭 (可选工具)
 TOOL_ONCHAIN_ENABLED=false               # 默认关闭 (可选工具)
 ```
 
+- **现有 Demo Key**: `CG-jqfVyg8KDjKCcKRkpkg1Bc3p` (可直接写入 `.env` 的 `COINGECKO_API_KEY`, 如后续轮换请在此记录最新值)
+- 需要同时为生产环境配置安全存储 (如 Supabase Secrets / GCP Secret Manager),避免硬编码
+
 ---
 
 ## 实现路径 (分步迭代)
@@ -1057,6 +1060,120 @@ curl -X POST https://api.tavily.com/search \
 - [ ] 脱锚消息能触发 price 工具
 - [ ] price 异常时自动补拉 search
 - [ ] 最终置信度符合预期 (异常+多源确认 → ≥0.8)
+
+#### price_fetcher.py 设计细节 (CoinGecko)
+
+**核心职责**: 针对单个资产返回"是否出现价格异常"的结构化判断,为 Synthesis 提供客观数值证据。
+
+**数据源选择**:
+- **主源**: CoinGecko API (免费,覆盖 12k+ 资产,支持 1 分钟级别价格历史)
+- **备源**: Binance 公开行情 (`/api/v3/ticker/24hr`) —— 仅当资产存在现货交易对时触发,用于交叉验证
+- **扩展**: Coinglass Liquidation API、Binance Funding Rate API (Phase 2.5,可选)
+
+**认证方式**:
+- 在请求 Header 中附加 `x-cg-demo-api-key: {config.COINGECKO_API_KEY}`
+- 若升级 Pro,Header 改为 `x-cg-pro-api-key`
+- 免费版速率限制: 10-30 次/分钟 (按资产),需加缓存
+
+**调用组合** _(单资产一次调用不超过 2 个 HTTP 请求)_:
+1. `GET /api/v3/simple/price`
+   - 参数: `ids={coingecko_id}&vs_currencies=usd&include_24hr_vol=true&include_24hr_change=true`
+   - 获得: `price_usd`, `volume_24h`, `price_change_24h_pct`
+2. `GET /api/v3/coins/{coingecko_id}/market_chart`
+   - 参数: `vs_currency=usd&days=1&interval=hourly`
+   - 获得: 最近 24 小时每小时价格,用于计算 `volatility_24h`、`volatility_avg`
+3. (可选) `GET /api/v3/coins/{coingecko_id}`
+   - 仅当资产首度出现或缺少 `market_data` 时,补充市值、市值占比等信息
+
+**资产 ID 映射**:
+- 在 `data/asset_registry.json` (新建) 维护 `{symbol: coingecko_id}`
+- 若未命中映射:
+  1. 调用 `/api/v3/search?query={symbol}`
+  2. 根据 `symbol` + `market_cap_rank` 选择权重最高的条目
+  3. 结果写回缓存 (`.cache/coingecko_ids.json`) 减少重复查询
+- 支持别名 (如 `USDC.e`, `WETH`) → 通过正则清洗后匹配
+
+**指标计算**:
+```python
+price_usd = simple_price["usd"]
+historical_prices = market_chart["prices"]  # [[timestamp, price], ...]
+
+# 与锚定价比较 (稳定币)
+anchor_price = 1.0 if asset in STABLECOIN_SET else price_usd_baseline(asset)
+deviation_pct = ((price_usd - anchor_price) / anchor_price) * 100
+
+# 波动率: 24h 标准差,再与 7 日均值比较
+volatility_24h = np.std([p for _, p in historical_prices])
+volatility_avg = rolling_volatility_cache.get(asset, default=volatility_24h)
+
+# 清算/资金费率 (Phase 2.5)
+liquidation_1h_usd = coinglass_client.fetch_liquidation(asset, window="1h")
+funding_rate = binance_client.fetch_funding_rate(asset)
+```
+- 若缺少清算/资金费率数据 → 字段留空 (None),不影响触发判断
+
+**异常判定规则**:
+- `triggered = abs(deviation_pct) >= PRICE_DEVIATION_THRESHOLD`
+- 稳定币额外规则: `price_usd < 0.995` 或 `price_usd > 1.005`
+- 衍生指标:
+  - `volatility_spike = volatility_24h / max(volatility_avg, 1e-6)`
+  - `volatility_spike >= 3` 视为异常 → 补拉搜索工具
+  - 若资金费率 > 0.05 (5%) 或 < -0.05 → 标记风险
+
+**返回结构 (更新版)**:
+```json
+{
+  "source": "CoinGecko",
+  "timestamp": "2025-10-11T10:30:00Z",
+  "asset": "USDC",
+  "metrics": {
+    "price_usd": 0.987,
+    "deviation_pct": -1.3,
+    "price_change_1h_pct": -0.8,
+    "price_change_24h_pct": -1.6,
+    "volatility_24h": 1.9,
+    "volatility_avg": 0.4,
+    "volume_24h_usd": 1200000000,
+    "liquidation_1h_usd": null,
+    "liquidation_24h_avg": null,
+    "funding_rate": null
+  },
+  "anomalies": {
+    "price_depeg": true,
+    "volatility_spike": true,
+    "funding_extreme": false
+  },
+  "triggered": true,
+  "confidence": 0.9,
+  "notes": "USDC 价格跌至 $0.987, 偏离锚定 1.3%, 24h 波动率为 1.9"
+}
+```
+
+**错误与降级策略**:
+- 429/5xx → 重试 2 次,退避间隔 0.5s/1s
+- 超时 (≥ config.DEEP_ANALYSIS_TOOL_TIMEOUT) → 记录警告,返回 `success=False`
+- 若 CoinGecko 不可用:
+  1. 尝试 Binance `/ticker/price` 获取现价
+  2. 缺少历史波动数据 → `volatility_*` 置为 None,降低 `confidence` 至 0.6
+- 针对稳定币增加人工兜底: 价格缺失时使用上一次缓存值 (有效期 2 分钟)
+
+**缓存与配额控制**:
+- 使用 `functools.lru_cache(maxsize=128, ttl=60)` or 简易内存缓存:
+  - 相同资产 60s 内直接复用
+  - `market_chart` 结果缓存 5 分钟 (成本高,数据刷新频率低)
+- 在 `GeminiDeepAnalysisEngine` 层记录每日调用次数,超出 `DEEP_ANALYSIS_TOOL_DAILY_LIMIT` 时自动降级到搜索工具
+
+**单元测试建议**:
+1. `test_price_fetcher_happy_path` —— Mock CoinGecko 响应,验证指标计算
+2. `test_price_fetcher_stablecoin_depeg` —— 输入价格 0.98,确保触发
+3. `test_price_fetcher_timeout` —— 模拟超时,检查错误处理
+4. `test_price_fetcher_cache` —— 连续调用同一资产,确保命中缓存
+5. `test_price_fetcher_liquidation_optional` —— 缺失清算数据时字段为空但不触发异常
+
+**后续扩展路线**:
+- Phase 2.5: 接入 Coinglass (清算) + Binance Funding Rate,补齐高级指标
+- Phase 3: 引入 Kaiko/Amberdata 作为机构级数据备选,提升可靠性
+- Phase 4: 在 Tool Planner 中记录价格异常类型 (脱锚/暴涨/暴跌),用于历史对比
 
 ---
 
