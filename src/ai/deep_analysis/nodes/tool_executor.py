@@ -32,6 +32,10 @@ class ToolExecutorNode(BaseNode):
                 result = await self._execute_price(state)
                 if result:
                     updates["price_evidence"] = result
+            elif tool_name == "macro":
+                result = await self._execute_macro(state)
+                if result:
+                    updates["macro_evidence"] = result
             else:
                 logger.warning("未知工具: %s", tool_name)
 
@@ -121,8 +125,90 @@ class ToolExecutorNode(BaseNode):
             return None
 
         except Exception as exc:
-            logger.error("价格工具异常: %s", exc)
+                logger.error("价格工具异常: %s", exc)
+                return None
+
+    async def _execute_macro(self, state: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Execute macro tool to fetch macro-economic indicators."""
+        if not self.engine._macro_tool:
+            logger.warning("宏观工具未初始化")
             return None
+
+        indicators = self._resolve_macro_indicators(state)
+        if not indicators:
+            logger.info("宏观工具跳过: 未找到合适的宏观指标")
+            return None
+
+        primary_indicator = indicators[0]
+        try:
+            result = await self.engine._macro_tool.snapshot(indicator=primary_indicator)
+
+            if result.success:
+                logger.info(
+                    "🌐 宏观工具返回数据 (indicator=%s, triggered=%s, confidence=%.2f)",
+                    primary_indicator,
+                    result.triggered,
+                    result.confidence,
+                )
+                return {
+                    "success": True,
+                    "data": result.data,
+                    "triggered": result.triggered,
+                    "confidence": result.confidence,
+                    "indicator": primary_indicator,
+                }
+
+            logger.warning("宏观工具失败: %s", result.error)
+            return None
+        except Exception as exc:
+            logger.error("宏观工具异常: %s", exc)
+            return None
+
+    def _resolve_macro_indicators(self, state: Dict[str, Any]) -> list[str]:
+        """Resolve indicator list from planner output or heuristics."""
+        indicators = [
+            indicator.strip().upper()
+            for indicator in state.get("macro_indicators", []) or []
+            if isinstance(indicator, str) and indicator.strip()
+        ]
+        if indicators:
+            return indicators
+
+        payload = state.get("payload")
+        preliminary = state.get("preliminary")
+
+        text = ""
+        if payload is not None:
+            text = f"{getattr(payload, 'text', '')}\n{getattr(payload, 'translated_text', '')}"
+        text_lower = text.lower()
+
+        suggestions: list[str] = []
+        if "cpi" in text_lower or "通胀" in text_lower or "inflation" in text_lower:
+            suggestions.append("CPI")
+        if "核心通胀" in text_lower or "core" in text_lower:
+            suggestions.append("CORE_CPI")
+        if any(keyword in text_lower for keyword in ["加息", "降息", "rate hike", "interest rate"]):
+            suggestions.append("FED_FUNDS")
+        if any(keyword in text_lower for keyword in ["就业", "失业", "job", "labor"]):
+            suggestions.append("UNEMPLOYMENT")
+        if any(keyword in text_lower for keyword in ["美元", "dxy", "usd index", "trade war", "贸易战"]):
+            suggestions.append("DXY")
+        if any(keyword in text_lower for keyword in ["恐慌", "战争", "war", "conflict", "geopolitical"]):
+            suggestions.append("VIX")
+
+        event_type = getattr(preliminary, "event_type", "").lower() if preliminary else ""
+        if event_type == "macro" and not suggestions:
+            suggestions.append("CPI")
+
+        # 去重同时保持顺序
+        seen = set()
+        ordered = []
+        for indicator in suggestions:
+            if indicator not in seen:
+                seen.add(indicator)
+                ordered.append(indicator)
+
+        return ordered
 
     def _check_quota(self) -> bool:
         """Check if daily quota is exceeded."""

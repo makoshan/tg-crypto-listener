@@ -2,6 +2,7 @@
 
 from .base import BaseTool, ToolResult
 from .exceptions import ToolFetchError, ToolRateLimitError, ToolTimeoutError
+from .macro.fetcher import MacroTool
 from .price.fetcher import PriceTool
 from .search.fetcher import SearchTool
 
@@ -10,6 +11,7 @@ __all__ = [
     "ToolResult",
     "SearchTool",
     "PriceTool",
+    "MacroTool",
     "ToolFetchError",
     "ToolTimeoutError",
     "ToolRateLimitError",

@@ -122,3 +122,73 @@ def format_price_evidence(price_ev: dict | None) -> str:
     ]
 
     return "\n".join(lines)
+
+
+def format_macro_brief(macro_ev: dict | None) -> str:
+    """
+    简要格式化宏观证据（用于 Tool Planner prompt）
+
+    Args:
+        macro_ev: 宏观证据字典
+
+    Returns:
+        str: 简要描述
+    """
+    if not macro_ev or not macro_ev.get("success"):
+        return "无"
+
+    data = macro_ev.get("data", {})
+    metrics = data.get("metrics", {})
+    indicator = data.get("indicator", "N/A")
+    value = metrics.get("value", "N/A")
+    mom = metrics.get("change_mom_pct")
+    yoy = metrics.get("change_yoy_pct")
+
+    parts = [f"{indicator}={value}"]
+    if mom is not None:
+        parts.append(f"环比 {round(float(mom), 2)}%")
+    if yoy is not None:
+        parts.append(f"同比 {round(float(yoy), 2)}%")
+
+    triggered = macro_ev.get("triggered", False)
+    if triggered:
+        parts.append("⚠️异常")
+
+    return " | ".join(parts)
+
+
+def format_macro_detail(macro_ev: dict | None) -> str:
+    """
+    详细格式化宏观证据（用于 Synthesis prompt）
+
+    Args:
+        macro_ev: 宏观证据字典
+
+    Returns:
+        str: 详细描述
+    """
+    if not macro_ev or not macro_ev.get("success"):
+        return "无宏观数据或获取失败"
+
+    data = macro_ev.get("data", {})
+    metrics = data.get("metrics", {})
+    anomalies = data.get("anomalies", {})
+    thresholds = data.get("thresholds", {})
+
+    lines = [
+        f"指标: {data.get('indicator_name') or data.get('indicator')}",
+        f"最新值: {metrics.get('value')}",
+        f"前值: {metrics.get('previous')}",
+        f"年同比: {metrics.get('change_yoy_pct')}",
+        f"月环比: {metrics.get('change_mom_pct')}",
+        f"移动均值: {metrics.get('moving_average')}",
+        f"偏离均值: {metrics.get('deviation_from_ma_pct')}%",
+        f"发布时间: {metrics.get('release_time')}",
+        "",
+        f"触发阈值: {thresholds}",
+        f"触发异常: {list(anomalies.keys()) if anomalies else 'None'}",
+        "",
+        f"说明: {data.get('notes', '')}",
+    ]
+
+    return "\n".join(lines)

@@ -35,11 +35,13 @@ class DeepAnalysisState(TypedDict, total=False):
     # Evidence slots
     search_evidence: Optional[dict]
     price_evidence: Optional[dict]
+    macro_evidence: Optional[dict]
     memory_evidence: Optional[dict]
 
     # Control flow
     next_tools: list[str]
     search_keywords: str  # AI-generated search keywords
+    macro_indicators: list[str]
     tool_call_count: int
     max_tool_calls: int
 
@@ -73,6 +75,7 @@ class GeminiDeepAnalysisEngine(DeepAnalysisEngine):
         self._config = config or SimpleNamespace()
         self._search_tool = None
         self._price_tool = None
+        self._macro_tool = None
 
         # Daily quota tracking for cost control
         self._tool_call_daily_limit = getattr(config, "DEEP_ANALYSIS_TOOL_DAILY_LIMIT", 50)
@@ -119,6 +122,25 @@ class GeminiDeepAnalysisEngine(DeepAnalysisEngine):
         else:
             logger.debug("价格工具未初始化: config存在=%s, TOOL_PRICE_ENABLED=%s", config is not None, tool_price_enabled)
 
+        tool_macro_enabled = getattr(config, "TOOL_MACRO_ENABLED", False) if config else False
+        logger.debug("GeminiDeepAnalysisEngine 初始化: TOOL_MACRO_ENABLED=%s", tool_macro_enabled)
+
+        if config and tool_macro_enabled:
+            try:
+                from src.ai.tools import MacroTool
+
+                self._macro_tool = MacroTool(config)
+                provider = getattr(config, "DEEP_ANALYSIS_MACRO_PROVIDER", "fred")
+                logger.info("🌐 宏观工具已初始化，Provider=%s", provider)
+            except ValueError as exc:
+                logger.warning("⚠️ 宏观工具初始化失败: %s", exc)
+                self._macro_tool = None
+            except Exception as exc:
+                logger.warning("⚠️ 宏观工具初始化异常: %s", exc)
+                self._macro_tool = None
+        else:
+            logger.debug("宏观工具未初始化: config存在=%s, TOOL_MACRO_ENABLED=%s", config is not None, tool_macro_enabled)
+
     async def analyse(
         self,
         payload: "EventPayload",
@@ -154,9 +176,11 @@ class GeminiDeepAnalysisEngine(DeepAnalysisEngine):
                 preliminary=preliminary,
                 search_evidence=None,
                 price_evidence=None,
+                macro_evidence=None,
                 memory_evidence=None,
                 next_tools=[],
                 search_keywords="",
+                macro_indicators=[],
                 tool_call_count=0,
                 max_tool_calls=max_calls,
                 final_response="",

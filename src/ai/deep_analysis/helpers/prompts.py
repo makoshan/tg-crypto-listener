@@ -1,7 +1,14 @@
 """Prompt Builder Helper"""
 from typing import Any, Mapping
 
-from .formatters import format_memory_evidence, format_price_evidence, format_search_detail, format_search_evidence
+from .formatters import (
+    format_macro_brief,
+    format_macro_detail,
+    format_memory_evidence,
+    format_price_evidence,
+    format_search_detail,
+    format_search_evidence,
+)
 
 def build_planner_prompt(state: Mapping[str, Any], _engine: Any | None = None) -> str:
     """
@@ -18,6 +25,7 @@ def build_planner_prompt(state: Mapping[str, Any], _engine: Any | None = None) -
     memory_ev = state.get("memory_evidence", {})
     search_ev = state.get("search_evidence", {})
     price_ev = state.get("price_evidence", {})
+    macro_ev = state.get("macro_evidence", {})
 
     # 获取消息语言属性
     language = getattr(payload, "language", "未知")
@@ -26,12 +34,14 @@ def build_planner_prompt(state: Mapping[str, Any], _engine: Any | None = None) -
     memory_text = memory_ev.get("formatted", "无") if memory_ev else "无"
     search_text = format_search_evidence(search_ev)
     price_text = "已获取" if price_ev and price_ev.get("success") else "无"
+    macro_text = format_macro_brief(macro_ev)
 
     return f"""你是工具调度专家，智能决策需要调用哪些工具来验证消息真实性。
 
 【可用工具】
 1. **search** - 搜索新闻验证事件真实性
 2. **price** - 获取资产价格数据，验证价格异常
+3. **macro** - 获取宏观经济指标（CPI、利率、就业、美元指数、VIX 等）
 
 【消息内容】
 {payload.text}
@@ -48,6 +58,7 @@ def build_planner_prompt(state: Mapping[str, Any], _engine: Any | None = None) -
 - 历史记忆: {memory_text}
 - 搜索结果: {search_text}
 - 价格数据: {price_text}
+- 宏观数据: {macro_text}
 
 【工具调用决策原则】⚠️ 问题驱动 + 成本意识
 
@@ -87,6 +98,23 @@ def build_planner_prompt(state: Mapping[str, Any], _engine: Any | None = None) -
 → 已有价格数据
 → 消息与价格/市场无关（纯新闻）
 → 资产无效或无法获取价格
+
+**macro 工具的价值**：
+- 识别宏观驱动（通胀、利率、美元、就业、避险情绪）对市场的影响
+- 验证宏观叙事是否得到数据支持
+- 提供“贸易战/战争/政策”类事件的客观指标（美元指数、VIX、就业等）
+
+**何时 macro 价值高？**
+→ 消息涉及宏观叙事（通胀、加息、就业、贸易战、战争、美元走势）
+→ 需要量化宏观背景来解释价格波动
+→ 搜索证据不足以判定宏观影响时
+
+**宏观指标选择指南**：
+- 通胀/物价 → `CPI`, `CORE_CPI`
+- 加息/降息 → `FED_FUNDS`
+- 就业/失业 → `UNEMPLOYMENT`
+- 美元强弱/贸易战 → `DXY`
+- 恐慌情绪/战争风险 → `VIX`
 
 **成本约束**：
 - 工具调用消耗配额，优先级：成本 < 可靠性
@@ -131,6 +159,11 @@ def build_planner_prompt(state: Mapping[str, Any], _engine: Any | None = None) -
 - 决策: tools=[]
 - 关键问题：已有证据足够了吗？工具能提升多少置信度？
 
+【宏观指标生成规则】（仅当 tools 包含 "macro" 时生成）
+1. 从消息文本中识别关键宏观主题
+2. 在返回的 `macro_indicators` 字段中列出 1-3 个指标代码（如 ["CPI","VIX"]）
+3. 可选值：CPI, CORE_CPI, FED_FUNDS, UNEMPLOYMENT, DXY, VIX
+
 【当前状态】
 - 已调用工具次数: {state['tool_call_count']}
 - 最大调用次数: {state['max_tool_calls']}
@@ -159,11 +192,13 @@ def build_synthesis_prompt(state: Mapping[str, Any], _engine: Any | None = None)
     memory_ev = state.get("memory_evidence", {})
     search_ev = state.get("search_evidence", {})
     price_ev = state.get("price_evidence", {})
+    macro_ev = state.get("macro_evidence", {})
 
     # 格式化证据
     memory_text = memory_ev.get("formatted", "无历史相似事件") if memory_ev else "无历史相似事件"
     search_text = format_search_detail(search_ev)
     price_text = format_price_evidence(price_ev)
+    macro_text = format_macro_detail(macro_ev)
 
     return f"""你是加密交易台资深分析师,已掌握完整证据,请给出最终判断。
 
@@ -185,6 +220,9 @@ def build_synthesis_prompt(state: Mapping[str, Any], _engine: Any | None = None)
 
 【价格数据】
 {price_text}
+
+【宏观数据】
+{macro_text}
 
 【时效性判断】⚠️ 关键：区分"新机会"vs"事后回顾"
 

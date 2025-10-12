@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import unicodedata
@@ -276,6 +277,7 @@ class Config:
     TOOL_MACRO_ENABLED: bool = _as_bool(os.getenv("TOOL_MACRO_ENABLED", "false"))
     TOOL_ONCHAIN_ENABLED: bool = _as_bool(os.getenv("TOOL_ONCHAIN_ENABLED", "false"))
     DEEP_ANALYSIS_PRICE_PROVIDER: str = os.getenv("DEEP_ANALYSIS_PRICE_PROVIDER", "coingecko")
+    DEEP_ANALYSIS_MACRO_PROVIDER: str = os.getenv("DEEP_ANALYSIS_MACRO_PROVIDER", "fred")
     COINGECKO_API_KEY: str = os.getenv("COINGECKO_API_KEY", "")
     COINGECKO_API_BASE_URL: str = os.getenv("COINGECKO_API_BASE_URL", "https://api.coingecko.com/api/v3")
     PRICE_CACHE_TTL_SECONDS: int = int(os.getenv("PRICE_CACHE_TTL_SECONDS", "60"))
@@ -285,6 +287,19 @@ class Config:
     PRICE_VOLATILITY_SPIKE_MULTIPLIER: float = float(os.getenv("PRICE_VOLATILITY_SPIKE_MULTIPLIER", "3.0"))
     PRICE_BINANCE_FALLBACK_ENABLED: bool = _as_bool(os.getenv("PRICE_BINANCE_FALLBACK_ENABLED", "true"))
     BINANCE_REST_BASE_URL: str = os.getenv("BINANCE_REST_BASE_URL", "https://api.binance.com")
+    FRED_API_KEY: str = os.getenv("FRED_API_KEY", "")
+    FRED_API_BASE_URL: str = os.getenv("FRED_API_BASE_URL", "https://api.stlouisfed.org/fred")
+    MACRO_CACHE_TTL_SECONDS: int = int(os.getenv("MACRO_CACHE_TTL_SECONDS", "1800"))
+    MACRO_EXPECTATIONS_JSON: str = os.getenv("MACRO_EXPECTATIONS_JSON", "").strip()
+    try:
+        MACRO_EXPECTATIONS: Dict[str, float] = (
+            json.loads(MACRO_EXPECTATIONS_JSON) if MACRO_EXPECTATIONS_JSON else {}
+        )
+        if not isinstance(MACRO_EXPECTATIONS, dict):
+            raise ValueError("MACRO_EXPECTATIONS_JSON 必须是 JSON 对象")
+    except (json.JSONDecodeError, ValueError) as exc:
+        logger.warning("解析 MACRO_EXPECTATIONS_JSON 失败: %s", exc)
+        MACRO_EXPECTATIONS = {}
 
     @classmethod
     def get_deep_analysis_config(cls) -> Dict[str, Any]:

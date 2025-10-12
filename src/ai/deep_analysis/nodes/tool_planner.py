@@ -33,11 +33,16 @@ class ToolPlannerNode(BaseNode):
                     "tools": {
                         "type": "ARRAY",
                         "items": {"type": "STRING"},
-                        "description": "需要调用的工具列表,可选值: search, price",
+                        "description": "需要调用的工具列表,可选值: search, price, macro",
                     },
                     "search_keywords": {
                         "type": "STRING",
                         "description": "搜索关键词（中英文混合，仅当 tools 包含 search 时需要）",
+                    },
+                    "macro_indicators": {
+                        "type": "ARRAY",
+                        "items": {"type": "STRING"},
+                        "description": "当 tools 包含 macro 时，列出需要查询的宏观指标（如 CPI、FED_FUNDS、VIX）",
                     },
                     "reason": {"type": "STRING", "description": "决策理由，说明为什么需要或不需要调用这些工具"},
                 },
@@ -70,20 +75,26 @@ class ToolPlannerNode(BaseNode):
                 decision = response.function_calls[0].args
                 tools = decision.get("tools", [])
                 keywords = decision.get("search_keywords", "")
+                macro_indicators = decision.get("macro_indicators", []) or []
                 reason = decision.get("reason", "")
 
                 logger.info(
-                    "🤖 Tool Planner 决策: tools=%s, keywords='%s', 理由: %s",
+                    "🤖 Tool Planner 决策: tools=%s, keywords='%s', macro=%s, 理由: %s",
                     tools,
                     keywords,
+                    macro_indicators,
                     reason,
                 )
 
-                return {"next_tools": tools, "search_keywords": keywords}
+                return {
+                    "next_tools": tools,
+                    "search_keywords": keywords,
+                    "macro_indicators": macro_indicators,
+                }
 
             logger.warning("Tool Planner 未返回工具调用")
-            return {"next_tools": []}
+            return {"next_tools": [], "macro_indicators": []}
 
         except Exception as exc:
             logger.error("Tool Planner 执行失败: %s", exc)
-            return {"next_tools": []}
+            return {"next_tools": [], "macro_indicators": []}

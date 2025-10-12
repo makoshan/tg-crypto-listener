@@ -152,11 +152,13 @@ DeepAnalysisState(TypedDict):
 
    请判断下一步需要哪些工具,返回 JSON:
    {
-     "tools": ["price", "search"],
-     "reason": "需要验证价格偏离度并进行多源确认"
+     "tools": ["price", "macro"],
+     "search_keywords": "USDC depeg Circle official statement",
+     "macro_indicators": ["CPI"],
+     "reason": "需要验证价格偏离度，并补充通胀数据解释市场情绪"
    }
 
-   如果证据已充分,返回: {"tools": [], "reason": "证据充分,可进行最终判断"}
+   如果证据已充分,返回: {"tools": [], "macro_indicators": [], "reason": "证据充分,可进行最终判断"}
    ```
 
 **输出**: 更新 `state["next_tools"]`
@@ -224,24 +226,46 @@ DeepAnalysisState(TypedDict):
   ```
 
 ##### macro_snapshot (宏观数据工具)
-- **文件**: `src/ai/tools/macro_fetcher.py`
-- **函数**: `async def get_macro_snapshot(indicator: str, config: Config) -> dict`
-- **数据源**: FRED API (美联储经济数据)
+- **文件**: `src/ai/tools/macro/fetcher.py`
+- **入口**: `MacroTool.snapshot(indicator: str, force_refresh: bool = False)`
+- **Provider**: `src/ai/tools/macro/providers/fred.py` (默认使用 FRED，可扩展 Trading Economics)
+- **核心能力**:
+  - 支持指标枚举: `CPI`, `CORE_CPI`, `FED_FUNDS`, `UNEMPLOYMENT`, `DXY`, `VIX`
+  - 计算月环比/年同比、相对移动均线偏离、市场预期偏差(`MACRO_EXPECTATIONS_JSON`)
+  - 依据配置阈值输出异常标签 `anomalies`，生成 `triggered` 标记
+  - 结果缓存 (`MACRO_CACHE_TTL_SECONDS`, 默认 30 分钟)
 - **返回格式**:
   ```json
   {
     "source": "FRED",
     "timestamp": "2025-10-11T10:30:00Z",
     "indicator": "CPI",
+    "indicator_name": "美国CPI(城市居民消费价格指数,季调)",
     "metrics": {
       "value": 3.2,
-      "unit": "percent",
-      "change_mom": 0.1,
-      "release_time": "2025-10-10T20:30:00Z",
-      "expectation": 3.1,
-      "previous": 3.1
+      "previous": 3.0,
+      "year_ago": 2.1,
+      "change_abs": 0.2,
+      "change_mom_pct": 0.35,
+      "change_yoy_pct": 1.10,
+      "moving_average": 3.05,
+      "deviation_from_ma_pct": 1.64,
+      "expectation": 3.0,
+      "surprise": 0.2,
+      "surprise_pct": 0.67,
+      "release_time": "2025-10-10T00:00:00"
     },
-    "triggered": false,  # 是否超出预期 > 0.2%
+    "anomalies": {
+      "mom_spike": true,
+      "consensus_surprise": true
+    },
+    "thresholds": {
+      "mom_pct_threshold": 0.3,
+      "yoy_pct_threshold": 0.5,
+      "surprise_pct_threshold": 0.2
+    },
+    "notes": "衡量美国城市居民消费品与服务价格的平均变动",
+    "triggered": true,
     "confidence": 1.0
   }
   ```
@@ -946,9 +970,21 @@ SEARCH_MAX_RESULTS=5                     # 最大搜索结果数
 SEARCH_MULTI_SOURCE_THRESHOLD=3          # 多源一致性阈值 (来源数)
 SEARCH_INCLUDE_DOMAINS=coindesk.com,theblock.co,cointelegraph.com  # 优先域名 (逗号分隔)
 
-# 其他工具 (Phase 2+, 暂时禁用)
-TOOL_PRICE_ENABLED=false
-TOOL_MACRO_ENABLED=false
+# 价格工具 (Phase 2)
+TOOL_PRICE_ENABLED=true
+DEEP_ANALYSIS_PRICE_PROVIDER=coingecko
+COINGECKO_API_KEY=xxx
+PRICE_CACHE_TTL_SECONDS=60
+
+# 宏观工具 (Phase 3)
+TOOL_MACRO_ENABLED=true
+DEEP_ANALYSIS_MACRO_PROVIDER=fred
+FRED_API_KEY=xxx
+MACRO_CACHE_TTL_SECONDS=1800
+# 可选: 提前写入市场预期, 例如 {"CPI":3.0,"FED_FUNDS":5.50}
+MACRO_EXPECTATIONS_JSON=
+
+# 其他工具 (Phase 3+/可选)
 TOOL_ONCHAIN_ENABLED=false
 ```
 
@@ -1184,10 +1220,10 @@ funding_rate = binance_client.fetch_funding_rate(asset)
 **任务清单**:
 
 1. **实现宏观工具** (Day 1-2)
-   - [ ] `src/ai/tools/macro_fetcher.py`
-   - [ ] 集成 FRED API (`/series/observations`)
-   - [ ] 支持 CPI/利率/美债等指标
-   - [ ] 实现超预期判断
+   - [x] `src/ai/tools/macro/fetcher.py`
+   - [x] 集成 FRED API (`/series/observations`)
+   - [x] 支持 CPI/利率/美债等指标
+   - [x] 实现超预期判断 (基于 `MACRO_EXPECTATIONS_JSON` 与阈值)
 
 2. **实现链上工具** (Day 3-4)
    - [ ] `src/ai/tools/onchain_fetcher.py`
