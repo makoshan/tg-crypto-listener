@@ -5,6 +5,8 @@ from .formatters import (
     format_macro_brief,
     format_macro_detail,
     format_memory_evidence,
+    format_onchain_brief,
+    format_onchain_detail,
     format_price_evidence,
     format_search_detail,
     format_search_evidence,
@@ -26,6 +28,8 @@ def build_planner_prompt(state: Mapping[str, Any], _engine: Any | None = None) -
     search_ev = state.get("search_evidence", {})
     price_ev = state.get("price_evidence", {})
     macro_ev = state.get("macro_evidence", {})
+    onchain_ev = state.get("onchain_evidence", {})
+    onchain_ev = state.get("onchain_evidence", {})
 
     # 获取消息语言属性
     language = getattr(payload, "language", "未知")
@@ -35,6 +39,7 @@ def build_planner_prompt(state: Mapping[str, Any], _engine: Any | None = None) -
     search_text = format_search_evidence(search_ev)
     price_text = "已获取" if price_ev and price_ev.get("success") else "无"
     macro_text = format_macro_brief(macro_ev)
+    onchain_text = format_onchain_brief(onchain_ev)
 
     return f"""你是工具调度专家，智能决策需要调用哪些工具来验证消息真实性。
 
@@ -42,6 +47,7 @@ def build_planner_prompt(state: Mapping[str, Any], _engine: Any | None = None) -
 1. **search** - 搜索新闻验证事件真实性
 2. **price** - 获取资产价格数据，验证价格异常
 3. **macro** - 获取宏观经济指标（CPI、利率、就业、美元指数、VIX 等）
+4. **onchain** - 获取链上流动性/赎回数据（TVL、赎回、桥接状态）
 
 【消息内容】
 {payload.text}
@@ -59,6 +65,7 @@ def build_planner_prompt(state: Mapping[str, Any], _engine: Any | None = None) -
 - 搜索结果: {search_text}
 - 价格数据: {price_text}
 - 宏观数据: {macro_text}
+- 链上数据: {onchain_text}
 
 【工具调用决策原则】⚠️ 问题驱动 + 成本意识
 
@@ -116,6 +123,20 @@ def build_planner_prompt(state: Mapping[str, Any], _engine: Any | None = None) -
 - 美元强弱/贸易战 → `DXY`
 - 恐慌情绪/战争风险 → `VIX`
 
+**onchain 工具的价值**：
+- 判断稳定币/跨链资产是否出现大量赎回或流动性枯竭
+- 验证链上资金流是否支持消息描述（如桥接暂停、赎回潮）
+- 发现潜在系统性风险（脱锚、流动性断裂）
+
+**何时 onchain 价值高？**
+→ 脱锚、赎回、桥接暂停等消息  
+→ 黑客/安全事件怀疑资金外流  
+→ 需要量化链上资金变化支持决策
+
+**onchain 资产选择指南**：
+- 默认使用消息中的稳定币或桥接资产（如 USDC、USDT、USDE、WBETH）
+- AI 可指定 `onchain_assets` 补充额外观测对象（如多资产事件）
+
 **成本约束**：
 - 工具调用消耗配额，优先级：成本 < 可靠性
 - 优先使用免费证据：消息内容、历史记忆
@@ -164,6 +185,11 @@ def build_planner_prompt(state: Mapping[str, Any], _engine: Any | None = None) -
 2. 在返回的 `macro_indicators` 字段中列出 1-3 个指标代码（如 ["CPI","VIX"]）
 3. 可选值：CPI, CORE_CPI, FED_FUNDS, UNEMPLOYMENT, DXY, VIX
 
+【链上资产生成规则】（仅当 tools 包含 "onchain" 时生成）
+1. 使用消息中提到的稳定币/桥接资产代号
+2. 若消息涉及多资产赎回，可列出 1-2 个优先观察的资产（如 ["USDC","USDT"]）
+3. 返回简洁大写代号；若无法判断，可留空让系统使用默认资产
+
 【当前状态】
 - 已调用工具次数: {state['tool_call_count']}
 - 最大调用次数: {state['max_tool_calls']}
@@ -199,6 +225,7 @@ def build_synthesis_prompt(state: Mapping[str, Any], _engine: Any | None = None)
     search_text = format_search_detail(search_ev)
     price_text = format_price_evidence(price_ev)
     macro_text = format_macro_detail(macro_ev)
+    onchain_text = format_onchain_detail(onchain_ev)
 
     return f"""你是加密交易台资深分析师,已掌握完整证据,请给出最终判断。
 
@@ -223,6 +250,9 @@ def build_synthesis_prompt(state: Mapping[str, Any], _engine: Any | None = None)
 
 【宏观数据】
 {macro_text}
+
+【链上数据】
+{onchain_text}
 
 【时效性判断】⚠️ 关键：区分"新机会"vs"事后回顾"
 

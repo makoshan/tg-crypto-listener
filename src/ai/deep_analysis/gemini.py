@@ -36,12 +36,14 @@ class DeepAnalysisState(TypedDict, total=False):
     search_evidence: Optional[dict]
     price_evidence: Optional[dict]
     macro_evidence: Optional[dict]
+    onchain_evidence: Optional[dict]
     memory_evidence: Optional[dict]
 
     # Control flow
     next_tools: list[str]
     search_keywords: str  # AI-generated search keywords
     macro_indicators: list[str]
+    onchain_assets: list[str]
     tool_call_count: int
     max_tool_calls: int
 
@@ -76,6 +78,7 @@ class GeminiDeepAnalysisEngine(DeepAnalysisEngine):
         self._search_tool = None
         self._price_tool = None
         self._macro_tool = None
+        self._onchain_tool = None
 
         # Daily quota tracking for cost control
         self._tool_call_daily_limit = getattr(config, "DEEP_ANALYSIS_TOOL_DAILY_LIMIT", 50)
@@ -141,6 +144,25 @@ class GeminiDeepAnalysisEngine(DeepAnalysisEngine):
         else:
             logger.debug("宏观工具未初始化: config存在=%s, TOOL_MACRO_ENABLED=%s", config is not None, tool_macro_enabled)
 
+        tool_onchain_enabled = getattr(config, "TOOL_ONCHAIN_ENABLED", False) if config else False
+        logger.debug("GeminiDeepAnalysisEngine 初始化: TOOL_ONCHAIN_ENABLED=%s", tool_onchain_enabled)
+
+        if config and tool_onchain_enabled:
+            try:
+                from src.ai.tools import OnchainTool
+
+                self._onchain_tool = OnchainTool(config)
+                provider = getattr(config, "DEEP_ANALYSIS_ONCHAIN_PROVIDER", "defillama")
+                logger.info("⛓️ 链上工具已初始化，Provider=%s", provider)
+            except ValueError as exc:
+                logger.warning("⚠️ 链上工具初始化失败: %s", exc)
+                self._onchain_tool = None
+            except Exception as exc:
+                logger.warning("⚠️ 链上工具初始化异常: %s", exc)
+                self._onchain_tool = None
+        else:
+            logger.debug("链上工具未初始化: config存在=%s, TOOL_ONCHAIN_ENABLED=%s", config is not None, tool_onchain_enabled)
+
     async def analyse(
         self,
         payload: "EventPayload",
@@ -177,10 +199,12 @@ class GeminiDeepAnalysisEngine(DeepAnalysisEngine):
                 search_evidence=None,
                 price_evidence=None,
                 macro_evidence=None,
+                onchain_evidence=None,
                 memory_evidence=None,
                 next_tools=[],
                 search_keywords="",
                 macro_indicators=[],
+                onchain_assets=[],
                 tool_call_count=0,
                 max_tool_calls=max_calls,
                 final_response="",

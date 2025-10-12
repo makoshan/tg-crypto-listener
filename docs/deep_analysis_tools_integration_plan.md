@@ -271,9 +271,14 @@ DeepAnalysisState(TypedDict):
   ```
 
 ##### onchain_monitor (链上数据工具)
-- **文件**: `src/ai/tools/onchain_fetcher.py`
-- **函数**: `async def get_liquidity_stats(asset: str, config: Config) -> dict`
-- **数据源**: DeFiLlama API / Etherscan
+- **文件**: `src/ai/tools/onchain/fetcher.py`
+- **Provider**: `src/ai/tools/onchain/providers/defillama.py`
+- **数据源**: DeFiLlama Stablecoin API (`/stablecoins?includePrices=true`)
+- **核心能力**:
+  - 支持 USDC、USDT、DAI、USDE、WBETH 等稳定币/锚定资产
+  - 计算 24h / 7d 流通量变化、赎回金额
+  - 按配置阈值 (`ONCHAIN_TVL_DROP_THRESHOLD`, `ONCHAIN_REDEMPTION_USD_THRESHOLD`) 标记异常
+  - 缓存查询结果 (`ONCHAIN_CACHE_TTL_SECONDS`) + Registry 缓存 (`ONCHAIN_REGISTRY_CACHE_SECONDS`)
 - **返回格式**:
   ```json
   {
@@ -282,14 +287,29 @@ DeepAnalysisState(TypedDict):
     "asset": "USDC",
     "metrics": {
       "tvl_usd": 350000000,
-      "tvl_change_1h_pct": -30,
-      "redemption_24h_usd": 2000000000,
-      "redemption_24h_avg": 500000000,
-      "bridge_status": "normal",
-      "oracle_status": "normal"
+      "tvl_change_24h_pct": -18.5,
+      "tvl_change_7d_pct": -22.3,
+      "redemption_24h_usd": 650000000,
+      "redemption_7d_usd": 1200000000,
+      "circulating_prev_day": 400000000,
+      "circulating_prev_week": 450000000,
+      "supply_breakdown": [
+        {"chain": "ethereum", "circulating": 210000000},
+        {"chain": "tron", "circulating": 140000000}
+      ],
+      "peg_type": "fiat-backed"
     },
-    "triggered": true,  # 流动性下降 > 20% 或赎回量 > 均值 3 倍
-    "confidence": 0.85
+    "anomalies": {
+      "tvl_drop_24h": true,
+      "redemption_spike_24h": true
+    },
+    "thresholds": {
+      "tvl_drop_threshold_pct": 20,
+      "redemption_usd_threshold": 500000000
+    },
+    "triggered": true,
+    "confidence": 1.0,
+    "notes": "数据来源: stablecoins.llama.fi"
   }
   ```
 
@@ -1226,18 +1246,18 @@ funding_rate = binance_client.fetch_funding_rate(asset)
    - [x] 实现超预期判断 (基于 `MACRO_EXPECTATIONS_JSON` 与阈值)
 
 2. **实现链上工具** (Day 3-4)
-   - [ ] `src/ai/tools/onchain_fetcher.py`
-   - [ ] 集成 DeFiLlama API (`/tvl`, `/protocol`)
+   - [x] `src/ai/tools/onchain/fetcher.py`
+   - [x] 集成 DeFiLlama Stablecoin API (`/stablecoins?includePrices=true`)
    - [ ] 集成 Etherscan API (可选)
-   - [ ] 实现流动性变化/赎回量异常判断
+   - [x] 实现流动性变化/赎回量异常判断
 
 3. **扩展 Tool Planner** (Day 5)
-   - [ ] 支持 4 工具动态编排
-   - [ ] 针对 macro 事件类型优化决策逻辑
+   - [x] 支持 4 工具动态编排
+   - [x] 针对 macro/onchain 事件类型优化决策逻辑
 
 **验收标准**:
-- [ ] CPI/加息消息能触发 macro 工具
-- [ ] 流动性异常消息能触发 onchain 工具
+- [x] CPI/加息消息能触发 macro 工具
+- [x] 流动性异常消息能触发 onchain 工具
 - [ ] 工具调用仍在预算内 (≤ 3 轮)
 
 ---

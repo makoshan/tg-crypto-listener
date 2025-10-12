@@ -192,3 +192,78 @@ def format_macro_detail(macro_ev: dict | None) -> str:
     ]
 
     return "\n".join(lines)
+
+
+def format_onchain_brief(onchain_ev: dict | None) -> str:
+    """
+    简要格式化链上证据（用于 Tool Planner prompt）
+
+    Args:
+        onchain_ev: 链上证据字典
+
+    Returns:
+        str: 简要描述
+    """
+    if not onchain_ev or not onchain_ev.get("success"):
+        return "无"
+
+    data = onchain_ev.get("data", {})
+    metrics = data.get("metrics", {})
+
+    asset = metrics.get("asset", data.get("asset", "N/A"))
+    tvl = metrics.get("tvl_usd")
+    change_24h = metrics.get("tvl_change_24h_pct")
+    redemption = metrics.get("redemption_24h_usd")
+
+    if isinstance(tvl, (int, float)):
+        parts = [f"{asset} TVL={tvl:,.0f}"]
+    else:
+        parts = [f"{asset} TVL=未知"]
+
+    if isinstance(change_24h, (int, float)):
+        parts.append(f"24h变化 {round(float(change_24h), 2)}%")
+    if isinstance(redemption, (int, float)) and redemption > 0:
+        parts.append(f"赎回 {round(float(redemption) / 1_000_000, 2)}M$")
+
+    if onchain_ev.get("triggered"):
+        parts.append("⚠️异常")
+
+    return " | ".join(parts)
+
+
+def format_onchain_detail(onchain_ev: dict | None) -> str:
+    """
+    详细格式化链上证据（用于 Synthesis prompt）
+
+    Args:
+        onchain_ev: 链上证据字典
+
+    Returns:
+        str: 详细描述
+    """
+    if not onchain_ev or not onchain_ev.get("success"):
+        return "无链上数据或获取失败"
+
+    data = onchain_ev.get("data", {})
+    metrics = data.get("metrics", {})
+    anomalies = data.get("anomalies", {})
+    thresholds = data.get("thresholds", {})
+
+    lines = [
+        f"资产: {metrics.get('asset', data.get('asset', 'N/A'))}",
+        f"TVL (USD): {metrics.get('tvl_usd')}",
+        f"24h 变化: {metrics.get('tvl_change_24h_pct')}%",
+        f"7d 变化: {metrics.get('tvl_change_7d_pct')}%",
+        f"24h 赎回: {metrics.get('redemption_24h_usd')}",
+        f"7d 赎回: {metrics.get('redemption_7d_usd')}",
+        "",
+        f"触发阈值: {thresholds}",
+        f"触发异常: {list(anomalies.keys()) if anomalies else 'None'}",
+        "",
+        f"供应分布: {metrics.get('supply_breakdown')}",
+        f"锚定类型: {metrics.get('peg_type')}",
+        "",
+        f"说明: {data.get('notes', '')}",
+    ]
+
+    return "\n".join(lines)

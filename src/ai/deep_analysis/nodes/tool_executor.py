@@ -36,6 +36,10 @@ class ToolExecutorNode(BaseNode):
                 result = await self._execute_macro(state)
                 if result:
                     updates["macro_evidence"] = result
+            elif tool_name == "onchain":
+                result = await self._execute_onchain(state)
+                if result:
+                    updates["onchain_evidence"] = result
             else:
                 logger.warning("未知工具: %s", tool_name)
 
@@ -164,6 +168,43 @@ class ToolExecutorNode(BaseNode):
             logger.error("宏观工具异常: %s", exc)
             return None
 
+    async def _execute_onchain(self, state: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Execute on-chain tool to fetch liquidity metrics."""
+        if not self.engine._onchain_tool:
+            logger.warning("链上工具未初始化")
+            return None
+
+        assets = self._resolve_onchain_assets(state)
+        if not assets:
+            logger.info("链上工具跳过: 未找到合适的资产")
+            return None
+
+        for candidate in assets:
+            try:
+                result = await self.engine._onchain_tool.snapshot(asset=candidate)
+            except Exception as exc:
+                logger.error("链上工具异常 (asset=%s): %s", candidate, exc)
+                continue
+
+            if result.success:
+                logger.info(
+                    "⛓️ 链上工具返回数据 (asset=%s, triggered=%s, confidence=%.2f)",
+                    candidate,
+                    result.triggered,
+                    result.confidence,
+                )
+                return {
+                    "success": True,
+                    "data": result.data,
+                    "triggered": result.triggered,
+                    "confidence": result.confidence,
+                    "asset": candidate,
+                }
+
+            logger.warning("链上工具失败 (asset=%s): %s", candidate, result.error)
+
+        return None
+
     def _resolve_macro_indicators(self, state: Dict[str, Any]) -> list[str]:
         """Resolve indicator list from planner output or heuristics."""
         indicators = [
@@ -207,6 +248,37 @@ class ToolExecutorNode(BaseNode):
             if indicator not in seen:
                 seen.add(indicator)
                 ordered.append(indicator)
+
+        return ordered
+
+    def _resolve_onchain_assets(self, state: Dict[str, Any]) -> list[str]:
+        """Resolve which assets require on-chain inspection."""
+        assets = [
+            token.strip().upper()
+            for token in state.get("onchain_assets", []) or []
+            if isinstance(token, str) and token.strip()
+        ]
+
+        if assets:
+            return assets
+
+        preliminary = state.get("preliminary")
+        if not preliminary:
+            return assets
+
+        asset_field = getattr(preliminary, "asset", "") or ""
+        tokens = [
+            token.strip().upper()
+            for token in asset_field.split(",")
+            if token.strip() and token.strip().upper() != "NONE"
+        ]
+
+        seen: set[str] = set()
+        ordered: list[str] = []
+        for token in tokens:
+            if token not in seen:
+                seen.add(token)
+                ordered.append(token)
 
         return ordered
 

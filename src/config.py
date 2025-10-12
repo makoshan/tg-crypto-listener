@@ -278,6 +278,7 @@ class Config:
     TOOL_ONCHAIN_ENABLED: bool = _as_bool(os.getenv("TOOL_ONCHAIN_ENABLED", "false"))
     DEEP_ANALYSIS_PRICE_PROVIDER: str = os.getenv("DEEP_ANALYSIS_PRICE_PROVIDER", "coingecko")
     DEEP_ANALYSIS_MACRO_PROVIDER: str = os.getenv("DEEP_ANALYSIS_MACRO_PROVIDER", "fred")
+    DEEP_ANALYSIS_ONCHAIN_PROVIDER: str = os.getenv("DEEP_ANALYSIS_ONCHAIN_PROVIDER", "defillama")
     COINGECKO_API_KEY: str = os.getenv("COINGECKO_API_KEY", "")
     COINGECKO_API_BASE_URL: str = os.getenv("COINGECKO_API_BASE_URL", "https://api.coingecko.com/api/v3")
     PRICE_CACHE_TTL_SECONDS: int = int(os.getenv("PRICE_CACHE_TTL_SECONDS", "60"))
@@ -300,6 +301,20 @@ class Config:
     except (json.JSONDecodeError, ValueError) as exc:
         logger.warning("解析 MACRO_EXPECTATIONS_JSON 失败: %s", exc)
         MACRO_EXPECTATIONS = {}
+    DEFI_LLAMA_STABLECOIN_URL: str = os.getenv(
+        "DEFI_LLAMA_STABLECOIN_URL",
+        "https://stablecoins.llama.fi/stablecoins",
+    )
+    ONCHAIN_CACHE_TTL_SECONDS: int = int(os.getenv("ONCHAIN_CACHE_TTL_SECONDS", "300"))
+    ONCHAIN_REGISTRY_CACHE_SECONDS: int = int(
+        os.getenv("ONCHAIN_REGISTRY_CACHE_SECONDS", "300")
+    )
+    ONCHAIN_TVL_DROP_THRESHOLD: float = float(
+        os.getenv("ONCHAIN_TVL_DROP_THRESHOLD", "20.0")
+    )
+    ONCHAIN_REDEMPTION_USD_THRESHOLD: float = float(
+        os.getenv("ONCHAIN_REDEMPTION_USD_THRESHOLD", "500000000.0")
+    )
 
     @classmethod
     def get_deep_analysis_config(cls) -> Dict[str, Any]:
