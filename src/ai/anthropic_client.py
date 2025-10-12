@@ -66,6 +66,8 @@ class AnthropicClient:
         self._context_keep_tools = int(context_keep_tools)
         self._context_clear_at_least = int(context_clear_at_least)
         self._max_output_tokens = max(256, int(max_output_tokens))
+        self._betas: List[str] = ["context-management-2025-06-27"]
+        self._context_management_config = self._build_context_management_config()
 
         logger.info("AnthropicClient 初始化完成 (model=%s)", self._model)
 
@@ -76,15 +78,15 @@ class AnthropicClient:
         tools = self._build_tool_definitions()
 
         async def _call_claude(payload_messages: List[Dict[str, Any]]):
-            kwargs = {
-                "model": self._model,
-                "system": system_prompt,
-                "messages": payload_messages,
-                "max_output_tokens": self._max_output_tokens,
-            }
-            if tools:
-                kwargs["tools"] = tools
-            return await self._client.messages.create(**kwargs)
+            return await self._client.messages.create(
+                model=self._model,
+                system=system_prompt,
+                messages=payload_messages,
+                max_output_tokens=self._max_output_tokens,
+                tools=tools or None,
+                context_management=self._context_management_config or None,
+                betas=self._betas if self._context_management_config else None,
+            )
 
         conversation = list(convo)
         usage: Dict[str, Any] = {}
@@ -248,6 +250,31 @@ class AnthropicClient:
         if isinstance(content, dict):
             return json.dumps(content, ensure_ascii=False)
         return str(content)
+
+    def _build_context_management_config(self) -> Optional[Dict[str, Any]]:
+        """Create context management payload for Anthropic context editing."""
+        if self._context_trigger_tokens <= 0 or self._context_keep_tools < 0:
+            return None
+
+        return {
+            "edits": [
+                {
+                    "type": "clear_tool_uses_20250919",
+                    "trigger": {
+                        "type": "input_tokens",
+                        "value": self._context_trigger_tokens,
+                    },
+                    "keep": {
+                        "type": "tool_uses",
+                        "value": max(0, self._context_keep_tools),
+                    },
+                    "clear_at_least": {
+                        "type": "input_tokens",
+                        "value": max(0, self._context_clear_at_least),
+                    },
+                }
+            ]
+        }
 
     def _merge_usage(self, base: Dict[str, Any], new_usage: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         if not new_usage:

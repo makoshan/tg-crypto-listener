@@ -14,6 +14,10 @@ import sys
 from datetime import datetime, UTC
 from pathlib import Path
 
+import pytest
+
+pytestmark = pytest.mark.integration
+
 # 添加项目根目录到路径
 sys.path.insert(0, str(Path(__file__).parent))
 

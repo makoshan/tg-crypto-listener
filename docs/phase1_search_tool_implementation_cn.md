@@ -884,24 +884,420 @@ def _route_after_executor(self, state: DeepAnalysisState) -> str:
 
 ---
 
-### 第 3-4 天：实现 LangGraph 子图
+### 第 3-4 天：实现 LangGraph 节点（模块化架构）
 
-#### 任务 3.1：构建图结构
+> **架构决策**: 由于 LangGraph 节点代码量较大（预计 573 行），采用模块化架构，将节点实现拆分到独立文件中，提升可维护性。详见 `docs/phase1_module_architecture.md`。
 
-添加到 `GeminiDeepAnalysisEngine`：
+#### 任务 3.1：创建节点目录结构
+
+```bash
+mkdir -p src/ai/deep_analysis/nodes
+mkdir -p src/ai/deep_analysis/helpers
+touch src/ai/deep_analysis/nodes/__init__.py
+touch src/ai/deep_analysis/nodes/base.py
+touch src/ai/deep_analysis/nodes/context_gather.py
+touch src/ai/deep_analysis/nodes/tool_planner.py
+touch src/ai/deep_analysis/nodes/tool_executor.py
+touch src/ai/deep_analysis/nodes/synthesis.py
+touch src/ai/deep_analysis/helpers/__init__.py
+touch src/ai/deep_analysis/helpers/memory.py
+touch src/ai/deep_analysis/helpers/prompts.py
+touch src/ai/deep_analysis/helpers/formatters.py
+touch src/ai/deep_analysis/graph.py
+```
+
+#### 任务 3.2：实现 BaseNode 基类
+
+**文件**: `src/ai/deep_analysis/nodes/base.py`
 
 ```python
-def _build_deep_graph(self):
-    """构建用于工具增强深度分析的 LangGraph"""
-    from langgraph.graph import StateGraph, END
+"""LangGraph 节点的抽象基类"""
+from abc import ABC, abstractmethod
+from typing import Any, Dict
+
+
+class BaseNode(ABC):
+    """所有 LangGraph 节点的基类，标准化接口"""
+
+    def __init__(self, engine: "GeminiDeepAnalysisEngine") -> None:
+        self.engine = engine
+        self.logger = engine.logger if hasattr(engine, "logger") else None
+
+    @abstractmethod
+    async def execute(self, state: "DeepAnalysisState") -> Dict[str, Any]:
+        """执行节点逻辑，返回状态更新字典"""
+        pass
+```
+
+#### 任务 3.3：实现 ContextGatherNode
+
+**文件**: `src/ai/deep_analysis/nodes/context_gather.py`
+
+```python
+"""Context Gather 节点：收集历史记忆上下文"""
+import logging
+from typing import Dict, Any
+
+from .base import BaseNode
+from ..helpers.memory import fetch_memory_entries
+from ..helpers.formatters import format_memory_evidence
+
+logger = logging.getLogger(__name__)
+
+
+class ContextGatherNode(BaseNode):
+    """收集历史记忆上下文节点"""
+
+    async def execute(self, state: "DeepAnalysisState") -> Dict[str, Any]:
+        """
+        从记忆仓储检索历史相似事件
+
+        Returns:
+            Dict 包含 memory_evidence 字段
+        """
+        logger.info("🧠 Context Gather: 获取历史记忆")
+
+        entries = await fetch_memory_entries(
+            engine=self.engine,
+            payload=state["payload"],
+            preliminary=state["preliminary"],
+        )
+
+        memory_text = format_memory_evidence(entries)
+        logger.info("🧠 Context Gather: 找到 %d 条历史事件", len(entries))
+
+        return {
+            "memory_evidence": {
+                "entries": entries,
+                "formatted": memory_text,
+                "count": len(entries),
+            }
+        }
+```
+
+#### 任务 3.4：实现 ToolPlannerNode（使用 Function Calling）
+
+**文件**: `src/ai/deep_analysis/nodes/tool_planner.py`
+
+```python
+"""Tool Planner 节点：AI 决策调用哪些工具，并生成搜索关键词"""
+import logging
+from typing import Dict, Any
+
+from .base import BaseNode
+from ..helpers.prompts import build_planner_prompt
+from ...gemini_function_client import AiServiceError
+
+logger = logging.getLogger(__name__)
+
+# 事件类型白名单/黑名单
+FORCE_SEARCH_EVENT_TYPES = {"hack", "regulation", "partnership"}
+NEVER_SEARCH_EVENT_TYPES = {"macro", "governance", "airdrop", "celebrity"}
+
+
+class ToolPlannerNode(BaseNode):
+    """AI 工具决策节点（使用 Gemini Function Calling）"""
+
+    async def execute(self, state: "DeepAnalysisState") -> Dict[str, Any]:
+        """
+        决定是否调用工具，生成 AI 关键词
+
+        Returns:
+            Dict 包含 next_tools 和 search_keywords 字段
+        """
+        logger.info("🤖 Tool Planner: 决策下一步工具")
+
+        preliminary = state["preliminary"]
+
+        # 黑名单：直接跳过
+        if preliminary.event_type in NEVER_SEARCH_EVENT_TYPES:
+            logger.info("🤖 Tool Planner: 事件类型 '%s' 在黑名单，跳过搜索", preliminary.event_type)
+            return {"next_tools": []}
+
+        # 白名单：强制搜索（仅首轮）
+        if preliminary.event_type in FORCE_SEARCH_EVENT_TYPES and state["tool_call_count"] == 0:
+            logger.info("🤖 Tool Planner: 事件类型 '%s' 在白名单，强制搜索", preliminary.event_type)
+
+            # 🆕 生成 AI 关键词
+            keywords = await self._generate_search_keywords(state)
+            return {"next_tools": ["search"], "search_keywords": keywords}
+
+        # 已有搜索结果：不再重复搜索
+        if state.get("search_evidence"):
+            logger.info("🤖 Tool Planner: 已有搜索结果，无需再搜索")
+            return {"next_tools": []}
+
+        # 其他情况：让 AI 决策
+        return await self._ai_decision(state)
+
+    async def _ai_decision(self, state: "DeepAnalysisState") -> Dict[str, Any]:
+        """使用 Function Calling 做工具决策"""
+        prompt = build_planner_prompt(state)
+
+        # Function Calling 定义
+        tool_definition = {
+            "name": "decide_next_tools",
+            "description": "根据已有证据决定下一步需要调用的工具，并为搜索生成最优关键词",
+            "parameters": {
+                "type": "OBJECT",
+                "properties": {
+                    "tools": {
+                        "type": "ARRAY",
+                        "items": {"type": "STRING"},
+                        "description": "需要调用的工具列表,可选值: search"
+                    },
+                    "search_keywords": {
+                        "type": "STRING",
+                        "description": "如果需要搜索，生成最优搜索关键词（中英文混合，包含关键实体、官方来源标识）"
+                    },
+                    "reason": {
+                        "type": "STRING",
+                        "description": "决策理由"
+                    }
+                },
+                "required": ["tools", "reason"]
+            }
+        }
+
+        try:
+            response = await self.engine._client.generate_content_with_tools(
+                messages=[{"role": "user", "content": prompt}],
+                tools=[tool_definition]
+            )
+
+            if response and response.tool_calls:
+                decision = response.tool_calls[0].arguments
+                tools = decision.get("tools", [])
+                search_keywords = decision.get("search_keywords", "")
+                reason = decision.get("reason", "")
+
+                logger.info("🤖 Tool Planner 决策: tools=%s, keywords='%s', 理由: %s",
+                           tools, search_keywords, reason)
+
+                return {
+                    "next_tools": tools,
+                    "search_keywords": search_keywords
+                }
+            else:
+                logger.warning("Tool Planner 未返回工具调用")
+                return {"next_tools": []}
+
+        except Exception as exc:
+            logger.error("Tool Planner 执行失败: %s", exc)
+            return {"next_tools": []}
+
+    async def _generate_search_keywords(self, state: "DeepAnalysisState") -> str:
+        """生成 AI 优化的搜索关键词（白名单强制搜索场景）"""
+        # 简化实现：直接调用 AI 生成
+        return await self._ai_decision(state).get("search_keywords", "")
+```
+
+#### 任务 3.5：实现 ToolExecutorNode
+
+**文件**: `src/ai/deep_analysis/nodes/tool_executor.py`
+
+```python
+"""Tool Executor 节点：执行工具调用"""
+import logging
+from typing import Dict, Any, Optional
+
+from .base import BaseNode
+
+logger = logging.getLogger(__name__)
+
+
+class ToolExecutorNode(BaseNode):
+    """工具执行节点"""
+
+    async def execute(self, state: "DeepAnalysisState") -> Dict[str, Any]:
+        """
+        执行 Planner 决定的工具
+
+        Returns:
+            Dict 包含 search_evidence 和 tool_call_count
+        """
+        tools_to_call = state.get("next_tools", [])
+        logger.info("🔧 Tool Executor: 调用工具: %s", tools_to_call)
+
+        updates: Dict[str, Any] = {"tool_call_count": state["tool_call_count"] + 1}
+
+        # 检查每日配额
+        if not self._check_quota():
+            logger.warning("⚠️ 超出每日配额，跳过工具调用")
+            return updates
+
+        for tool_name in tools_to_call:
+            if tool_name != "search":
+                logger.warning("未知工具: %s", tool_name)
+                continue
+
+            if not self.engine._search_tool:
+                logger.warning("搜索工具未初始化，跳过执行")
+                continue
+
+            result = await self._execute_search_tool(state)
+            if result:
+                updates["search_evidence"] = result
+
+        return updates
+
+    def _check_quota(self) -> bool:
+        """检查每日工具调用配额"""
+        from datetime import datetime, timezone
+
+        today = datetime.now(timezone.utc).date()
+
+        # 跨天重置
+        if today != self.engine._tool_call_reset_date:
+            self.engine._tool_call_count_today = 0
+            self.engine._tool_call_reset_date = today
+
+        # 检查配额
+        if self.engine._tool_call_count_today >= self.engine._tool_call_daily_limit:
+            return False
+
+        self.engine._tool_call_count_today += 1
+        return True
+
+    async def _execute_search_tool(self, state: "DeepAnalysisState") -> Optional[Dict[str, Any]]:
+        """执行 SearchTool"""
+        preliminary = state["preliminary"]
+
+        # 优先使用 AI 生成的关键词
+        keyword = state.get("search_keywords", "").strip()
+        keyword_source = "AI生成"
+
+        # 降级方案
+        if not keyword:
+            keyword = f"{preliminary.asset} {preliminary.event_type}"
+            keyword_source = "硬编码降级"
+
+        logger.info("🔧 调用搜索工具: keyword='%s' (来源: %s)", keyword, keyword_source)
+
+        try:
+            result = await self.engine._search_tool.fetch(keyword=keyword, max_results=5)
+        except Exception as exc:
+            logger.error("搜索工具执行失败: %s", exc)
+            return None
+
+        if not result.success:
+            logger.warning("🔧 搜索工具调用失败: %s", result.error)
+            return None
+
+        logger.info(
+            "🔧 搜索返回 %d 条结果 (multi_source=%s, official=%s)",
+            result.data.get("source_count", 0),
+            result.data.get("multi_source"),
+            result.data.get("official_confirmed"),
+        )
+
+        return {
+            "success": True,
+            "data": result.data,
+            "triggered": result.triggered,
+            "confidence": result.confidence,
+        }
+```
+
+#### 任务 3.6：实现 SynthesisNode
+
+**文件**: `src/ai/deep_analysis/nodes/synthesis.py`
+
+```python
+"""Synthesis 节点：综合证据生成最终信号"""
+import json
+import logging
+from typing import Dict, Any
+
+from .base import BaseNode
+from ..helpers.prompts import build_synthesis_prompt
+
+logger = logging.getLogger(__name__)
+
+
+class SynthesisNode(BaseNode):
+    """证据综合节点"""
+
+    async def execute(self, state: "DeepAnalysisState") -> Dict[str, Any]:
+        """
+        综合所有证据生成最终分析
+
+        Returns:
+            Dict 包含 final_response 字段
+        """
+        logger.info("📊 Synthesis: 生成最终分析")
+
+        prompt = build_synthesis_prompt(state)
+        final_json = await self._invoke_text_model(prompt)
+
+        try:
+            parsed = json.loads(final_json)
+            final_conf = parsed.get("confidence", 0.0)
+            prelim_conf = state["preliminary"].confidence
+            logger.info("📊 Synthesis: 最终置信度 %.2f (初步 %.2f)", final_conf, prelim_conf)
+        except Exception:
+            logger.warning("📊 Synthesis: 无法解析最终 JSON")
+
+        return {"final_response": final_json}
+
+    async def _invoke_text_model(self, prompt: str) -> str:
+        """调用 Gemini 生成文本"""
+        messages = [{"role": "user", "content": prompt}]
+        response = await self.engine._client.generate_content_with_tools(messages, tools=None)
+
+        if not response or not response.text:
+            raise Exception("Gemini 返回空响应")
+
+        return response.text.strip()
+```
+
+#### 任务 3.7：实现 Helper 模块
+
+详细实现参见 `docs/phase1_module_architecture.md`，主要包括：
+
+- **`helpers/memory.py`**: `fetch_memory_entries()` - 记忆检索逻辑
+- **`helpers/prompts.py`**: `build_planner_prompt()`, `build_synthesis_prompt()` - Prompt 构建
+- **`helpers/formatters.py`**: `format_memory_evidence()`, `format_search_evidence()` - 证据格式化
+
+#### 任务 3.8：构建 LangGraph
+
+**文件**: `src/ai/deep_analysis/graph.py`
+
+```python
+"""构建 LangGraph 状态机"""
+from langgraph.graph import StateGraph, END
+
+from .nodes.context_gather import ContextGatherNode
+from .nodes.tool_planner import ToolPlannerNode
+from .nodes.tool_executor import ToolExecutorNode
+from .nodes.synthesis import SynthesisNode
+
+
+def build_deep_analysis_graph(engine: "GeminiDeepAnalysisEngine"):
+    """
+    构建工具增强深度分析 LangGraph
+
+    Args:
+        engine: GeminiDeepAnalysisEngine 实例
+
+    Returns:
+        编译后的 LangGraph
+    """
+    from .gemini import DeepAnalysisState  # 避免循环导入
 
     graph = StateGraph(DeepAnalysisState)
 
+    # 初始化节点
+    context_node = ContextGatherNode(engine)
+    planner_node = ToolPlannerNode(engine)
+    executor_node = ToolExecutorNode(engine)
+    synthesis_node = SynthesisNode(engine)
+
     # 添加节点
-    graph.add_node("context_gather", self._node_context_gather)
-    graph.add_node("planner", self._node_tool_planner)
-    graph.add_node("executor", self._node_tool_executor)
-    graph.add_node("synthesis", self._node_synthesis)
+    graph.add_node("context_gather", context_node.execute)
+    graph.add_node("planner", planner_node.execute)
+    graph.add_node("executor", executor_node.execute)
+    graph.add_node("synthesis", synthesis_node.execute)
 
     # 定义边
     graph.set_entry_point("context_gather")
@@ -910,431 +1306,41 @@ def _build_deep_graph(self):
     # 条件路由
     graph.add_conditional_edges(
         "planner",
-        self._route_after_planner,
-        {
-            "executor": "executor",
-            "synthesis": "synthesis"
-        }
+        _route_after_planner,
+        {"executor": "executor", "synthesis": "synthesis"}
     )
 
     graph.add_conditional_edges(
         "executor",
-        self._route_after_executor,
-        {
-            "planner": "planner",
-            "synthesis": "synthesis"
-        }
+        _route_after_executor,
+        {"planner": "planner", "synthesis": "synthesis"}
     )
 
     graph.add_edge("synthesis", END)
 
     return graph.compile()
+
+
+def _route_after_planner(state: "DeepAnalysisState") -> str:
+    """Planner 之后的路由"""
+    if not state.get("next_tools"):
+        return "synthesis"
+    return "executor"
+
+
+def _route_after_executor(state: "DeepAnalysisState") -> str:
+    """Executor 之后的路由"""
+    if state["tool_call_count"] >= state["max_tool_calls"]:
+        return "synthesis"
+    return "planner"
 ```
 
-#### 任务 3.2：实现 Context Gather 节点
-
-```python
-async def _node_context_gather(self, state: DeepAnalysisState) -> dict:
-    """收集历史记忆上下文（异步 Helper 版本）"""
-    logger.info("🧠 Context Gather: 获取历史记忆")
-
-    entries = await self._fetch_memory_entries(
-        payload=state["payload"],
-        preliminary=state["preliminary"],
-    )
-
-    memory_text = self._format_memory_evidence(entries)
-    logger.info("🧠 Context Gather: 找到 %d 条历史事件", len(entries))
-
-    return {
-        "memory_evidence": {
-            "entries": entries,
-            "formatted": memory_text,
-            "count": len(entries),
-        }
-    }
-
-
-def _format_memory_evidence(self, entries: list) -> str:
-    """格式化记忆条目供 AI 使用"""
-    if not entries:
-        return "无历史相似事件"
-
-    lines = []
-    for i, entry in enumerate(entries, 1):
-        confidence = getattr(entry, 'confidence', 'N/A')
-        similarity = getattr(entry, 'similarity', 'N/A')
-        summary = getattr(entry, 'summary', 'N/A')
-        lines.append(f"{i}. {summary} (置信度: {confidence}, 相似度: {similarity})")
-
-    return "\n".join(lines)
-
-
-async def _fetch_memory_entries(
-    self,
-    *,
-    payload: "EventPayload",
-    preliminary: "SignalResult",
-    limit: int | None = None,
-) -> list[dict]:
-    """独立的记忆检索 Helper，复用现有仓储逻辑"""
-
-    if not self._memory or not self._memory.enabled:
-        return []
-
-    limit = limit or self._memory_limit
-    keywords = list(payload.keywords_hit or [])
-    asset_codes = _normalise_asset_codes(preliminary.asset)
-
-    repo = self._memory.repository
-    if repo is None:
-        return []
-
-    entries: list = []
-
-    if hasattr(repo, "fetch_memories") and inspect.iscoroutinefunction(repo.fetch_memories):
-        entries = await repo.fetch_memories(
-            embedding=None,
-            asset_codes=asset_codes,
-            keywords=keywords,
-        )
-    elif hasattr(repo, "fetch_memories"):
-        result = repo.fetch_memories(
-            embedding=None,
-            asset_codes=asset_codes,
-            keywords=keywords,
-        )
-        if inspect.isawaitable(result):
-            result = await result
-        if isinstance(result, MemoryContext):
-            entries = list(result.entries)
-        elif isinstance(result, Iterable):
-            entries = list(result)
-    elif hasattr(repo, "load_entries"):
-        entries = repo.load_entries(
-            keywords=keywords,
-            limit=limit,
-            min_confidence=self._memory_min_confidence,
-        )
-
-    prompt_entries = _memory_entries_to_prompt(entries)[:limit] if entries else []
-    return prompt_entries
-```
-
-#### 任务 3.3：实现 Tool Planner 节点（使用 Function Calling）
-
-```python
-async def _node_tool_planner(self, state: DeepAnalysisState) -> dict:
-    """AI 决定是否调用搜索工具，并生成搜索关键词（异步，使用 Function Calling）"""
-    logger.info("🤖 Tool Planner: 决策下一步工具")
-
-    prompt = self._build_planner_prompt(state)
-
-    # 使用 Function Calling 保证结构化输出
-    tool_definition = {
-        "name": "decide_next_tools",
-        "description": "根据已有证据决定下一步需要调用的工具，并为搜索生成最优关键词",
-        "parameters": {
-            "type": "OBJECT",
-            "properties": {
-                "tools": {
-                    "type": "ARRAY",
-                    "items": {"type": "STRING"},
-                    "description": "需要调用的工具列表,可选值: search"
-                },
-                "search_keywords": {
-                    "type": "STRING",
-                    "description": "如果需要搜索，生成最优搜索关键词（中英文混合，包含关键实体、官方来源标识）。示例：'USDC Circle depeg official statement 脱锚 官方声明'"
-                },
-                "reason": {
-                    "type": "STRING",
-                    "description": "决策理由"
-                }
-            },
-            "required": ["tools", "reason"]
-        }
-    }
-
-    try:
-        response = await self._client.generate_content_with_tools(
-            messages=[{"role": "user", "content": prompt}],
-            tools=[tool_definition]
-        )
-
-        # 解析 Function Calling 结果
-        if response and response.tool_calls:
-            decision = response.tool_calls[0].arguments
-            tools = decision.get("tools", [])
-            search_keywords = decision.get("search_keywords", "")
-            reason = decision.get("reason", "")
-
-            logger.info("🤖 Tool Planner 决策: tools=%s, keywords='%s', 理由: %s",
-                       tools, search_keywords, reason)
-
-            return {
-                "next_tools": tools,
-                "search_keywords": search_keywords  # 🆕 传递 AI 生成的关键词
-            }
-        else:
-            logger.warning("Tool Planner 未返回工具调用")
-            return {"next_tools": []}
-
-    except Exception as exc:
-        logger.error("Tool Planner 执行失败: %s", exc)
-        return {"next_tools": []}
-
-def _build_planner_prompt(self, state: DeepAnalysisState) -> str:
-    """构建工具规划 prompt（包含关键词生成规则）"""
-    payload = state["payload"]
-    preliminary = state["preliminary"]
-    memory_ev = state.get("memory_evidence", {})
-    search_ev = state.get("search_evidence", {})
-
-    return f"""你是工具调度专家,判断是否需要搜索新闻验证,并生成最优搜索关键词。
-
-【消息内容】{payload.text}
-【消息语言】{payload.language or '未知'}
-【事件类型】{preliminary.event_type}
-【资产】{preliminary.asset}
-【初步置信度】{preliminary.confidence}
-
-【已有证据】
-- 历史记忆: {memory_ev.get('formatted', '无')}
-- 搜索结果: {self._format_search_evidence(search_ev)}
-
-【决策规则】
-1. 如果事件类型是 hack/regulation/partnership/celebrity → 需要搜索验证
-2. 如果已有搜索结果且 multi_source=true → 证据充分,无需再搜索
-3. 如果 tool_call_count >= 2 → 证据充分,无需再搜索
-4. 如果是数值类事件 (depeg/liquidation) → 暂不需要搜索（第一阶段限制）
-
-【关键词生成规则】（仅当决定搜索时）
-1. **中英文混合**: 如果消息是中文,生成中英文混合关键词,提高搜索覆盖率
-   示例: "比特币 Bitcoin ETF 批准 approval"
-
-2. **包含关键实体**: 提取消息中的具体公司名、协议名、金额等
-   示例: "Circle USDC $3B depeg"
-
-3. **官方来源标识**: 对 hack/regulation/partnership 事件,添加官方关键词
-   - 中文: "官方声明 官方公告"
-   - 英文: "official statement announcement"
-
-4. **事件类型关键词**:
-   - hack → "黑客攻击 hack exploit breach"
-   - regulation → "监管政策 regulation SEC CFTC"
-   - listing → "上线 listing announce"
-   - partnership → "合作 partnership collaboration"
-
-5. **避免泛化词**: 不要使用 "新闻" "消息" "报道" 等低价值词
-
-【示例】
-- 消息: "Circle 确认 USDC 储备安全,脱锚已恢复"
-  → 关键词: "USDC Circle depeg official statement 脱锚 官方声明"
-
-- 消息: "XXX DeFi 协议遭受闪电贷攻击,损失 $50M"
-  → 关键词: "XXX protocol flash loan hack exploit $50M 攻击"
-
-- 消息: "SEC 批准比特币现货 ETF,将于下周开始交易"
-  → 关键词: "Bitcoin spot ETF SEC approval 比特币 现货 批准"
-
-【当前状态】
-- 已调用工具次数: {state['tool_call_count']}
-- 最大调用次数: {state['max_tool_calls']}
-
-请调用 decide_next_tools 函数返回决策和关键词。"""
-
-
-async def _invoke_text_model(self, prompt: str) -> str:
-    """统一的文本生成调用，复用 Function Calling 客户端"""
-    messages = [{"role": "user", "content": prompt}]
-    response = await self._client.generate_content_with_tools(messages, tools=None)
-
-    if not response or not response.text:
-        raise DeepAnalysisError("Gemini 返回空响应")
-
-    return response.text.strip()
-
-def _format_search_evidence(self, search_ev: dict) -> str:
-    """格式化搜索证据用于显示"""
-    if not search_ev:
-        return "无"
-
-    data = search_ev.get("data", {})
-    return f"找到 {data.get('source_count', 0)} 条结果, 多源确认={data.get('multi_source', False)}, 官方确认={data.get('official_confirmed', False)}"
-```
-
-#### 任务 3.4：实现 Tool Executor 节点
-
-```python
-async def _node_tool_executor(self, state: DeepAnalysisState) -> dict:
-    """执行 planner 决定的工具（异步，第一阶段仅搜索）"""
-    tools_to_call = state.get("next_tools", [])
-    logger.info("🔧 Tool Executor: 调用工具: %s", tools_to_call)
-
-    updates: dict = {"tool_call_count": state["tool_call_count"] + 1}
-
-    for tool_name in tools_to_call:
-        if tool_name != "search":
-            logger.warning("未知工具: %s", tool_name)
-            continue
-
-        if not self._search_tool:
-            logger.warning("搜索工具未初始化，跳过执行")
-            continue
-
-        result = await self._execute_search_tool(state)
-        if result:
-            updates["search_evidence"] = result
-
-    return updates
-
-
-async def _execute_search_tool(self, state: DeepAnalysisState) -> Optional[dict]:
-    """执行 SearchTool 并转换为 LangGraph 状态格式"""
-    preliminary = state["preliminary"]
-
-    # 🆕 优先使用 Tool Planner 生成的 AI 关键词
-    keyword = state.get("search_keywords", "").strip()
-    keyword_source = "AI生成"
-
-    # 降级方案：如果 AI 未生成关键词，使用基础拼接
-    if not keyword:
-        keyword = f"{preliminary.asset} {preliminary.event_type}"
-        if preliminary.event_type in ["hack", "regulation"]:
-            keyword += " news official"
-        keyword_source = "硬编码降级"
-
-    logger.info("🔧 调用搜索工具: keyword='%s' (来源: %s)", keyword, keyword_source)
-
-    try:
-        result = await self._search_tool.fetch(keyword=keyword, max_results=5)
-    except Exception as exc:  # pragma: no cover - defensive
-        logger.error("搜索工具执行失败: %s", exc)
-        return None
-
-    if not result.success:
-        logger.warning("🔧 搜索工具调用失败: %s", result.error)
-        return None
-
-    logger.info(
-        "🔧 搜索返回 %d 条结果 (multi_source=%s, official=%s)",
-        result.data.get("source_count", 0),
-        result.data.get("multi_source"),
-        result.data.get("official_confirmed"),
-    )
-
-    return {
-        "success": True,
-        "data": result.data,
-        "triggered": result.triggered,
-        "confidence": result.confidence,
-    }
-```
-
-#### 任务 3.5：实现 Synthesis 节点
-
-```python
-async def _node_synthesis(self, state: DeepAnalysisState) -> dict:
-    """综合所有证据生成最终信号（异步）"""
-    logger.info("📊 Synthesis: 生成最终分析")
-
-    prompt = self._build_synthesis_prompt(state)
-    final_json = await self._invoke_text_model(prompt)
-
-    try:
-        import json
-        parsed = json.loads(final_json)
-        final_conf = parsed.get("confidence", 0.0)
-        prelim_conf = state["preliminary"].confidence
-        logger.info("📊 Synthesis: 最终置信度 %.2f (初步 %.2f)", final_conf, prelim_conf)
-    except Exception:  # pragma: no cover - 容忍解析失败
-        logger.warning("📊 Synthesis: 无法解析最终 JSON")
-
-    return {"final_response": final_json}
-
-def _build_synthesis_prompt(self, state: DeepAnalysisState) -> str:
-    """构建最终综合推理 prompt"""
-    payload = state["payload"]
-    preliminary = state["preliminary"]
-    memory_ev = state.get("memory_evidence", {})
-    search_ev = state.get("search_evidence", {})
-
-    return f"""你是加密交易台资深分析师,已掌握完整证据,请给出最终判断。
-
-【原始消息】
-{payload.text}
-
-【Gemini Flash 初步判断】
-- 事件类型: {preliminary.event_type}
-- 资产: {preliminary.asset}
-- 操作: {preliminary.action}
-- 置信度: {preliminary.confidence}
-- 摘要: {preliminary.summary}
-
-【历史记忆】
-{memory_ev.get('formatted', '无历史相似事件')}
-
-【搜索验证】
-{self._format_search_detail(search_ev)}
-
-请综合判断:
-1. 搜索结果是否确认事件真实性（multi_source + official_confirmed）
-2. 结合历史案例调整置信度
-3. 如果搜索结果冲突或不足,降低置信度并标记 data_incomplete
-
-返回 JSON（与 SignalResult 格式一致）:
-{{
-  "summary": "中文摘要",
-  "event_type": "{preliminary.event_type}",
-  "asset": "{preliminary.asset}",
-  "asset_name": "{getattr(preliminary, 'asset_name', '')}",
-  "action": "buy|sell|observe",
-  "direction": "long|short|neutral",
-  "confidence": 0.0-1.0,
-  "strength": "low|medium|high",
-  "timeframe": "short|medium|long",
-  "risk_flags": [],
-  "notes": "推理依据,引用搜索来源和关键证据",
-  "links": []
-}}
-
-【关键要求】
-- 搜索多源确认 + 官方确认 → 提升置信度 (+0.1 to +0.2)
-- 搜索结果冲突或无官方确认 → 降低置信度 (-0.1 to -0.2)
-- 证据不足 → 标记 data_incomplete 风险
-- 在 notes 中明确说明使用了哪些证据及关键发现
-
-只返回 JSON,不要其他文字。"""
-
-def _format_search_detail(self, search_ev: dict) -> str:
-    """详细格式化搜索证据"""
-    if not search_ev or not search_ev.get("success"):
-        return "无搜索结果或搜索失败"
-
-    data = search_ev.get("data", {})
-    results = data.get("results", [])
-
-    lines = [
-        f"关键词: {data.get('keyword', 'N/A')}",
-        f"结果数: {data.get('source_count', 0)}",
-        f"多源确认: {data.get('multi_source', False)}",
-        f"官方确认: {data.get('official_confirmed', False)}",
-        f"情绪分析: {data.get('sentiment', {})}",
-        "",
-        "搜索结果:"
-    ]
-
-    for i, result in enumerate(results[:3], 1):  # 显示前 3 条
-        lines.append(f"{i}. {result.get('title', 'N/A')} (来源: {result.get('source', 'N/A')}, 评分: {result.get('score', 0.0)})")
-
-    return "\n".join(lines)
-```
 
 ---
 
-### 第 5 天：集成到 analyse() 方法
+### 第 5 天：集成到 GeminiDeepAnalysisEngine
 
-#### 任务 5.1：修改 analyse() 方法
+#### 任务 5.1：修改 analyse() 方法（引用模块化 LangGraph）
 
 在 `src/ai/deep_analysis/gemini.py` 中修改 `analyse()` 方法：
 
@@ -1350,7 +1356,11 @@ async def analyse(self, payload, preliminary):
 
     try:
         logger.info("=== 启动 LangGraph 工具增强深度分析 ===")
-        graph = self._build_deep_graph()
+
+        # 🆕 使用模块化 LangGraph 构建器
+        from .graph import build_deep_analysis_graph
+
+        graph = build_deep_analysis_graph(self)
 
         initial_state = DeepAnalysisState(
             payload=payload,
@@ -1386,6 +1396,8 @@ async def _analyse_with_function_calling(self, payload, preliminary):
     # ... (现有实现)
     pass
 ```
+
+> **架构优势**: 通过 `build_deep_analysis_graph(self)` 外部函数，gemini.py 不再需要包含任何节点逻辑，保持精简（~150 行），所有复杂性封装在独立模块中。
 
 #### 任务 5.2：在 __init__ 中初始化工具
 
@@ -2084,3 +2096,11 @@ PHASE1_ROLLOUT_PERCENTAGE=0.05  # 5% 流量
   - 更新 `_build_planner_prompt`: 添加详细的关键词生成规则（中英文混合、实体提取、官方标识、事件类型关键词）
   - 更新任务 3.4: `_execute_search_tool` 优先使用 AI 生成的关键词，提供硬编码降级
   - 优势: **零额外成本和延迟**，充分利用现有 AI 调用，实现端到端智能搜索
+- **2025-10-11**: **架构重大变更 - 模块化 LangGraph 节点实现**:
+  - 采用模块化架构，将 573 行节点代码拆分为 9 个独立模块
+  - 更新"第 3-4 天"任务：实现 BaseNode 基类 + 4 个节点类（ContextGatherNode, ToolPlannerNode, ToolExecutorNode, SynthesisNode）
+  - 添加 `src/ai/deep_analysis/graph.py`：统一的 LangGraph 构建器
+  - 添加 `helpers/` 目录：记忆检索、Prompt 构建、格式化逻辑复用
+  - 更新任务 5.1：`analyse()` 方法调用 `build_deep_analysis_graph(self)`
+  - 优势: gemini.py 保持精简（~150 行），节点逻辑独立测试，易于维护和扩展
+  - 详细设计参见: `docs/phase1_module_architecture.md`

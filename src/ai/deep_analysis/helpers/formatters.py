@@ -1,0 +1,87 @@
+"""格式化 Helper 函数"""
+from typing import Any
+
+
+def format_memory_evidence(entries: list[dict]) -> str:
+    """
+    格式化记忆证据为可读文本
+
+    Args:
+        entries: 记忆条目列表（prompt_dict 格式）
+
+    Returns:
+        str: 格式化的文本，用于 AI prompt
+    """
+    if not entries:
+        return "无历史相似事件"
+
+    lines = []
+    for i, entry in enumerate(entries, 1):
+        confidence = entry.get("confidence", "N/A")
+        similarity = entry.get("similarity", "N/A")
+        summary = entry.get("summary", "N/A")
+        lines.append(f"{i}. {summary} (置信度: {confidence}, 相似度: {similarity})")
+
+    return "\n".join(lines)
+
+
+def format_search_evidence(search_ev: dict | None) -> str:
+    """
+    简要格式化搜索证据（用于 Tool Planner prompt）
+
+    Args:
+        search_ev: 搜索证据字典
+
+    Returns:
+        str: 简要描述
+    """
+    if not search_ev:
+        return "无"
+
+    data = search_ev.get("data", {})
+    keyword = data.get("keyword", "未知关键词")
+    source_count = data.get("source_count", 0)
+    multi_source = data.get("multi_source", False)
+    official_confirmed = data.get("official_confirmed", False)
+
+    return (
+        f"关键词: {keyword}; "
+        f"结果数: {source_count}; "
+        f"多源确认={multi_source}; "
+        f"官方确认={official_confirmed}"
+    )
+
+
+def format_search_detail(search_ev: dict | None) -> str:
+    """
+    详细格式化搜索证据（用于 Synthesis prompt）
+
+    Args:
+        search_ev: 搜索证据字典
+
+    Returns:
+        str: 详细描述，包含前 3 条搜索结果
+    """
+    if not search_ev or not search_ev.get("success"):
+        return "无搜索结果或搜索失败"
+
+    data = search_ev.get("data", {})
+    results = data.get("results", [])
+
+    lines = [
+        f"关键词: {data.get('keyword', 'N/A')}",
+        f"结果数: {data.get('source_count', 0)}",
+        f"多源确认: {data.get('multi_source', False)}",
+        f"官方确认: {data.get('official_confirmed', False)}",
+        f"情绪分析: {data.get('sentiment', {})}",
+        "",
+        "搜索结果:"
+    ]
+
+    for i, result in enumerate(results[:3], 1):  # 显示前 3 条
+        title = result.get("title", "N/A")
+        source = result.get("source", "N/A")
+        score = result.get("score", 0.0)
+        lines.append(f"{i}. {title} (来源: {source}, 评分: {score})")
+
+    return "\n".join(lines)

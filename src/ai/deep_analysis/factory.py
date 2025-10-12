@@ -80,6 +80,7 @@ def create_deep_analysis_engine(
             max_function_turns=max_turns,
             memory_limit=memory_limit,
             memory_min_confidence=memory_min_conf,
+            config=config,
         )
 
     raise DeepAnalysisError(f"未知的深度分析提供商: {provider}")

@@ -6,7 +6,9 @@ import asyncio
 import inspect
 import json
 import logging
-from typing import Any, Iterable, Sequence
+from datetime import datetime, timezone
+from types import SimpleNamespace
+from typing import TYPE_CHECKING, Any, Iterable, Optional, Sequence, TypedDict
 
 from src.ai.gemini_function_client import (
     GeminiFunctionCallingClient,
@@ -22,6 +24,28 @@ from .base import DeepAnalysisEngine, DeepAnalysisError, build_deep_analysis_mes
 logger = logging.getLogger(__name__)
 
 
+# LangGraph State Definition
+class DeepAnalysisState(TypedDict, total=False):
+    """State object for tool-enhanced deep analysis LangGraph."""
+
+    # Input
+    payload: "EventPayload"
+    preliminary: "SignalResult"
+
+    # Evidence slots
+    search_evidence: Optional[dict]
+    memory_evidence: Optional[dict]
+
+    # Control flow
+    next_tools: list[str]
+    search_keywords: str  # AI-generated search keywords
+    tool_call_count: int
+    max_tool_calls: int
+
+    # Output
+    final_response: str
+
+
 class GeminiDeepAnalysisEngine(DeepAnalysisEngine):
     """Execute deep analysis via Gemini 2.5 Pro Function Calling."""
 
@@ -34,6 +58,7 @@ class GeminiDeepAnalysisEngine(DeepAnalysisEngine):
         max_function_turns: int,
         memory_limit: int,
         memory_min_confidence: float,
+        config=None,
     ) -> None:
         super().__init__(provider_name="gemini", parse_json_callback=parse_json_callback)
         self._client = client
@@ -43,11 +68,101 @@ class GeminiDeepAnalysisEngine(DeepAnalysisEngine):
         self._memory_min_confidence = float(memory_min_confidence)
         self._tools = self._build_tools()
 
+        # Store config for tool-enhanced flow
+        self._config = config or SimpleNamespace()
+        self._search_tool = None
+
+        # Daily quota tracking for cost control
+        self._tool_call_daily_limit = getattr(config, "DEEP_ANALYSIS_TOOL_DAILY_LIMIT", 50)
+        self._tool_call_count_today = 0
+        self._tool_call_reset_date = datetime.now(timezone.utc).date()
+
+        # Initialize search tool if enabled
+        tool_search_enabled = getattr(config, "TOOL_SEARCH_ENABLED", False) if config else False
+        logger.debug("GeminiDeepAnalysisEngine 初始化: config=%s, TOOL_SEARCH_ENABLED=%s", type(config).__name__ if config else None, tool_search_enabled)
+
+        if config and tool_search_enabled:
+            try:
+                from src.ai.tools import SearchTool
+
+                self._search_tool = SearchTool(config)
+                provider = getattr(config, "DEEP_ANALYSIS_SEARCH_PROVIDER", "tavily")
+                logger.info("🔍 搜索工具已初始化，Provider=%s", provider)
+            except ValueError as exc:
+                logger.warning("⚠️ 搜索工具初始化失败: %s", exc)
+                self._search_tool = None
+            except Exception as exc:
+                logger.warning("⚠️ 搜索工具初始化异常: %s", exc)
+                self._search_tool = None
+        else:
+            logger.debug("搜索工具未初始化: config存在=%s, TOOL_SEARCH_ENABLED=%s", config is not None, tool_search_enabled)
+
     async def analyse(
         self,
         payload: "EventPayload",
         preliminary: "SignalResult",
     ) -> "SignalResult":
+        """Execute deep analysis with optional tool-enhanced flow."""
+
+        # Check if tool-enhanced flow is enabled
+        tools_enabled = getattr(self._config, "DEEP_ANALYSIS_TOOLS_ENABLED", False)
+
+        if not tools_enabled:
+            # Fallback to traditional Function Calling flow
+            logger.debug("工具增强流程未启用，使用传统 Function Calling 流程")
+            return await self._analyse_with_function_calling(payload, preliminary)
+
+        # Tool-enhanced flow with LangGraph
+        max_calls = getattr(self._config, "DEEP_ANALYSIS_MAX_TOOL_CALLS", 3)
+        logger.info(
+            "🔧 工具增强流程启用 (max_calls=%s, timeout=%ss, daily_limit=%s)",
+            max_calls,
+            getattr(self._config, "DEEP_ANALYSIS_TOOL_TIMEOUT", "n/a"),
+            self._tool_call_daily_limit,
+        )
+
+        try:
+            logger.info("=== 启动 LangGraph 工具增强深度分析 ===")
+            from .graph import build_deep_graph
+
+            graph = build_deep_graph(self)
+
+            initial_state = DeepAnalysisState(
+                payload=payload,
+                preliminary=preliminary,
+                search_evidence=None,
+                memory_evidence=None,
+                next_tools=[],
+                search_keywords="",
+                tool_call_count=0,
+                max_tool_calls=max_calls,
+                final_response="",
+            )
+
+            final_state = await graph.ainvoke(initial_state)
+            final_payload = final_state.get("final_response")
+
+            if not final_payload:
+                raise DeepAnalysisError("LangGraph 未返回最终结果")
+
+            result = self._parse_json(final_payload)
+            logger.info("=== LangGraph 深度分析完成 ===")
+            return result
+
+        except Exception as exc:
+            logger.error(
+                "LangGraph 工具编排失败，降级到传统流程: %s",
+                exc,
+                exc_info=True,
+            )
+            return await self._analyse_with_function_calling(payload, preliminary)
+
+    async def _analyse_with_function_calling(
+        self,
+        payload: "EventPayload",
+        preliminary: "SignalResult",
+    ) -> "SignalResult":
+        """Traditional Function Calling implementation (backward compatible)."""
         conversation = build_deep_analysis_messages(payload, preliminary)
         try:
             response = await self._run_tool_loop(conversation, payload, preliminary)
@@ -265,7 +380,11 @@ def _memory_entries_to_prompt(entries: Sequence[MemoryEntry] | Iterable[MemoryEn
     return payload
 
 
-from typing import TYPE_CHECKING  # isort: skip
-
 if TYPE_CHECKING:  # pragma: no cover
     from src.ai.signal_engine import EventPayload, SignalResult
+else:  # pragma: no cover - runtime fallback to avoid circular import issues
+    try:
+        from src.ai.signal_engine import EventPayload, SignalResult
+    except Exception:  # noqa: BLE001 - best effort fallback during bootstrap
+        EventPayload = Any  # type: ignore[assignment]
+        SignalResult = Any  # type: ignore[assignment]

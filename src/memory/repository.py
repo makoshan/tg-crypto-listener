@@ -43,8 +43,15 @@ class SupabaseMemoryRepository:
             embedding: Vector representing current message semantics.
             asset_codes: Optional list of asset codes to narrow the search.
         """
-        if not embedding:
+        if embedding is None:
             return MemoryContext()
+
+        try:
+            if len(embedding) == 0:
+                logger.debug("🔍 跳过 Supabase 检索：embedding 向量为空")
+                return MemoryContext()
+        except TypeError:  # pragma: no cover - tolerate non-sized sequences
+            logger.debug("🔍 无法获取 embedding 长度，继续执行 Supabase 检索")
 
         params: dict[str, object] = {
             "query_embedding": list(embedding),

@@ -70,18 +70,29 @@ class HybridMemoryRepository:
         """
         # 尝试 Supabase 向量检索
         try:
+            embedding_dim = 0
+            if embedding is not None:
+                try:
+                    embedding_dim = len(embedding)  # type: ignore[arg-type]
+                except TypeError:
+                    logger.debug("🌐 Hybrid: 无法计算 embedding 长度，按未提供处理")
+
             # Debug: 记录检索参数
             logger.debug(
-                f"🌐 Hybrid → Supabase 检索参数: embedding={'有' if embedding else '无'} "
-                f"(维度={len(embedding) if embedding else 0}), "
+                f"🌐 Hybrid → Supabase 检索参数: embedding={'有' if embedding_dim else '无'} "
+                f"(维度={embedding_dim}), "
                 f"asset_codes={list(asset_codes) if asset_codes else []}, "
                 f"keywords={keywords or []}"
             )
 
-            context = await self.supabase.fetch_memories(
-                embedding=embedding,
-                asset_codes=asset_codes
-            )
+            if embedding is not None and embedding_dim == 0:
+                logger.debug("🌐 Hybrid: embedding 为空向量，跳过 Supabase 检索")
+                context = MemoryContext()
+            else:
+                context = await self.supabase.fetch_memories(
+                    embedding=embedding,
+                    asset_codes=asset_codes
+                )
 
             if not context.is_empty():
                 logger.info(f"✅ Hybrid: 从 Supabase 检索到 {len(context.entries)} 条记忆")

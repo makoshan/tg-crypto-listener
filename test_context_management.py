@@ -33,16 +33,20 @@ def test_context_management_parameter():
                         found_betas = True
                         print(f"✅ 找到 betas 参数")
 
-    if found_context_management and found_betas:
-        print("\n✅ 所有必需参数都已正确配置")
-        return True
+    missing = []
+    if not found_context_management:
+        missing.append("context_management")
+    if not found_betas:
+        missing.append("betas")
+
+    if missing:
+        print("\n❌ 缺少参数:")
+        for name in missing:
+            print(f"  - {name}")
     else:
-        print(f"\n❌ 缺少参数:")
-        if not found_context_management:
-            print("  - context_management")
-        if not found_betas:
-            print("  - betas")
-        return False
+        print("\n✅ 所有必需参数都已正确配置")
+
+    assert not missing, f"Anthropic messages.create 缺少参数: {', '.join(missing)}"
 
 
 if __name__ == '__main__':

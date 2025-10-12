@@ -12,7 +12,10 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, Set
 
-import colorlog
+try:
+    import colorlog
+except ImportError:  # pragma: no cover - optional dependency
+    colorlog = None  # type: ignore[assignment]
 
 
 class _MaxLevelFilter(logging.Filter):
@@ -38,22 +41,30 @@ def setup_logger(name: str, level: str = None) -> logging.Logger:
     if logger.handlers:
         return logger
 
-    color_formatter = colorlog.ColoredFormatter(
-        "%(log_color)s%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-        log_colors={
-            "DEBUG": "cyan",
-            "INFO": "green",
-            "WARNING": "yellow",
-            "ERROR": "red",
-            "CRITICAL": "red,bg_white",
-        },
-    )
+    if colorlog is not None:
+        color_formatter = colorlog.ColoredFormatter(
+            "%(log_color)s%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+            datefmt="%Y-%m-%d %H:%M:%S",
+            log_colors={
+                "DEBUG": "cyan",
+                "INFO": "green",
+                "WARNING": "yellow",
+                "ERROR": "red",
+                "CRITICAL": "red,bg_white",
+            },
+        )
 
-    console_handler = colorlog.StreamHandler(stream=sys.stdout)
-    console_handler.setLevel(logging.DEBUG)
-    console_handler.addFilter(_MaxLevelFilter(logging.INFO))
-    console_handler.setFormatter(color_formatter)
+        console_handler = colorlog.StreamHandler(stream=sys.stdout)
+        console_handler.setLevel(logging.DEBUG)
+        console_handler.addFilter(_MaxLevelFilter(logging.INFO))
+        console_handler.setFormatter(color_formatter)
+    else:
+        console_handler = logging.StreamHandler(stream=sys.stdout)
+        console_handler.setLevel(logging.DEBUG)
+        console_handler.addFilter(_MaxLevelFilter(logging.INFO))
+        console_handler.setFormatter(
+            logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+        )
     logger.addHandler(console_handler)
 
     stderr_handler = logging.StreamHandler(stream=sys.stderr)

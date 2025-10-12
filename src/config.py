@@ -249,6 +249,33 @@ class Config:
     EMBEDDING_SIMILARITY_THRESHOLD: float = float(os.getenv("EMBEDDING_SIMILARITY_THRESHOLD", "0.85"))
     EMBEDDING_TIME_WINDOW_HOURS: int = int(os.getenv("EMBEDDING_TIME_WINDOW_HOURS", "72"))
 
+    # Deep analysis tools configuration (Phase 1: Search Tool)
+    DEEP_ANALYSIS_TOOLS_ENABLED: bool = _as_bool(os.getenv("DEEP_ANALYSIS_TOOLS_ENABLED", "false"))
+    DEEP_ANALYSIS_MAX_TOOL_CALLS: int = int(os.getenv("DEEP_ANALYSIS_MAX_TOOL_CALLS", "3"))
+    DEEP_ANALYSIS_TOOL_TIMEOUT: int = int(os.getenv("DEEP_ANALYSIS_TOOL_TIMEOUT", "10"))
+    DEEP_ANALYSIS_TOOL_DAILY_LIMIT: int = int(os.getenv("DEEP_ANALYSIS_TOOL_DAILY_LIMIT", "50"))
+
+    # Search tool configuration
+    TOOL_SEARCH_ENABLED: bool = _as_bool(os.getenv("TOOL_SEARCH_ENABLED", "true"))
+    DEEP_ANALYSIS_SEARCH_PROVIDER: str = os.getenv("DEEP_ANALYSIS_SEARCH_PROVIDER", "tavily")
+    TAVILY_API_KEY: str = os.getenv("TAVILY_API_KEY", "")
+    SEARCH_MAX_RESULTS: int = int(os.getenv("SEARCH_MAX_RESULTS", "5"))
+    SEARCH_MULTI_SOURCE_THRESHOLD: int = int(os.getenv("SEARCH_MULTI_SOURCE_THRESHOLD", "3"))
+    SEARCH_CACHE_TTL_SECONDS: int = int(os.getenv("SEARCH_CACHE_TTL_SECONDS", "600"))
+
+    # High-priority event domain whitelisting
+    HIGH_PRIORITY_EVENT_DOMAINS: Dict[str, list[str]] = {
+        "hack": ["coindesk.com", "theblock.co", "cointelegraph.com", "decrypt.co"],
+        "regulation": ["coindesk.com", "theblock.co", "theblockcrypto.com"],
+        "listing": ["coindesk.com", "theblock.co", "cointelegraph.com"],
+        "partnership": ["coindesk.com", "theblock.co"],
+    }
+
+    # Future tools (Phase 2+)
+    TOOL_PRICE_ENABLED: bool = _as_bool(os.getenv("TOOL_PRICE_ENABLED", "false"))
+    TOOL_MACRO_ENABLED: bool = _as_bool(os.getenv("TOOL_MACRO_ENABLED", "false"))
+    TOOL_ONCHAIN_ENABLED: bool = _as_bool(os.getenv("TOOL_ONCHAIN_ENABLED", "false"))
+
     @classmethod
     def get_deep_analysis_config(cls) -> Dict[str, Any]:
         """Return normalised deep analysis configuration."""

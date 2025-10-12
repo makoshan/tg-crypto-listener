@@ -251,7 +251,14 @@ class TelegramListener:
             logger.info("📡 接收到停止信号，正在关闭...")
             self.running = False
             if self.client:
-                self.client.disconnect()
+                client_loop = getattr(self.client, "loop", None)
+                try:
+                    if client_loop and client_loop.is_running():
+                        client_loop.call_soon_threadsafe(self.client.disconnect)
+                    else:
+                        self.client.disconnect()
+                except RuntimeError:
+                    logger.debug("Telethon 事件循环已关闭，跳过额外 disconnect 调用", exc_info=True)
 
         signal.signal(signal.SIGINT, signal_handler)
         signal.signal(signal.SIGTERM, signal_handler)
@@ -955,6 +962,15 @@ class TelegramListener:
                 int(latency_delta.total_seconds() * 1000),
             )
 
+            try:
+                confidence_value = float(signal_result.confidence)
+            except (TypeError, ValueError):
+                logger.warning(
+                    "AI 置信度值无法转换为浮点数，使用默认 0.0: %s",
+                    signal_result.confidence,
+                )
+                confidence_value = 0.0
+
             signal_payload = AiSignalPayload(
                 news_event_id=news_event_id,
                 model_name=model_name,
@@ -964,7 +980,7 @@ class TelegramListener:
                 asset_names=signal_result.asset_names or None,
                 action=signal_result.action,
                 direction=signal_result.direction,
-                confidence=float(signal_result.confidence),
+                confidence=confidence_value,
                 strength=signal_result.strength,
                 risk_flags=signal_result.risk_flags,
                 notes=signal_result.notes or None,
