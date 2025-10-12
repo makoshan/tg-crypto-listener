@@ -154,17 +154,21 @@ class CoinGeckoPriceProvider(PriceProvider):
 
         headers = self._build_headers()
 
+        # Fetch simple price data (required)
         try:
             async with httpx.AsyncClient(timeout=self._timeout, headers=headers) as client:
-                simple_task = self._fetch_simple_price(client, coingecko_id)
-                chart_task = self._fetch_market_chart(client, coingecko_id)
-                simple_data, chart_data = await asyncio.gather(
-                    simple_task, chart_task, return_exceptions=False
-                )
+                simple_data = await self._fetch_simple_price(client, coingecko_id)
         except httpx.TimeoutException as exc:
-            logger.warning("CoinGecko 请求超时: asset=%s", asset_symbol)
+            logger.warning("CoinGecko simple price 请求超时: asset=%s", asset_symbol)
             return self._handle_timeout(exc)
         except ToolRateLimitError:
+            logger.warning("CoinGecko simple price rate limited: asset=%s", asset_symbol)
+            # Try Binance fallback if simple price fails
+            if self._binance_enabled:
+                logger.info("尝试使用 Binance 行情降级: asset=%s", asset_symbol)
+                binance_price = await self._fetch_binance_price(asset_symbol)
+                if binance_price is not None:
+                    return self._build_binance_fallback(asset_symbol, binance_price)
             return ToolResult(
                 source="CoinGecko",
                 timestamp=ToolResult._format_timestamp(),
@@ -175,7 +179,13 @@ class CoinGeckoPriceProvider(PriceProvider):
                 error="rate_limit",
             )
         except Exception as exc:
-            logger.error("CoinGecko 请求失败: asset=%s error=%s", asset_symbol, exc)
+            logger.error("CoinGecko simple price 请求失败: asset=%s error=%s", asset_symbol, exc)
+            # Try Binance fallback if simple price fails
+            if self._binance_enabled:
+                logger.info("尝试使用 Binance 行情降级: asset=%s", asset_symbol)
+                binance_price = await self._fetch_binance_price(asset_symbol)
+                if binance_price is not None:
+                    return self._build_binance_fallback(asset_symbol, binance_price)
             return ToolResult(
                 source="CoinGecko",
                 timestamp=ToolResult._format_timestamp(),
@@ -185,6 +195,16 @@ class CoinGeckoPriceProvider(PriceProvider):
                 confidence=0.0,
                 error=str(exc),
             )
+
+        # Fetch market chart data (optional, for historical analysis)
+        chart_data = {}
+        try:
+            async with httpx.AsyncClient(timeout=self._timeout, headers=headers) as client:
+                chart_data = await self._fetch_market_chart(client, coingecko_id)
+        except (ToolRateLimitError, httpx.TimeoutException, Exception) as exc:
+            # Market chart is optional - log warning but continue with simple data
+            logger.warning("CoinGecko market chart 获取失败 (将继续使用简单价格): asset=%s error=%s",
+                          asset_symbol, str(exc)[:100])
 
         price_snapshot = self._build_snapshot(
             asset_symbol=asset_symbol,
@@ -468,7 +488,10 @@ class CoinGeckoPriceProvider(PriceProvider):
     def _build_headers(self) -> dict[str, str]:
         if not self._api_key:
             return {}
-        return {"x-cg-demo-api-key": self._api_key}
+        # CoinGecko Pro API uses 'x-cg-pro-api-key' header
+        # Demo API uses 'x-cg-demo-api-key' header
+        # Try Pro API header first (most common for paid plans)
+        return {"x-cg-pro-api-key": self._api_key}
 
     async def _fetch_binance_price(self, symbol: str) -> Optional[float]:
         pair = f"{symbol.upper()}USDT"
