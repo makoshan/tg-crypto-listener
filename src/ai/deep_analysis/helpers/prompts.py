@@ -28,6 +28,9 @@ def build_planner_prompt(state: Mapping[str, Any], _engine: Any | None = None) -
     search_ev = state.get("search_evidence", {})
     price_ev = state.get("price_evidence", {})
     macro_ev = state.get("macro_evidence", {})
+    protocol_ev = state.get("protocol_evidence", {})
+    onchain_ev = state.get("onchain_evidence", {})
+    protocol_ev = state.get("protocol_evidence", {})
     onchain_ev = state.get("onchain_evidence", {})
     onchain_ev = state.get("onchain_evidence", {})
 
@@ -39,6 +42,7 @@ def build_planner_prompt(state: Mapping[str, Any], _engine: Any | None = None) -
     search_text = format_search_evidence(search_ev)
     price_text = "已获取" if price_ev and price_ev.get("success") else "无"
     macro_text = format_macro_brief(macro_ev)
+    protocol_text = format_protocol_brief(protocol_ev)
     onchain_text = format_onchain_brief(onchain_ev)
 
     return f"""你是工具调度专家，智能决策需要调用哪些工具来验证消息真实性。
@@ -48,6 +52,7 @@ def build_planner_prompt(state: Mapping[str, Any], _engine: Any | None = None) -
 2. **price** - 获取资产价格数据，验证价格异常
 3. **macro** - 获取宏观经济指标（CPI、利率、就业、美元指数、VIX 等）
 4. **onchain** - 获取链上流动性/赎回数据（TVL、赎回、桥接状态）
+5. **protocol** - 获取协议级别 TVL/费用/链分布，验证协议资金是否异常流出
 
 【消息内容】
 {payload.text}
@@ -65,6 +70,7 @@ def build_planner_prompt(state: Mapping[str, Any], _engine: Any | None = None) -
 - 搜索结果: {search_text}
 - 价格数据: {price_text}
 - 宏观数据: {macro_text}
+- 协议数据: {protocol_text}
 - 链上数据: {onchain_text}
 
 【工具调用决策原则】⚠️ 问题驱动 + 成本意识
@@ -137,6 +143,20 @@ def build_planner_prompt(state: Mapping[str, Any], _engine: Any | None = None) -
 - 默认使用消息中的稳定币或桥接资产（如 USDC、USDT、USDE、WBETH）
 - AI 可指定 `onchain_assets` 补充额外观测对象（如多资产事件）
 
+**protocol 工具的价值**：
+- 验证协议级 TVL 是否出现异常流出（被攻击、跑路、停止服务）
+- 量化多链部署资金分布，判断风险是否集中在单链
+- 补充 24h/7d TVL 变化，为“资金迁移/TVL 暴跌”消息提供证据
+
+**何时 protocol 价值高？**
+→ 协议被攻击、暂停、遭遇挤兑的传闻  
+→ 官方公告重大参数调整、跨链部署迁移  
+→ 市场讨论“TVL 暴跌/暴涨”但缺乏数据验证时
+
+**protocol slug 选择指南**：
+- 优先使用消息中给出的协议英文名或常用 slug（如 Aave → `aave`，Curve → `curve-dex`）
+- 如涉及多个协议，可列出 1-2 个重点 slug（如 ["curve-dex","convex-finance"]）
+
 **成本约束**：
 - 工具调用消耗配额，优先级：成本 < 可靠性
 - 优先使用免费证据：消息内容、历史记忆
@@ -190,6 +210,11 @@ def build_planner_prompt(state: Mapping[str, Any], _engine: Any | None = None) -
 2. 若消息涉及多资产赎回，可列出 1-2 个优先观察的资产（如 ["USDC","USDT"]）
 3. 返回简洁大写代号；若无法判断，可留空让系统使用默认资产
 
+【协议 slug 生成规则】（仅当 tools 包含 "protocol" 时生成）
+1. 识别消息中的协议英文名或常用简称
+2. 转换为 DeFiLlama slug（小写、空格换成破折号，例如 \"Curve Finance\" → \"curve-dex\"）
+3. 如无法确定 slug，可留空让系统使用默认推断
+
 【当前状态】
 - 已调用工具次数: {state['tool_call_count']}
 - 最大调用次数: {state['max_tool_calls']}
@@ -225,6 +250,7 @@ def build_synthesis_prompt(state: Mapping[str, Any], _engine: Any | None = None)
     search_text = format_search_detail(search_ev)
     price_text = format_price_evidence(price_ev)
     macro_text = format_macro_detail(macro_ev)
+    protocol_text = format_protocol_detail(protocol_ev)
     onchain_text = format_onchain_detail(onchain_ev)
 
     return f"""你是加密交易台资深分析师,已掌握完整证据,请给出最终判断。
@@ -250,6 +276,9 @@ def build_synthesis_prompt(state: Mapping[str, Any], _engine: Any | None = None)
 
 【宏观数据】
 {macro_text}
+
+【协议数据】
+{protocol_text}
 
 【链上数据】
 {onchain_text}

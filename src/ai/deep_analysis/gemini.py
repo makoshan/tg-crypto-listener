@@ -36,6 +36,7 @@ class DeepAnalysisState(TypedDict, total=False):
     search_evidence: Optional[dict]
     price_evidence: Optional[dict]
     macro_evidence: Optional[dict]
+    protocol_evidence: Optional[dict]
     onchain_evidence: Optional[dict]
     memory_evidence: Optional[dict]
 
@@ -43,6 +44,7 @@ class DeepAnalysisState(TypedDict, total=False):
     next_tools: list[str]
     search_keywords: str  # AI-generated search keywords
     macro_indicators: list[str]
+    protocol_slugs: list[str]
     onchain_assets: list[str]
     tool_call_count: int
     max_tool_calls: int
@@ -79,6 +81,7 @@ class GeminiDeepAnalysisEngine(DeepAnalysisEngine):
         self._price_tool = None
         self._macro_tool = None
         self._onchain_tool = None
+        self._protocol_tool = None
 
         # Daily quota tracking for cost control
         self._tool_call_daily_limit = getattr(config, "DEEP_ANALYSIS_TOOL_DAILY_LIMIT", 50)
@@ -163,6 +166,25 @@ class GeminiDeepAnalysisEngine(DeepAnalysisEngine):
         else:
             logger.debug("链上工具未初始化: config存在=%s, TOOL_ONCHAIN_ENABLED=%s", config is not None, tool_onchain_enabled)
 
+        tool_protocol_enabled = getattr(config, "TOOL_PROTOCOL_ENABLED", False) if config else False
+        logger.debug("GeminiDeepAnalysisEngine 初始化: TOOL_PROTOCOL_ENABLED=%s", tool_protocol_enabled)
+
+        if config and tool_protocol_enabled:
+            try:
+                from src.ai.tools import ProtocolTool
+
+                self._protocol_tool = ProtocolTool(config)
+                provider = getattr(config, "DEEP_ANALYSIS_PROTOCOL_PROVIDER", "defillama")
+                logger.info("🏛️ 协议工具已初始化，Provider=%s", provider)
+            except ValueError as exc:
+                logger.warning("⚠️ 协议工具初始化失败: %s", exc)
+                self._protocol_tool = None
+            except Exception as exc:
+                logger.warning("⚠️ 协议工具初始化异常: %s", exc)
+                self._protocol_tool = None
+        else:
+            logger.debug("协议工具未初始化: config存在=%s, TOOL_PROTOCOL_ENABLED=%s", config is not None, tool_protocol_enabled)
+
     async def analyse(
         self,
         payload: "EventPayload",
@@ -199,11 +221,13 @@ class GeminiDeepAnalysisEngine(DeepAnalysisEngine):
                 search_evidence=None,
                 price_evidence=None,
                 macro_evidence=None,
+                protocol_evidence=None,
                 onchain_evidence=None,
                 memory_evidence=None,
                 next_tools=[],
                 search_keywords="",
                 macro_indicators=[],
+                protocol_slugs=[],
                 onchain_assets=[],
                 tool_call_count=0,
                 max_tool_calls=max_calls,

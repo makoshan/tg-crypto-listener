@@ -49,6 +49,11 @@ class ToolPlannerNode(BaseNode):
                         "items": {"type": "STRING"},
                         "description": "当 tools 包含 onchain 时，列出需要重点关注的链上资产代码（如 USDC、USDT）",
                     },
+                    "protocol_slugs": {
+                        "type": "ARRAY",
+                        "items": {"type": "STRING"},
+                        "description": "当 tools 包含 protocol 时，列出需要查询的协议 slug（如 aave、curve-dex）",
+                    },
                     "reason": {"type": "STRING", "description": "决策理由，说明为什么需要或不需要调用这些工具"},
                 },
                 "required": ["tools", "reason"],
@@ -82,14 +87,16 @@ class ToolPlannerNode(BaseNode):
                 keywords = decision.get("search_keywords", "")
                 macro_indicators = decision.get("macro_indicators", []) or []
                 onchain_assets = decision.get("onchain_assets", []) or []
+                protocol_slugs = decision.get("protocol_slugs", []) or []
                 reason = decision.get("reason", "")
 
                 logger.info(
-                    "🤖 Tool Planner 决策: tools=%s, keywords='%s', macro=%s, onchain=%s, 理由: %s",
+                    "🤖 Tool Planner 决策: tools=%s, keywords='%s', macro=%s, onchain=%s, protocol=%s, 理由: %s",
                     tools,
                     keywords,
                     macro_indicators,
                     onchain_assets,
+                    protocol_slugs,
                     reason,
                 )
 
@@ -98,11 +105,12 @@ class ToolPlannerNode(BaseNode):
                     "search_keywords": keywords,
                     "macro_indicators": macro_indicators,
                     "onchain_assets": onchain_assets,
+                    "protocol_slugs": protocol_slugs,
                 }
 
             logger.warning("Tool Planner 未返回工具调用")
-            return {"next_tools": [], "macro_indicators": [], "onchain_assets": []}
+            return {"next_tools": [], "macro_indicators": [], "onchain_assets": [], "protocol_slugs": []}
 
         except Exception as exc:
             logger.error("Tool Planner 执行失败: %s", exc)
-            return {"next_tools": [], "macro_indicators": [], "onchain_assets": []}
+            return {"next_tools": [], "macro_indicators": [], "onchain_assets": [], "protocol_slugs": []}

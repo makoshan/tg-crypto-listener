@@ -276,9 +276,11 @@ class Config:
     TOOL_PRICE_ENABLED: bool = _as_bool(os.getenv("TOOL_PRICE_ENABLED", "false"))
     TOOL_MACRO_ENABLED: bool = _as_bool(os.getenv("TOOL_MACRO_ENABLED", "false"))
     TOOL_ONCHAIN_ENABLED: bool = _as_bool(os.getenv("TOOL_ONCHAIN_ENABLED", "false"))
+    TOOL_PROTOCOL_ENABLED: bool = _as_bool(os.getenv("TOOL_PROTOCOL_ENABLED", "false"))
     DEEP_ANALYSIS_PRICE_PROVIDER: str = os.getenv("DEEP_ANALYSIS_PRICE_PROVIDER", "coingecko")
     DEEP_ANALYSIS_MACRO_PROVIDER: str = os.getenv("DEEP_ANALYSIS_MACRO_PROVIDER", "fred")
     DEEP_ANALYSIS_ONCHAIN_PROVIDER: str = os.getenv("DEEP_ANALYSIS_ONCHAIN_PROVIDER", "defillama")
+    DEEP_ANALYSIS_PROTOCOL_PROVIDER: str = os.getenv("DEEP_ANALYSIS_PROTOCOL_PROVIDER", "defillama")
     COINGECKO_API_KEY: str = os.getenv("COINGECKO_API_KEY", "")
     COINGECKO_API_BASE_URL: str = os.getenv("COINGECKO_API_BASE_URL", "https://api.coingecko.com/api/v3")
     PRICE_CACHE_TTL_SECONDS: int = int(os.getenv("PRICE_CACHE_TTL_SECONDS", "60"))
@@ -314,6 +316,18 @@ class Config:
     )
     ONCHAIN_REDEMPTION_USD_THRESHOLD: float = float(
         os.getenv("ONCHAIN_REDEMPTION_USD_THRESHOLD", "500000000.0")
+    )
+    DEFI_LLAMA_PROTOCOL_URL: str = os.getenv(
+        "DEFI_LLAMA_PROTOCOL_URL",
+        "https://api.llama.fi/protocol",
+    )
+    PROTOCOL_CACHE_TTL_SECONDS: int = int(os.getenv("PROTOCOL_CACHE_TTL_SECONDS", "600"))
+    PROTOCOL_TOP_CHAIN_LIMIT: int = int(os.getenv("PROTOCOL_TOP_CHAIN_LIMIT", "5"))
+    PROTOCOL_TVL_DROP_THRESHOLD_PCT: float = float(
+        os.getenv("PROTOCOL_TVL_DROP_THRESHOLD_PCT", "15.0")
+    )
+    PROTOCOL_TVL_DROP_THRESHOLD_USD: float = float(
+        os.getenv("PROTOCOL_TVL_DROP_THRESHOLD_USD", "300000000.0")
     )
 
     @classmethod

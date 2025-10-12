@@ -267,3 +267,79 @@ def format_onchain_detail(onchain_ev: dict | None) -> str:
     ]
 
     return "\n".join(lines)
+
+
+def format_protocol_brief(protocol_ev: dict | None) -> str:
+    """
+    简要格式化协议证据（用于 Tool Planner prompt）
+
+    Args:
+        protocol_ev: 协议证据字典
+
+    Returns:
+        str: 简要描述
+    """
+    if not protocol_ev or not protocol_ev.get("success"):
+        return "无"
+
+    data = protocol_ev.get("data", {})
+    metrics = data.get("metrics", {})
+    name = data.get("name") or data.get("slug") or "协议"
+    tvl = metrics.get("tvl_usd")
+    change_24h = metrics.get("tvl_change_24h_pct")
+
+    if isinstance(tvl, (int, float)):
+        tvl_formatted = f"{float(tvl):,.0f}"
+    else:
+        tvl_formatted = "未知"
+
+    parts = [f"{name} TVL={tvl_formatted}"]
+    if isinstance(change_24h, (int, float)):
+        parts.append(f"24h变化 {round(float(change_24h), 2)}%")
+    if protocol_ev.get("triggered"):
+        parts.append("⚠️异常")
+
+    return " | ".join(parts)
+
+
+def format_protocol_detail(protocol_ev: dict | None) -> str:
+    """
+    详细格式化协议证据（用于 Synthesis prompt）
+
+    Args:
+        protocol_ev: 协议证据字典
+
+    Returns:
+        str: 详细描述
+    """
+    if not protocol_ev or not protocol_ev.get("success"):
+        return "无协议数据或获取失败"
+
+    data = protocol_ev.get("data", {})
+    metrics = data.get("metrics", {})
+    anomalies = data.get("anomalies", {})
+    thresholds = data.get("thresholds", {})
+
+    top_chains = metrics.get("top_chains") or []
+    chain_lines = [
+        f"{item.get('chain')}: {item.get('tvl_usd')}"
+        for item in top_chains
+    ]
+
+    lines = [
+        f"协议: {data.get('name')} ({data.get('slug')})",
+        f"官网: {data.get('url')}",
+        f"当前 TVL: {metrics.get('tvl_usd')}",
+        f"24h 变化: {metrics.get('tvl_change_24h_pct')}% ({metrics.get('tvl_change_24h_usd')})",
+        f"7d 变化: {metrics.get('tvl_change_7d_pct')}% ({metrics.get('tvl_change_7d_usd')})",
+        "",
+        f"触发阈值: {thresholds}",
+        f"触发异常: {list(anomalies.keys()) if anomalies else 'None'}",
+        "",
+        "主要链分布:",
+        *chain_lines,
+        "",
+        f"说明: {data.get('notes', '')}",
+    ]
+
+    return "\n".join(lines)

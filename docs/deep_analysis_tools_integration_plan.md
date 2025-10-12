@@ -61,11 +61,16 @@ DeepAnalysisState(TypedDict):
     price_evidence: Optional[dict]        # 价格/清算/资金费率数据
     search_evidence: Optional[dict]       # 新闻搜索/多源验证结果
     macro_evidence: Optional[dict]        # 宏观经济数据 (CPI/利率)
+    protocol_evidence: Optional[dict]     # 协议 TVL/费用分布
     onchain_evidence: Optional[dict]      # 链上数据 (流动性/赎回)
     memory_evidence: Optional[dict]       # 历史相似事件
 
     # 控制流
     next_tools: list[str]                 # Planner 填充,待调用工具列表
+    search_keywords: str                  # 搜索关键词
+    macro_indicators: list[str]           # 宏观指标
+    protocol_slugs: list[str]             # 协议 slug
+    onchain_assets: list[str]             # 链上资产
     tool_call_count: int                  # 已调用工具次数 (限制 ≤ 3)
 
     # 输出
@@ -133,6 +138,7 @@ DeepAnalysisState(TypedDict):
    - 价格数据: {format_evidence(state["price_evidence"])}
    - 搜索结果: {format_evidence(state["search_evidence"])}
    - 宏观数据: {format_evidence(state["macro_evidence"])}
+   - 协议数据: {format_evidence(state["protocol_evidence"])}
    - 链上数据: {format_evidence(state["onchain_evidence"])}
    - 历史记忆: {format_evidence(state["memory_evidence"])}
 
@@ -140,25 +146,28 @@ DeepAnalysisState(TypedDict):
    1. 数值问题 (脱锚/清算/暴跌) → 优先调用 "price"
    2. 叙事问题 (传闻/政策/黑客) → 优先调用 "search"
    3. 宏观事件 (加息/CPI/美联储) → 调用 "macro"
-   4. 如果 price_evidence 显示 triggered=true → 追加 "search" 验证
-   5. 如果 search_evidence 显示 multi_source=true → 追加 "price" 看市场反应
-   6. 如果证据充分可做最终判断 → 返回空数组 []
+   4. 协议风险 (被黑/TVL 暴跌/巨额赎回) → 调用 "protocol"
+   5. 如果 price_evidence 显示 triggered=true → 追加 "search" 验证
+   6. 如果 search_evidence 显示 multi_source=true → 追加 "price" 看市场反应
+   7. 如果证据充分可做最终判断 → 返回空数组 []
 
    【可用工具】
    - "price": 获取价格/清算量/资金费率 (CoinGecko/Binance)
    - "search": 搜索新闻/验证多源一致性 (Google Search)
    - "macro": 获取宏观经济数据 (FRED API)
    - "onchain": 获取链上流动性/赎回数据 (DeFiLlama)
+   - "protocol": 获取协议 TVL/链分布/费用 (DeFiLlama)
 
    请判断下一步需要哪些工具,返回 JSON:
    {
-     "tools": ["price", "macro"],
+     "tools": ["price", "macro", "protocol"],
      "search_keywords": "USDC depeg Circle official statement",
      "macro_indicators": ["CPI"],
+     "protocol_slugs": ["aave"],
      "reason": "需要验证价格偏离度，并补充通胀数据解释市场情绪"
    }
 
-   如果证据已充分,返回: {"tools": [], "macro_indicators": [], "reason": "证据充分,可进行最终判断"}
+   如果证据已充分,返回: {"tools": [], "macro_indicators": [], "protocol_slugs": [], "reason": "证据充分,可进行最终判断"}
    ```
 
 **输出**: 更新 `state["next_tools"]`
@@ -196,6 +205,46 @@ DeepAnalysisState(TypedDict):
     },
     "triggered": true,  # 偏离 > 2% 或清算量 > 均值 3 倍
     "confidence": 0.95
+  }
+  ```
+
+##### protocol_monitor (协议工具)
+- **文件**: `src/ai/tools/protocol/fetcher.py`
+- **Provider**: `src/ai/tools/protocol/providers/defillama.py`
+- **数据源**: DeFiLlama 协议 API (`/protocol/{slug}`)
+- **核心能力**:
+  - 获取协议最新 TVL、24h/7d 变化、绝对变动金额
+  - 统计 Top N 链分布，识别资金集中风险
+  - 根据阈值 (`PROTOCOL_TVL_DROP_THRESHOLD_PCT`, `PROTOCOL_TVL_DROP_THRESHOLD_USD`) 标记异常
+  - 支持缓存, 避免重复请求 (`PROTOCOL_CACHE_TTL_SECONDS`)
+- **返回格式**:
+  ```json
+  {
+    "source": "DeFiLlama",
+    "timestamp": "2025-10-11T10:30:00Z",
+    "slug": "aave",
+    "name": "Aave",
+    "metrics": {
+      "tvl_usd": 31600000000,
+      "tvl_change_24h_pct": -12.5,
+      "tvl_change_24h_usd": -4500000000,
+      "tvl_change_7d_pct": -18.9,
+      "tvl_change_7d_usd": -7000000000,
+      "top_chains": [
+        {"chain": "Ethereum", "tvl_usd": 28500000000},
+        {"chain": "Polygon", "tvl_usd": 280000000}
+      ]
+    },
+    "anomalies": {
+      "tvl_drop_24h_pct": true,
+      "tvl_drop_24h_usd": true
+    },
+    "thresholds": {
+      "tvl_drop_threshold_pct": 15.0,
+      "tvl_drop_threshold_usd": 300000000
+    },
+    "triggered": true,
+    "confidence": 1.0
   }
   ```
 
@@ -1004,8 +1053,22 @@ MACRO_CACHE_TTL_SECONDS=1800
 # 可选: 提前写入市场预期, 例如 {"CPI":3.0,"FED_FUNDS":5.50}
 MACRO_EXPECTATIONS_JSON=
 
-# 其他工具 (Phase 3+/可选)
-TOOL_ONCHAIN_ENABLED=false
+# 链上工具 (Phase 3)
+TOOL_ONCHAIN_ENABLED=true
+DEEP_ANALYSIS_ONCHAIN_PROVIDER=defillama
+DEFI_LLAMA_STABLECOIN_URL=https://stablecoins.llama.fi/stablecoins
+ONCHAIN_CACHE_TTL_SECONDS=300
+ONCHAIN_TVL_DROP_THRESHOLD=20.0
+ONCHAIN_REDEMPTION_USD_THRESHOLD=500000000
+
+# 协议工具 (Phase 3)
+TOOL_PROTOCOL_ENABLED=true
+DEEP_ANALYSIS_PROTOCOL_PROVIDER=defillama
+DEFI_LLAMA_PROTOCOL_URL=https://api.llama.fi/protocol
+PROTOCOL_CACHE_TTL_SECONDS=600
+PROTOCOL_TOP_CHAIN_LIMIT=5
+PROTOCOL_TVL_DROP_THRESHOLD_PCT=15.0
+PROTOCOL_TVL_DROP_THRESHOLD_USD=300000000
 ```
 
 ---

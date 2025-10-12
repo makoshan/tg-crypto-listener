@@ -40,6 +40,10 @@ class ToolExecutorNode(BaseNode):
                 result = await self._execute_onchain(state)
                 if result:
                     updates["onchain_evidence"] = result
+            elif tool_name == "protocol":
+                result = await self._execute_protocol(state)
+                if result:
+                    updates["protocol_evidence"] = result
             else:
                 logger.warning("未知工具: %s", tool_name)
 
@@ -205,6 +209,43 @@ class ToolExecutorNode(BaseNode):
 
         return None
 
+    async def _execute_protocol(self, state: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Execute protocol tool to fetch protocol-level metrics."""
+        if not self.engine._protocol_tool:
+            logger.warning("协议工具未初始化")
+            return None
+
+        slugs = self._resolve_protocol_slugs(state)
+        if not slugs:
+            logger.info("协议工具跳过: 未找到合适的协议标识")
+            return None
+
+        for slug in slugs:
+            try:
+                result = await self.engine._protocol_tool.snapshot(slug=slug)
+            except Exception as exc:
+                logger.error("协议工具异常 (slug=%s): %s", slug, exc)
+                continue
+
+            if result.success:
+                logger.info(
+                    "🏛️ 协议工具返回数据 (slug=%s, triggered=%s, confidence=%.2f)",
+                    slug,
+                    result.triggered,
+                    result.confidence,
+                )
+                return {
+                    "success": True,
+                    "data": result.data,
+                    "triggered": result.triggered,
+                    "confidence": result.confidence,
+                    "slug": slug,
+                }
+
+            logger.warning("协议工具失败 (slug=%s): %s", slug, result.error)
+
+        return None
+
     def _resolve_macro_indicators(self, state: Dict[str, Any]) -> list[str]:
         """Resolve indicator list from planner output or heuristics."""
         indicators = [
@@ -280,6 +321,36 @@ class ToolExecutorNode(BaseNode):
                 seen.add(token)
                 ordered.append(token)
 
+        return ordered
+
+    def _resolve_protocol_slugs(self, state: Dict[str, Any]) -> list[str]:
+        """Resolve protocol slugs from planner output or heuristics."""
+        slugs = [
+            slug.strip().lower()
+            for slug in state.get("protocol_slugs", []) or []
+            if isinstance(slug, str) and slug.strip()
+        ]
+        if slugs:
+            return slugs
+
+        preliminary = state.get("preliminary")
+        candidate = getattr(preliminary, "asset_names", "") or getattr(preliminary, "asset", "")
+        candidates: list[str] = []
+
+        for token in (candidate or "").split(","):
+            token_clean = token.strip().lower()
+            if not token_clean or token_clean == "none":
+                continue
+            slug = token_clean.replace(" ", "-")
+            candidates.append(slug)
+
+        # deduplicate while preserving order
+        seen = set()
+        ordered = []
+        for slug in candidates:
+            if slug not in seen:
+                seen.add(slug)
+                ordered.append(slug)
         return ordered
 
     def _check_quota(self) -> bool:
