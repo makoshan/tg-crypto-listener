@@ -8,6 +8,8 @@ from .formatters import (
     format_onchain_brief,
     format_onchain_detail,
     format_price_evidence,
+    format_protocol_brief,
+    format_protocol_detail,
     format_search_detail,
     format_search_evidence,
 )
@@ -244,6 +246,8 @@ def build_synthesis_prompt(state: Mapping[str, Any], _engine: Any | None = None)
     search_ev = state.get("search_evidence", {})
     price_ev = state.get("price_evidence", {})
     macro_ev = state.get("macro_evidence", {})
+    protocol_ev = state.get("protocol_evidence", {})
+    onchain_ev = state.get("onchain_evidence", {})
 
     # 格式化证据
     memory_text = memory_ev.get("formatted", "无历史相似事件") if memory_ev else "无历史相似事件"
