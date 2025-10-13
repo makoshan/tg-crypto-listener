@@ -243,10 +243,8 @@ class GeminiFunctionCallingClient:
         return contents, system_instruction
 
     def _extract_text(self, response: Any) -> Optional[str]:
-        text = getattr(response, "text", None)
-        if isinstance(text, str) and text.strip():
-            return text
-
+        # Skip response.text accessor to avoid SDK warnings about non-text parts
+        # Instead, directly extract text from candidates.content.parts
         candidates = getattr(response, "candidates", None)
         if not candidates:
             return None
@@ -260,6 +258,7 @@ class GeminiFunctionCallingClient:
                 continue
             text_chunks = []
             for part in parts:
+                # Only extract text parts, ignoring function_call and thought_signature
                 value = getattr(part, "text", None)
                 if isinstance(value, str):
                     text_chunks.append(value)

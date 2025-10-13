@@ -15,5 +15,11 @@
   "wbtc": "wrapped-bitcoin",
   "weth": "weth",
   "xrp": "ripple",
-  "xyz": "universe-xyz"
+  "xyz": "universe-xyz",
+  "usde": "ethena-usde",
+  "bnsol": "binance-staked-sol",
+  "wbeth": "wrapped-beacon-eth",
+  "tao": "bittensor",
+  "aave": "aave",
+  "ena": "ethena"
 }

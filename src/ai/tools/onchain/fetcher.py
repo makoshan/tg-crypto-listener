@@ -55,11 +55,19 @@ class OnchainTool:
                 result.confidence,
             )
         else:
-            logger.warning(
-                "链上工具失败: asset=%s, error=%s",
-                symbol,
-                result.error or "unknown",
-            )
+            # Use debug level for expected asset type mismatches
+            if result.error in ("asset_type_not_supported", "asset_not_found"):
+                logger.debug(
+                    "链上工具跳过: asset=%s, error=%s",
+                    symbol,
+                    result.error,
+                )
+            else:
+                logger.warning(
+                    "链上工具失败: asset=%s, error=%s",
+                    symbol,
+                    result.error or "unknown",
+                )
 
         return result
 

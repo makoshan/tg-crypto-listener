@@ -153,13 +153,28 @@ async def _node_synthesis(self, state):
 
     try:
         import json
+        import re
 
-        parsed = json.loads(final_json)
+        # Try to extract JSON from markdown code blocks if present
+        json_text = final_json
+        if "```json" in final_json:
+            match = re.search(r'```json\s*\n(.*?)\n```', final_json, re.DOTALL)
+            if match:
+                json_text = match.group(1)
+        elif "```" in final_json:
+            match = re.search(r'```\s*\n(.*?)\n```', final_json, re.DOTALL)
+            if match:
+                json_text = match.group(1)
+
+        parsed = json.loads(json_text.strip())
         final_conf = parsed.get("confidence", 0.0)
         prelim_conf = state["preliminary"].confidence
         logger.info("📊 Synthesis: 最终置信度 %.2f (初步 %.2f)", final_conf, prelim_conf)
-    except Exception:  # pragma: no cover - tolerate parsing failures
-        logger.warning("📊 Synthesis: 无法解析最终 JSON")
+    except json.JSONDecodeError as exc:
+        logger.error("📊 Synthesis: JSON 解析失败 - %s", exc)
+        logger.error("📊 原始响应 (前500字符): %s", final_json[:500])
+    except Exception as exc:  # pragma: no cover - tolerate parsing failures
+        logger.error("📊 Synthesis: 其他错误 - %s", exc)
 
     return {"final_response": final_json}
 

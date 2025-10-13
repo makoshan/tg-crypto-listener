@@ -88,7 +88,18 @@ class StablecoinDataset:
 
 
 class DeFiLlamaOnchainProvider(OnchainProvider):
-    """Fetch on-chain liquidity metrics using DeFiLlama stablecoin API."""
+    """Fetch on-chain liquidity metrics using DeFiLlama stablecoin API.
+
+    Note: This provider only supports stablecoins (USDC, USDT, DAI, etc).
+    Non-stablecoin assets (BTC, ETH, etc) are not supported by this data source.
+    """
+
+    # Known non-stablecoin assets that should skip this provider
+    UNSUPPORTED_ASSETS = {
+        "BTC", "ETH", "BNB", "SOL", "ADA", "XRP", "DOGE", "AVAX", "DOT", "MATIC",
+        "WBTC", "WETH", "STETH", "WSTETH", "RETH", "CBETH", "WBETH", "BNSOL",
+        "ARB", "OP", "LDO", "UNI", "AAVE", "LINK", "MKR", "SNX", "CRV", "SUSHI",
+    }
 
     def __init__(self, config) -> None:
         super().__init__(config)
@@ -125,9 +136,9 @@ class DeFiLlamaOnchainProvider(OnchainProvider):
                 error="asset_required",
             )
 
-        entry = await self._dataset.get_asset(symbol)
-        if not entry:
-            logger.warning("DeFiLlama 未找到资产: %s", symbol)
+        # Skip known non-stablecoin assets to reduce log noise
+        if symbol in self.UNSUPPORTED_ASSETS:
+            logger.debug("DeFiLlama 跳过非稳定币资产: %s (仅支持稳定币数据)", symbol)
             return ToolResult(
                 source="DeFiLlama",
                 timestamp=ToolResult._format_timestamp(),
@@ -135,7 +146,20 @@ class DeFiLlamaOnchainProvider(OnchainProvider):
                 data={},
                 triggered=False,
                 confidence=0.0,
-                error="asset_not_supported",
+                error="asset_type_not_supported",
+            )
+
+        entry = await self._dataset.get_asset(symbol)
+        if not entry:
+            logger.debug("DeFiLlama 未找到资产: %s (可能非稳定币)", symbol)
+            return ToolResult(
+                source="DeFiLlama",
+                timestamp=ToolResult._format_timestamp(),
+                success=False,
+                data={},
+                triggered=False,
+                confidence=0.0,
+                error="asset_not_found",
             )
 
         current = _safe_get_pegged_usd(entry.get("circulating"))

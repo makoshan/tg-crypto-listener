@@ -488,10 +488,16 @@ class CoinGeckoPriceProvider(PriceProvider):
     def _build_headers(self) -> dict[str, str]:
         if not self._api_key:
             return {}
-        # CoinGecko Pro API uses 'x-cg-pro-api-key' header
-        # Demo API uses 'x-cg-demo-api-key' header
-        # Try Pro API header first (most common for paid plans)
-        return {"x-cg-pro-api-key": self._api_key}
+        # CoinGecko API key detection:
+        # - Demo tier: CG-xxxx... → x-cg-demo-api-key
+        # - Pro tier: CG-Pro-xxxx... or other → x-cg-pro-api-key
+        # Auto-detect based on key format
+        key_header = (
+            "x-cg-demo-api-key"
+            if self._api_key.startswith("CG-") and not self._api_key.startswith("CG-Pro-")
+            else "x-cg-pro-api-key"
+        )
+        return {key_header: self._api_key}
 
     async def _fetch_binance_price(self, symbol: str) -> Optional[float]:
         pair = f"{symbol.upper()}USDT"
