@@ -330,6 +330,22 @@ class Config:
         os.getenv("PROTOCOL_TVL_DROP_THRESHOLD_USD", "300000000.0")
     )
 
+    # Hyperliquid source prioritization configuration
+    MARKETFEED_KEYWORDS: Set[str] = {
+        keyword.strip().lower()
+        for keyword in os.getenv(
+            "MARKETFEED_KEYWORDS",
+            "etf,cpi,非农,nonfarm,财政部,treasury,收益率,yield,联储,fed,fomc,btc,eth,bitcoin,ethereum"
+        ).split(",")
+        if keyword.strip()
+    }
+    MARKETFEED_TOPIC_WINDOW_SECONDS: int = int(os.getenv("MARKETFEED_TOPIC_WINDOW_SECONDS", "600"))
+    PRIORITY_KOL_HANDLES: Set[str] = {
+        handle.strip().lower()
+        for handle in os.getenv("PRIORITY_KOL_HANDLES", "sleepinrain,journey_of_someone,retardfrens").split(",")
+        if handle.strip()
+    }
+
     @classmethod
     def get_deep_analysis_config(cls) -> Dict[str, Any]:
         """Return normalised deep analysis configuration."""

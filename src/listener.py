@@ -327,10 +327,38 @@ class TelegramListener:
 
             logger.debug("📨 收到消息来自 %s (长度: %d): %.300s...", source_name, len(message_text), message_text)
 
-            if not contains_keywords(message_text, self.config.FILTER_KEYWORDS):
+            # Check if source is KOL whitelist (priority processing, skip keyword filter)
+            is_priority_kol = self._is_priority_kol(source_name, channel_username)
+
+            # Check if source is marketfeed (memory-only mode)
+            is_marketfeed = self._is_marketfeed(source_name, channel_username)
+
+            if is_marketfeed:
+                # Marketfeed: check marketfeed keywords, then store to memory only (no AI)
+                if not self._contains_marketfeed_keywords(message_text):
+                    self.stats["filtered_out"] += 1
+                    logger.debug("🚫 Marketfeed 消息被关键词过滤器拒绝")
+                    return
+
+                # Skip dedup check for marketfeed to allow frequent macro updates
+                logger.info("📰 Marketfeed 消息，记忆模式：跳过 AI，直接存储到记忆层")
+                await self._handle_marketfeed_message(
+                    message_text=message_text,
+                    source_name=source_name,
+                    source_message_id=source_message_id,
+                    source_url=source_url,
+                    published_at=published_at,
+                )
+                return
+
+            # Priority KOL: skip keyword filter
+            if not is_priority_kol and not contains_keywords(message_text, self.config.FILTER_KEYWORDS):
                 self.stats["filtered_out"] += 1
                 logger.debug("🚫 消息被关键词过滤器拒绝")
                 return
+
+            if is_priority_kol:
+                logger.info("⭐ 优先 KOL 消息来自 %s，跳过关键词过滤", source_name)
 
             if self.deduplicator.is_duplicate(message_text):
                 self.stats["duplicates"] += 1
@@ -534,27 +562,33 @@ class TelegramListener:
 
             should_skip_forward = False
             if signal_result and signal_result.status != "error":
-                low_confidence_skip = signal_result.confidence < 0.4
+                # Priority KOL: lower confidence threshold to 0.3
+                confidence_threshold = 0.3 if is_priority_kol else 0.4
+                observe_threshold = 0.5 if is_priority_kol else 0.85
+
+                low_confidence_skip = signal_result.confidence < confidence_threshold
                 neutral_skip = (
                     self.config.AI_SKIP_NEUTRAL_FORWARD
                     and signal_result.status == "skip"
                     and signal_result.summary != "AI disabled"
                 )
-                # 二次过滤：观望类信号且置信度 < 0.85 不转发（降低噪音）
+                # 二次过滤：观望类信号且置信度低于阈值不转发（KOL 消息降低阈值）
                 low_value_observe = (
                     signal_result.action == "observe"
-                    and signal_result.confidence < 0.85
+                    and signal_result.confidence < observe_threshold
                 )
                 if low_confidence_skip or neutral_skip or low_value_observe:
                     should_skip_forward = True
                     self.stats["ai_skipped"] += 1
                     reason = "低价值观望信号" if low_value_observe else "低优先级"
                     logger.info(
-                        "🤖 AI 评估为%s，跳过转发: source=%s action=%s confidence=%.2f",
+                        "🤖 AI 评估为%s，跳过转发: source=%s action=%s confidence=%.2f (KOL=%s threshold=%.2f)",
                         reason,
                         source_name,
                         signal_result.action,
                         signal_result.confidence,
+                        is_priority_kol,
+                        confidence_threshold,
                     )
 
             if should_skip_forward:
@@ -1118,6 +1152,112 @@ class TelegramListener:
         if self.client:
             await self.client.disconnect()
         logger.info("✅ 清理完成")
+
+    def _is_priority_kol(self, source_name: str | None, channel_username: str | None) -> bool:
+        """Check if source is in priority KOL whitelist."""
+        if not self.config.PRIORITY_KOL_HANDLES:
+            return False
+
+        candidates = []
+        if source_name:
+            candidates.append(source_name.lower().strip())
+        if channel_username:
+            candidates.append(channel_username.lower().strip().lstrip("@"))
+
+        return any(handle in self.config.PRIORITY_KOL_HANDLES for handle in candidates)
+
+    def _is_marketfeed(self, source_name: str | None, channel_username: str | None) -> bool:
+        """Check if source is marketfeed channel."""
+        marketfeed_identifiers = ["marketfeed", "market feed", "market_feed"]
+        candidates = []
+        if source_name:
+            candidates.append(source_name.lower().strip())
+        if channel_username:
+            candidates.append(channel_username.lower().strip().lstrip("@"))
+
+        return any(
+            identifier in candidate
+            for candidate in candidates
+            for identifier in marketfeed_identifiers
+        )
+
+    def _contains_marketfeed_keywords(self, text: str) -> bool:
+        """Check if text contains marketfeed-specific keywords."""
+        if not self.config.MARKETFEED_KEYWORDS:
+            return True  # If no keywords configured, allow all marketfeed messages
+
+        normalized_text = text.lower()
+        return any(keyword in normalized_text for keyword in self.config.MARKETFEED_KEYWORDS)
+
+    async def _handle_marketfeed_message(
+        self,
+        message_text: str,
+        source_name: str,
+        source_message_id: str,
+        source_url: str | None,
+        published_at: datetime,
+    ) -> None:
+        """Handle marketfeed message: store to memory only, no AI processing."""
+        if not self.db_enabled or not self.news_repository:
+            logger.debug("数据库未启用，跳过 marketfeed 消息存储")
+            return
+
+        try:
+            hash_raw = compute_sha256(message_text)
+            hash_canonical = compute_canonical_hash(message_text)
+
+            # Check exact hash duplicate (avoid storing identical marketfeed messages)
+            existing_event_id = await self.news_repository.check_duplicate(hash_raw)
+            if existing_event_id:
+                logger.debug("Marketfeed 消息重复，跳过存储: event_id=%s", existing_event_id)
+                return
+
+            # Compute embedding for memory retrieval
+            embedding_vector: list[float] | None = None
+            if self.config.OPENAI_API_KEY:
+                embedding_vector = await compute_embedding(
+                    message_text,
+                    api_key=self.config.OPENAI_API_KEY,
+                    model=self.config.OPENAI_EMBEDDING_MODEL,
+                )
+
+            # Store to database with special marketfeed status
+            keywords_hit = self._collect_keywords(message_text)
+            metadata = {
+                "source": source_name,
+                "marketfeed_mode": True,
+                "processed_at": datetime.now().isoformat(),
+            }
+            if embedding_vector:
+                metadata["embedding_model"] = self.config.OPENAI_EMBEDDING_MODEL
+                metadata["embedding_generated_at"] = datetime.now().isoformat()
+
+            payload = NewsEventPayload(
+                source=source_name,
+                source_message_id=source_message_id,
+                source_url=source_url,
+                published_at=published_at,
+                content_text=message_text,
+                translated_text=None,  # No translation for marketfeed
+                summary=None,  # No AI summary
+                language="unknown",
+                media_refs=[],
+                hash_raw=hash_raw,
+                hash_canonical=hash_canonical,
+                embedding=embedding_vector,
+                keywords_hit=keywords_hit,
+                ingest_status="memory_only",  # Special status for marketfeed
+                metadata=metadata,
+            )
+
+            news_event_id = await self.news_repository.insert_event(payload)
+            if news_event_id:
+                logger.info("✅ Marketfeed 消息已存储到记忆层: event_id=%s", news_event_id)
+            else:
+                logger.warning("⚠️ Marketfeed 消息存储失败")
+
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.warning("Marketfeed 消息处理失败: %s", exc)
 
 
 async def main() -> None:
