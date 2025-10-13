@@ -6,9 +6,11 @@ from typing import Dict, Type
 
 from .providers.base import PriceProvider
 from .providers.coingecko import CoinGeckoPriceProvider
+from .providers.coinmarketcap import CoinMarketCapPriceProvider
 
 REGISTRY: Dict[str, Type[PriceProvider]] = {
     "coingecko": CoinGeckoPriceProvider,
+    "coinmarketcap": CoinMarketCapPriceProvider,
 }
 
 

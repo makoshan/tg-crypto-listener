@@ -19,10 +19,10 @@ link,chainlink,체인링크,чейнлинк
 pump
 
 # Hyperliquid 专业术语（英文）
-hyperliquid,hype liquid,hypurrscan,onchain,short,long,leveraged,leverage,liquidation,liquidate,position,cascade,whale,trader,giant,profit,unrealized,notional,value,perp,perpetual
+hyperliquid,hype liquid,hypurrscan,onchain,short,long,leveraged,leverage,liquidation,liquidate,position,cascade,whale,trader,giant,profit,unrealized,notional,value,perp,perpetual,ancient whale,early whale,open position,hold position,entry price
 
 # Hyperliquid 专业术语（中文）
-做空,做多,杠杆,加仓,减仓,平仓,爆仓,级联,巨鲸,大户,神秘,内幕哥,神秘姐,交易员,获利,盈利,未实现,名义价值,仓位,多单,空单,永续合约
+做空,做多,杠杆,加仓,减仓,平仓,爆仓,级联,巨鲸,大户,神秘,内幕哥,神秘姐,交易员,获利,盈利,未实现,名义价值,仓位,多单,空单,永续合约,换仓,开仓,持仓,建仓,远古巨鲸,古早,开仓价,倍数
 
 # 卡片与支付
 bitget,Bitget,比特格特,비트겟,битгет
