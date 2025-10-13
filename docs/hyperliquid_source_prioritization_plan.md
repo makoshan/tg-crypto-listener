@@ -8,10 +8,11 @@
 
 ### 成本优化原则
 1. **@marketfeed** → 仅存档为记忆，**不调用 AI**（节省 60%+ AI 成本）
-2. **@mlmonchain (Hyperliquid)** → 强化 AI 分析 + 历史记忆优先召回（当日时效性）
+2. **Hyperliquid 信号** → 通过**关键词匹配**识别（不依赖特定来源），强化 AI 分析 + 历史记忆优先召回（当日时效性）
 3. **重点 KOL** → 豁免过滤 + Prompt 强化
 
 ### 记忆系统改造重点
+- **关键词驱动**：通过 30+ 专业关键词识别 Hyperliquid 交易信号（而非依赖单一频道）
 - **来源优先级**：Hyperliquid 巨鲸历史信号在记忆检索时权重提升
 - **时效性优先**：仅召回 **24 小时内** 的 Hyperliquid 信号（巨鲸动作时效性强）
 - **宏观记忆库**：marketfeed 作为被动记忆，供后续事件参考传导链
@@ -27,40 +28,39 @@
 
 ---
 
-## 任务 1：@mlmonchain（Hyperliquid 链上情报）
+## 任务 1：Hyperliquid 链上情报（关键词匹配）
 
 **目标**
-将 Hyperliquid 巨鲸（内幕哥、神秘姐、临时加仓等）相关的消息视为一类高权重信号，强化即时提示与历史记忆。
+通过全局关键词匹配识别 Hyperliquid 巨鲸交易信号（而非依赖特定频道），强化即时提示与历史记忆。
+
+**策略变更说明**
+- **旧策略**：仅监控 @mlmonchain 频道（该频道主要关注 HYPE token，不一定涵盖所有 Hyperliquid 交易信号）
+- **新策略**：使用 30+ 专业关键词匹配，覆盖所有频道的 Hyperliquid 巨鲸动作
 
 **实现要点**
 
-### 1.1 Listener 过滤逻辑
+### 1.1 全局关键词过滤（新增 Hyperliquid 关键词）
 ```python
-# listener.py 在关键词过滤前增加来源白名单
-channel_username = (getattr(source_chat, "username", "") or "").lower()
-is_hyperliquid_channel = channel_username in self.config.PRIORITY_CHANNELS  # mlmonchain
+# listener.py 关键词过滤阶段
+# 将 Hyperliquid 关键词加入全局 FILTER_KEYWORDS
+# 所有频道的消息都会经过这些关键词匹配
 
-# 白名单来源直接放行，跳过关键词过滤
-if is_hyperliquid_channel:
-    # 仍需简单去重（降低阈值至 0.7）
-    if self.deduplicator.is_duplicate(message_text, threshold=0.7):
-        return
-    # 直接进入 AI 分析流程
+# 不再需要特定频道白名单，改为关键词驱动
+# 移除原有的 PRIORITY_CHANNELS 配置
 ```
 
 ### 1.2 记忆检索优化（关键改造）
 ```python
 # listener.py 记忆检索阶段
 if isinstance(self.memory_repository, SupabaseMemoryRepository):
-    # 判断是否为 Hyperliquid 相关事件
+    # 判断是否为 Hyperliquid 相关事件（基于关键词匹配）
     source_priority = []
     lookback_hours = self.config.MEMORY_LOOKBACK_HOURS  # 默认 72h
 
-    if "mlmonchain" in source_name.lower() or any(
-        kw in message_text.lower()
-        for kw in ["hyperliquid", "hype", "巨鲸", "内幕哥", "神秘姐"]
-    ):
-        source_priority.append("mlmonchain")
+    # 检测 Hyperliquid 关键词（不限于特定频道）
+    hyperliquid_keywords = self.config.HYPERLIQUID_KEYWORDS
+    if any(kw in message_text.lower() for kw in hyperliquid_keywords):
+        source_priority.append("hyperliquid")  # 召回所有含 Hyperliquid 关键词的历史记忆
         lookback_hours = 24  # 仅召回 24h 内的巨鲸信号（时效性）
 
     memory_context = await self.memory_repository.fetch_memories(
@@ -94,33 +94,42 @@ async def fetch_memories(
         time_window_hours=effective_lookback
     )
 
-    # 2. 来源优先级加权
+    # 2. 来源优先级加权（基于关键词标记，不限于频道）
     if source_priority:
         for entry in candidates:
-            source_in_metadata = entry.metadata.get("source", "").lower()
-            if any(src in source_in_metadata for src in source_priority):
-                entry.similarity += 0.15  # Boost 优先来源
-                logger.debug(
-                    f"🎯 来源优先级加权: {entry.id[:8]} similarity {entry.similarity-0.15:.2f} → {entry.similarity:.2f}"
-                )
+            # 检查历史记忆是否包含 Hyperliquid 关键词
+            entry_text = entry.metadata.get("content_text", "").lower()
+            entry_summary = entry.metadata.get("summary", "").lower()
+
+            if "hyperliquid" in source_priority:
+                # 检查历史记忆是否为 Hyperliquid 相关
+                if any(kw in entry_text or kw in entry_summary
+                       for kw in ["hyperliquid", "hype", "巨鲸", "whale", "trader"]):
+                    entry.similarity += 0.15  # Boost Hyperliquid 相关记忆
+                    logger.debug(
+                        f"🎯 Hyperliquid 记忆加权: {entry.id[:8]} similarity {entry.similarity-0.15:.2f} → {entry.similarity:.2f}"
+                    )
 
     # 3. 重新排序并返回 top-k
     candidates.sort(key=lambda x: x.similarity, reverse=True)
     return MemoryContext(entries=candidates[:self.config.max_notes])
 ```
 
-### 1.4 Prompt 强化
+### 1.4 Prompt 强化（基于关键词检测）
 ```python
 # signal_engine.py:924 build_signal_prompt()
 source_guidance = ""
-source_lower = payload.source.lower()
+message_lower = payload.text.lower()
 
-if "mlmonchain" in source_lower or any(
-    kw in payload.text.lower() for kw in ["内幕哥", "神秘姐", "巨鲸", "hyperliquid"]
-):
+# 检测 Hyperliquid 关键词（不限于特定频道）
+hyperliquid_keywords = ["hyperliquid", "hype", "巨鲸", "whale", "trader",
+                        "做空", "做多", "杠杆", "liquidation", "清算",
+                        "内幕哥", "神秘姐", "hypurrscan"]
+
+if any(kw in message_lower for kw in hyperliquid_keywords):
     source_guidance = (
         "\n## 🐋 Hyperliquid 巨鲸信号特殊处理\n"
-        "该消息来自 Hyperliquid 链上监控，需按以下规则处理：\n"
+        "该消息包含 Hyperliquid 链上交易信号，需按以下规则处理：\n"
         "1. **strength 至少为 medium**（除非明确无交易价值，如"观望"）\n"
         "2. **timeframe 设为 short**（巨鲸动作时效性 1-24h）\n"
         "3. **notes 必须包含**：\n"
@@ -135,11 +144,13 @@ if "mlmonchain" in source_lower or any(
 system_prompt += source_guidance
 ```
 
-### 1.5 记忆持久化标记
+### 1.5 记忆持久化标记（基于关键词检测）
 ```python
 # listener.py _persist_event() 改造
-# 当存储 Hyperliquid 信号时，在 metadata 中明确标记来源
-if "mlmonchain" in source_name.lower():
+# 当存储 Hyperliquid 信号时，在 metadata 中明确标记（不限于特定频道）
+hyperliquid_keywords = ["hyperliquid", "hype", "巨鲸", "whale", "trader",
+                        "做空", "做多", "杠杆", "liquidation", "清算"]
+if any(kw in message_text.lower() for kw in hyperliquid_keywords):
     metadata["source_category"] = "hyperliquid_whale"
     metadata["priority_source"] = True
 ```
@@ -441,20 +452,30 @@ if source_name.lower() in self.config.PRIORITY_KOL_HANDLES:
 ```python
 # config.py 新增配置项
 class Config:
-    # Hyperliquid 优先通道
-    PRIORITY_CHANNELS: Set[str] = {
-        handle.strip().lower()
-        for handle in os.getenv("PRIORITY_CHANNELS", "mlmonchain").split(",")
-        if handle.strip()
-    }
+    # Hyperliquid 关键词（移除 PRIORITY_CHANNELS，改为关键词驱动）
+    # 覆盖 30+ 专业交易术语，包括英文和中文
     HYPERLIQUID_KEYWORDS: Set[str] = {
         kw.strip().lower()
         for kw in os.getenv(
             "HYPERLIQUID_KEYWORDS",
-            "hyperliquid,hype,巨鲸,杠杆,多单,空单,加仓,perp,内幕哥,神秘姐"
+            # 英文关键词（平台、动作、参与者、指标）
+            "hyperliquid,hype,hypurrscan,onchain,"
+            "short,long,leveraged,leverage,liquidation,liquidate,position,cascade,"
+            "whale,trader,giant,"
+            "profit,unrealized,notional,value,liquidation price,"
+            # 中文关键词（交易动作、参与者、指标）
+            "做空,做多,杠杆,加仓,减仓,平仓,清算,爆仓,级联,"
+            "巨鲸,大户,神秘,内幕哥,神秘姐,交易员,"
+            "获利,盈利,未实现,名义价值,仓位,多单,空单,perp"
         ).split(",")
         if kw.strip()
     }
+
+    # 将 Hyperliquid 关键词添加到全局 FILTER_KEYWORDS
+    # 在 __post_init__ 中合并
+    def __post_init__(self):
+        # 合并 Hyperliquid 关键词到全局过滤器
+        self.FILTER_KEYWORDS = self.FILTER_KEYWORDS.union(self.HYPERLIQUID_KEYWORDS)
 
     # Marketfeed 记忆存档
     MARKETFEED_KEYWORDS: Set[str] = {
@@ -492,7 +513,8 @@ class Config:
 
 **修改流程**：
 - `_handle_new_message_legacy()` 在关键词过滤前增加来源分流逻辑
-- 记忆检索阶段动态调整 `lookback_hours` 和 `source_priority`
+- 记忆检索阶段动态调整 `lookback_hours` 和 `source_priority`（基于关键词检测）
+- **移除** `PRIORITY_CHANNELS` 白名单逻辑（改为关键词驱动）
 
 **新增实例变量**：
 ```python
@@ -538,7 +560,7 @@ def build_signal_prompt(payload: EventPayload) -> list[dict[str, str]]:
 ```
 
 ### 5. 数据库持久化标记（src/listener.py）
-**_persist_event() metadata 增强**：
+**_persist_event() metadata 增强**（基于关键词检测）：
 ```python
 metadata = {
     "forwarded": forwarded,
@@ -546,8 +568,10 @@ metadata = {
     # ... existing fields ...
 }
 
-# 来源分类标记
-if "mlmonchain" in source_name.lower():
+# 来源分类标记（基于关键词，不限于频道）
+hyperliquid_keywords = ["hyperliquid", "hype", "巨鲸", "whale", "trader",
+                        "做空", "做多", "杠杆", "liquidation", "清算"]
+if any(kw in message_text.lower() for kw in hyperliquid_keywords):
     metadata["source_category"] = "hyperliquid_whale"
     metadata["priority_source"] = True
 elif source_name.lower() in self.config.PRIORITY_KOL_HANDLES:
@@ -857,15 +881,22 @@ PRIORITY_KOL_HANDLES=""  # 禁用 KOL 豁免
 
 ### 核心改进
 1. **成本优化 69%**：marketfeed 不调用 AI，年节省 $1,060
-2. **时效性提升**：Hyperliquid 巨鲸信号延迟从 3 分钟降至 1 分钟
-3. **记忆系统增强**：来源优先级 + 24h 时效性窗口
-4. **信号质量提升**：Hyperliquid 召回率 +40%，KOL 完整性 +60%
+2. **覆盖范围扩展**：从单一频道监控升级为 30+ 关键词全网识别
+3. **时效性提升**：Hyperliquid 巨鲸信号响应速度优化
+4. **记忆系统增强**：关键词优先级 + 24h 时效性窗口
+5. **信号质量提升**：Hyperliquid 召回率 +40%，KOL 完整性 +60%
 
 ### 技术亮点
+- **关键词驱动架构**：移除频道白名单依赖，改为智能关键词匹配（30+ 术语）
 - **无 Schema 变更**：所有功能通过 metadata 字段实现
 - **可配置可回滚**：全部功能由环境变量控制
 - **向后兼容**：记忆系统新参数均为可选
 - **分阶段实施**：7 个阶段逐步上线，风险可控
+
+### 关键词覆盖范围
+**英文术语（15 个）**：hyperliquid, hype, hypurrscan, onchain, short, long, leveraged, leverage, liquidation, liquidate, position, cascade, whale, trader, giant, profit, unrealized, notional, value
+
+**中文术语（18 个）**：做空, 做多, 杠杆, 加仓, 减仓, 平仓, 清算, 爆仓, 级联, 巨鲸, 大户, 神秘, 内幕哥, 神秘姐, 交易员, 获利, 盈利, 未实现, 名义价值, 仓位, 多单, 空单, perp
 
 ### 下一步行动
 1. **立即开始**：阶段 1（配置与基础逻辑）
