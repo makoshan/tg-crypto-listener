@@ -9,6 +9,7 @@ from typing import Iterable, Sequence
 
 from src.db.supabase_client import SupabaseError
 from src.memory.local_memory_store import LocalMemoryStore
+from src.memory.multi_source_repository import MultiSourceMemoryRepository
 from src.memory.repository import SupabaseMemoryRepository, MemoryRepositoryConfig
 from src.memory.types import MemoryContext, MemoryEntry
 from src.utils import setup_logger
@@ -28,7 +29,7 @@ class HybridMemoryRepository:
 
     def __init__(
         self,
-        supabase_repo: SupabaseMemoryRepository,
+        supabase_repo: SupabaseMemoryRepository | MultiSourceMemoryRepository,
         local_store: LocalMemoryStore,
         config: MemoryRepositoryConfig | None = None,
         max_failures: int = 3,
@@ -68,6 +69,10 @@ class HybridMemoryRepository:
         Returns:
             MemoryContext
         """
+        if embedding is None:
+            logger.info("⚠️  Hybrid: 未提供 embedding，跳过 Supabase 检索，改用本地关键词")
+            return self._fallback_local(keywords)
+
         # 尝试 Supabase 向量检索
         try:
             embedding_dim = 0
@@ -110,10 +115,11 @@ class HybridMemoryRepository:
 
             # Supabase 返回空结果，降级本地
             logger.warning(
-                f"⚠️  Hybrid: Supabase 返回空结果，降级到本地检索 "
-                f"(embedding维度={len(embedding) if embedding else 0}, "
-                f"asset_codes={list(asset_codes) if asset_codes else []}, "
-                f"keywords={keywords or []})"
+                "⚠️  Hybrid: Supabase 返回空结果，降级到本地检索 "
+                "(embedding维度=%d, asset_codes=%s, keywords=%s)",
+                len(embedding) if embedding else 0,
+                list(asset_codes) if asset_codes else [],
+                keywords or [],
             )
 
         except (SupabaseError, Exception) as e:
@@ -130,7 +136,9 @@ class HybridMemoryRepository:
                     "请检查网络连接或 Supabase 服务状态"
                 )
 
-        # 降级到本地 JSON（关键词匹配）
+        return self._fallback_local(keywords)
+
+    def _fallback_local(self, keywords: list[str] | None) -> MemoryContext:
         if not keywords:
             logger.warning("⚠️  Hybrid: 无关键词，跳过本地降级检索")
             return MemoryContext()
