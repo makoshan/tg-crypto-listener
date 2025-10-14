@@ -141,6 +141,20 @@ class LangGraphMessagePipeline:
         self._graph = self._build_graph()
         self._log_filter_config()
 
+    def _is_priority_kol(self, raw_event: Optional[RawEventState]) -> bool:
+        """Return True if the message originates from a priority KOL source."""
+        handles = self.deps.config.PRIORITY_KOL_HANDLES
+        if not handles or not raw_event:
+            return False
+
+        candidates: List[str] = []
+        if raw_event.source_name:
+            candidates.append(raw_event.source_name.lower().strip())
+        if raw_event.channel_username:
+            candidates.append(raw_event.channel_username.lower().strip().lstrip("@"))
+
+        return any(candidate in handles for candidate in candidates)
+
     def _build_graph(self):
         graph = StateGraph(PipelineState)
         graph.add_node("ingest", self._node_ingest)
@@ -347,6 +361,17 @@ class LangGraphMessagePipeline:
         control = state.get("control") or ControlState()
         routing = state.get("routing") or RoutingState()
         content = state.get("content") or ContentState()
+        raw_event = state.get("raw_event")
+
+        if self._is_priority_kol(raw_event):
+            source_name = ""
+            if raw_event:
+                source_name = raw_event.source_name or raw_event.channel_username or "Unknown"
+            deps.logger.info("⭐ 优先 KOL 消息来自 %s，跳过关键词过滤", source_name)
+            return {
+                "control": control,
+                "routing": routing,
+            }
 
         if not contains_keywords(content.original_text, deps.config.FILTER_KEYWORDS):
             deps.stats["filtered_out"] = deps.stats.get("filtered_out", 0) + 1
