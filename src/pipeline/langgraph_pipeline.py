@@ -22,7 +22,6 @@ from ..memory import (
 from ..memory.types import MemoryEntry
 from ..utils import (
     MessageDeduplicator,
-    analyze_event_intensity,
     compute_canonical_hash,
     compute_embedding,
     compute_sha256,
@@ -60,7 +59,7 @@ class PipelineDependencies:
     logger: Any
     collect_keywords: Callable[..., List[str]]
     extract_media: Callable[[Any], Awaitable[List[Dict[str, Any]]]]
-    build_ai_kwargs: Callable[[Optional[SignalResult], str], Dict[str, Any]]
+    build_ai_kwargs: Callable[[Optional[SignalResult], str, bool], Dict[str, Any]]
     should_include_original: Callable[..., bool]
     append_links: Callable[[str, List[str]], str]
     collect_links: Callable[[SignalResult, str, Optional[str], Optional[str]], List[str]]
@@ -108,6 +107,7 @@ class RoutingState:
     forwarded: bool = False
     should_persist: bool = False
     ai_skipped: bool = False
+    is_priority_kol: bool = False
 
 
 @dataclass
@@ -363,11 +363,26 @@ class LangGraphMessagePipeline:
         content = state.get("content") or ContentState()
         raw_event = state.get("raw_event")
 
-        if self._is_priority_kol(raw_event):
+        is_priority_kol = self._is_priority_kol(raw_event)
+        if is_priority_kol:
+            routing.is_priority_kol = True
             source_name = ""
             if raw_event:
                 source_name = raw_event.source_name or raw_event.channel_username or "Unknown"
-            deps.logger.info("⭐ 优先 KOL 消息来自 %s，跳过关键词过滤", source_name)
+            deps.logger.warning(
+                "⭐ ============ 优先 KOL 消息 ============\n"
+                "   来源: %s\n"
+                "   特权: 跳过关键词过滤\n"
+                "   置信度门槛: 0.3 (普通 0.4)\n"
+                "   观望门槛: 0.5 (普通 0.85)\n"
+                "   去重门槛: %.2f (普通 %.2f)\n"
+                "   强制转发: %s\n"
+                "========================================",
+                source_name,
+                deps.config.PRIORITY_KOL_DEDUP_THRESHOLD,
+                deps.config.EMBEDDING_SIMILARITY_THRESHOLD,
+                "启用" if deps.config.PRIORITY_KOL_FORCE_FORWARD else "禁用",
+            )
             return {
                 "control": control,
                 "routing": routing,
@@ -460,8 +475,9 @@ class LangGraphMessagePipeline:
         routing = state.get("routing") or RoutingState()
         dedup = state.get("dedup") or DedupState()
         content = state.get("content") or ContentState()
+        raw_event = state.get("raw_event")
 
-        if control.drop or not deps.db_enabled or not deps.news_repository:
+        if control.drop:
             return {
                 "control": control,
                 "routing": routing,
@@ -469,52 +485,48 @@ class LangGraphMessagePipeline:
             }
 
         embedding: Optional[List[float]] = state.get("embedding")
+        is_priority_kol = routing.is_priority_kol or self._is_priority_kol(raw_event)
         if embedding is None and deps.config.OPENAI_API_KEY:
-            embedding = await compute_embedding(
-                content.original_text,
-                api_key=deps.config.OPENAI_API_KEY,
-                model=deps.config.OPENAI_EMBEDDING_MODEL,
-            )
-
-        if embedding:
-            threshold = deps.config.EMBEDDING_SIMILARITY_THRESHOLD
-            time_window_hours = deps.config.EMBEDDING_TIME_WINDOW_HOURS
-            intensity = analyze_event_intensity(
-                content.original_text,
-                content.translated_text or "",
-            )
-            if intensity["has_high_impact"]:
-                threshold = max(threshold, 0.95)
-                time_window_hours = min(time_window_hours, 3)
-                deps.logger.debug(
-                    "⚠️ 高影响事件降低语义去重敏感度: threshold=%.2f window=%sh",
-                    threshold,
-                    time_window_hours,
-                )
-            threshold = max(0.0, min(1.0, threshold))
-            time_window_hours = max(1, int(time_window_hours))
             try:
-                similar = await deps.news_repository.check_duplicate_by_embedding(
-                    embedding=embedding,
-                    threshold=threshold,
-                    time_window_hours=time_window_hours,
+                embedding = await compute_embedding(
+                    content.original_text,
+                    api_key=deps.config.OPENAI_API_KEY,
+                    model=deps.config.OPENAI_EMBEDDING_MODEL,
                 )
             except Exception as exc:  # pylint: disable=broad-except
-                deps.logger.warning("语义去重检查失败: %s", exc)
+                deps.logger.warning("Embedding 计算失败，跳过语义去重: %s", exc)
+                embedding = None
+
+        # Execute semantic dedup check (skip for priority KOL)
+        if deps.db_enabled and deps.news_repository and embedding:
+            if is_priority_kol:
+                deps.logger.debug(
+                    "⭐ 白名单 KOL 跳过语义去重: source=%s",
+                    getattr(raw_event, "source_name", "") if raw_event else "",
+                )
             else:
-                if similar:
-                    dedup.semantic = True
-                    dedup.similar_event = str(similar.get("id"))
-                    routing.drop_reason = "semantic_dedup"
-                    control.drop = True
-                    control.status = "dropped"
-                    deps.stats["duplicates"] = deps.stats.get("duplicates", 0) + 1
-                    deps.stats["dup_semantic"] = deps.stats.get("dup_semantic", 0) + 1
-                    deps.logger.info(
-                        "🔁 语义去重命中: event_id=%s similarity=%.3f",
-                        similar.get("id"),
-                        similar.get("similarity"),
+                try:
+                    threshold = deps.config.EMBEDDING_SIMILARITY_THRESHOLD
+                    similar = await deps.news_repository.check_duplicate_by_embedding(
+                        embedding=embedding,
+                        threshold=threshold,
+                        time_window_hours=deps.config.EMBEDDING_TIME_WINDOW_HOURS,
                     )
+                    if similar:
+                        dedup.semantic = True
+                        dedup.similar_event = similar["id"]
+                        routing.drop_reason = "semantic_dedup"
+                        control.drop = True
+                        control.status = "dropped"
+                        deps.stats["duplicates"] = deps.stats.get("duplicates", 0) + 1
+                        deps.stats["dup_semantic"] = deps.stats.get("dup_semantic", 0) + 1
+                        deps.logger.info(
+                            "🔁 LangGraph 语义去重命中: event_id=%s similarity=%.3f",
+                            similar["id"],
+                            similar["similarity"],
+                        )
+                except Exception as exc:  # pylint: disable=broad-except
+                    deps.logger.warning("语义去重检查失败，继续处理: %s", exc)
 
         return {
             "control": control,
@@ -686,6 +698,7 @@ class LangGraphMessagePipeline:
 
         media_payload = state.get("media") or []
         historical_reference = state.get("historical_reference") or []
+        is_priority_kol = self._is_priority_kol(raw_event)
 
         payload = EventPayload(
             text=content.original_text,
@@ -699,6 +712,7 @@ class LangGraphMessagePipeline:
             if deps.config.MEMORY_ENABLED
             else {},
             media=media_payload,
+            is_priority_kol=is_priority_kol,
         )
 
         try:
@@ -727,6 +741,8 @@ class LangGraphMessagePipeline:
         content = state.get("content") or ContentState()
         hashes = state.get("hashes") or HashState()
         signal_result = state.get("signal_result")
+        is_priority_kol = routing.is_priority_kol or self._is_priority_kol(raw_event)
+        force_priority_forward = is_priority_kol and deps.config.PRIORITY_KOL_FORCE_FORWARD
 
         if control.drop:
             routing.should_persist = False
@@ -736,46 +752,110 @@ class LangGraphMessagePipeline:
             }
 
         routing.should_persist = True
-        should_skip_forward = False
+        effective_confidence: float | None = None
+        skip_reason: Optional[str] = None
+
+        if force_priority_forward and signal_result:
+            if signal_result.status != "success":
+                deps.logger.debug(
+                    "⭐ 白名单 KOL 覆盖 AI 状态: source=%s status=%s -> success",
+                    raw_event.source_name,
+                    signal_result.status,
+                )
+                signal_result.status = "success"
+            if signal_result.confidence < 1.0:
+                signal_result.confidence = 1.0
+
+        if signal_result and is_priority_kol and signal_result.confidence != 1.0:
+            signal_result.confidence = 1.0
 
         if signal_result and signal_result.status != "error":
-            low_confidence_skip = signal_result.confidence < 0.4
+            confidence_threshold = 0.3 if is_priority_kol else 0.4
+            observe_threshold = 0.5 if is_priority_kol else 0.85
+            raw_confidence = signal_result.confidence or 0.0
+            if force_priority_forward:
+                effective_confidence = 1.0
+            else:
+                effective_confidence = raw_confidence
+            low_confidence_skip = effective_confidence < confidence_threshold
             neutral_skip = (
                 deps.config.AI_SKIP_NEUTRAL_FORWARD
                 and signal_result.status == "skip"
                 and signal_result.summary != "AI disabled"
             )
-            if low_confidence_skip or neutral_skip:
-                should_skip_forward = True
+            low_value_observe = (
+                signal_result.action == "observe"
+                and effective_confidence < observe_threshold
+            )
+            if low_confidence_skip:
+                skip_reason = "low_confidence"
+            elif neutral_skip:
+                skip_reason = "neutral_skip"
+            elif low_value_observe:
+                skip_reason = "low_value_observe"
+        elif signal_result:
+            effective_confidence = signal_result.confidence
+
+        if skip_reason:
+            if force_priority_forward:
+                deps.logger.warning(
+                    "⭐ 白名单 KOL 强制转发: 忽略低置信度过滤 source=%s reason=%s",
+                    raw_event.source_name,
+                    skip_reason,
+                )
+                routing.ai_skipped = False
+            else:
                 deps.stats["ai_skipped"] = deps.stats.get("ai_skipped", 0) + 1
                 deps.logger.info(
-                    "🤖 AI 评估为低优先级，跳过转发: source=%s action=%s confidence=%.2f",
+                    "🤖 AI 评估跳过转发: source=%s reason=%s confidence=%.2f",
                     raw_event.source_name,
-                    signal_result.action,
-                    signal_result.confidence,
+                    effective_confidence,
+                    skip_reason,
                 )
+                routing.forwarded = False
+                routing.ai_skipped = True
+                return {
+                    "control": control,
+                    "routing": routing,
+                }
 
-        if should_skip_forward:
-            routing.forwarded = False
-            routing.ai_skipped = True
-            return {
-                "control": control,
-                "routing": routing,
-            }
-
-        ai_kwargs = deps.build_ai_kwargs(signal_result, raw_event.source_name)
+        ai_kwargs = deps.build_ai_kwargs(signal_result, raw_event.source_name, is_priority_kol)
         if not ai_kwargs:
-            deps.stats["ai_skipped"] = deps.stats.get("ai_skipped", 0) + 1
-            deps.logger.info(
-                "🤖 缺少 AI 摘要，跳过转发: source=%s",
-                raw_event.source_name,
-            )
-            routing.forwarded = False
-            routing.ai_skipped = True
-            return {
-                "control": control,
-                "routing": routing,
-            }
+            if force_priority_forward and signal_result:
+                deps.logger.warning(
+                    "⭐ 白名单 KOL 强制转发模式: 即使 AI 摘要缺失也转发 source=%s",
+                    raw_event.source_name,
+                )
+                summary_fallback = signal_result.summary
+                if not summary_fallback:
+                    preview = content.original_text or ""
+                    summary_fallback = f"[{raw_event.source_name}] {preview[:100]}..."
+                action_fallback = signal_result.action or "observe"
+                event_type_fallback = signal_result.event_type or "general"
+                asset_fallback = signal_result.asset or "NONE"
+                confidence_value = 1.0
+                ai_kwargs = {
+                    "ai_summary": summary_fallback,
+                    "ai_action": action_fallback,
+                    "ai_confidence": confidence_value,
+                    "ai_event_type": event_type_fallback,
+                    "ai_asset": asset_fallback,
+                }
+            else:
+                deps.stats["ai_skipped"] = deps.stats.get("ai_skipped", 0) + 1
+                deps.logger.info(
+                    "🤖 缺少 AI 摘要，跳过转发: source=%s",
+                    raw_event.source_name,
+                )
+                routing.forwarded = False
+                routing.ai_skipped = True
+                return {
+                    "control": control,
+                    "routing": routing,
+                }
+
+        if is_priority_kol:
+            ai_kwargs["ai_confidence"] = 1.0
 
         show_original = deps.should_include_original(
             original_text=content.original_text,

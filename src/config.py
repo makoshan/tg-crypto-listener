@@ -244,6 +244,26 @@ class Config:
     SUPABASE_TIMEOUT_SECONDS: float = float(os.getenv("SUPABASE_TIMEOUT_SECONDS", "8.0"))
     ENABLE_DB_PERSISTENCE: bool = _as_bool(os.getenv("ENABLE_DB_PERSISTENCE", "false"))
 
+    # Secondary Supabase datasource (optional, disabled by default)
+    SUPABASE_SECONDARY_ENABLED: bool = _as_bool(
+        os.getenv("SUPABASE_SECONDARY_ENABLED", "false")
+    )
+    SUPABASE_SECONDARY_URL: str = os.getenv("SUPABASE_SECONDARY_URL", "").strip()
+    SUPABASE_SECONDARY_SERVICE_KEY: str = os.getenv(
+        "SUPABASE_SECONDARY_SERVICE_KEY",
+        "",
+    ).strip()
+    SUPABASE_SECONDARY_TABLE: str = os.getenv(
+        "SUPABASE_SECONDARY_TABLE",
+        "docs",
+    ).strip()
+    SUPABASE_SECONDARY_SIMILARITY_THRESHOLD: float = float(
+        os.getenv("SUPABASE_SECONDARY_SIMILARITY_THRESHOLD", "0.75")
+    )
+    SUPABASE_SECONDARY_MAX_RESULTS: int = int(
+        os.getenv("SUPABASE_SECONDARY_MAX_RESULTS", "6")
+    )
+
     # OpenAI Embedding configuration
     OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
     OPENAI_EMBEDDING_MODEL: str = os.getenv("OPENAI_EMBEDDING_MODEL", "text-embedding-3-small")
@@ -345,6 +365,8 @@ class Config:
         for handle in os.getenv("PRIORITY_KOL_HANDLES", "sleepinrain,journey_of_someone,retardfrens").split(",")
         if handle.strip()
     }
+    PRIORITY_KOL_FORCE_FORWARD: bool = _as_bool(os.getenv("PRIORITY_KOL_FORCE_FORWARD", "true"))
+    PRIORITY_KOL_DEDUP_THRESHOLD: float = float(os.getenv("PRIORITY_KOL_DEDUP_THRESHOLD", "0.95"))
 
     @classmethod
     def get_deep_analysis_config(cls) -> Dict[str, Any]:
@@ -400,6 +422,30 @@ class Config:
             print(f"❌ 缺少必需配置: {', '.join(missing)}")
             return False
 
+        try:
+            cls.validate_secondary_config()
+        except ValueError as exc:
+            print(f"❌ {exc}")
+            return False
+
         if cls.AI_ENABLED and not cls.AI_API_KEY:
             print("⚠️ 已启用 AI，但 AI_API_KEY/GEMINI_API_KEY 未配置，将自动降级为传统模式")
         return True
+
+    @classmethod
+    def validate_secondary_config(cls) -> None:
+        """Validate optional secondary Supabase datasource configuration."""
+
+        if not cls.SUPABASE_SECONDARY_ENABLED:
+            return
+
+        missing: list[str] = []
+        if not cls.SUPABASE_SECONDARY_URL:
+            missing.append("SUPABASE_SECONDARY_URL")
+        if not cls.SUPABASE_SECONDARY_SERVICE_KEY:
+            missing.append("SUPABASE_SECONDARY_SERVICE_KEY")
+
+        if missing:
+            raise ValueError(
+                "已启用副记忆库，但缺少必需配置: " + ", ".join(missing)
+            )

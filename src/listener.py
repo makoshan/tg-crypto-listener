@@ -358,7 +358,20 @@ class TelegramListener:
                 return
 
             if is_priority_kol:
-                logger.info("⭐ 优先 KOL 消息来自 %s，跳过关键词过滤", source_name)
+                logger.warning(
+                    "⭐ ============ 优先 KOL 消息 ============\n"
+                    "   来源: %s\n"
+                    "   特权: 跳过关键词过滤\n"
+                    "   置信度门槛: 0.3 (普通 0.4)\n"
+                    "   观望门槛: 0.5 (普通 0.85)\n"
+                    "   去重门槛: %.2f (普通 %.2f)\n"
+                    "   强制转发: %s\n"
+                    "========================================",
+                    source_name,
+                    self.config.PRIORITY_KOL_DEDUP_THRESHOLD,
+                    self.config.EMBEDDING_SIMILARITY_THRESHOLD,
+                    "启用" if self.config.PRIORITY_KOL_FORCE_FORWARD else "禁用",
+                )
 
             if self.deduplicator.is_duplicate(message_text):
                 self.stats["duplicates"] += 1
@@ -390,51 +403,45 @@ class TelegramListener:
                         )
                         return
 
-            if (
-                self.db_enabled
-                and self.news_repository
-                and self.config.OPENAI_API_KEY
-            ):
-                embedding_vector = await compute_embedding(
-                    message_text,
-                    api_key=self.config.OPENAI_API_KEY,
-                    model=self.config.OPENAI_EMBEDDING_MODEL,
-                )
-                if embedding_vector:
-                    intensity = analyze_event_intensity(
+            if self.config.OPENAI_API_KEY:
+                try:
+                    embedding_vector = await compute_embedding(
                         message_text,
-                        translated_text or "",
+                        api_key=self.config.OPENAI_API_KEY,
+                        model=self.config.OPENAI_EMBEDDING_MODEL,
                     )
-                    threshold = self.config.EMBEDDING_SIMILARITY_THRESHOLD
-                    time_window_hours = self.config.EMBEDDING_TIME_WINDOW_HOURS
-                    if intensity["has_high_impact"]:
-                        threshold = max(threshold, 0.95)
-                        time_window_hours = min(time_window_hours, 3)
-                        logger.debug(
-                            "⚠️ 高影响事件启用宽松语义去重: threshold=%.2f window=%sh",
-                            threshold,
-                            time_window_hours,
-                        )
-                    threshold = max(0.0, min(1.0, threshold))
-                    time_window_hours = max(1, int(time_window_hours))
-                    try:
-                        similar = await self.news_repository.check_duplicate_by_embedding(
-                            embedding=embedding_vector,
-                            threshold=threshold,
-                            time_window_hours=time_window_hours,
-                        )
-                    except Exception as exc:  # pylint: disable=broad-except
-                        logger.warning("语义去重检查失败，继续处理: %s", exc)
-                    else:
-                        if similar:
-                            self.stats["duplicates"] += 1
-                            self.stats["dup_semantic"] += 1
-                            logger.info(
-                                "🔁 语义去重命中: event_id=%s similarity=%.3f",
-                                similar["id"],
-                                similar["similarity"],
+                except Exception as exc:  # pylint: disable=broad-except
+                    logger.warning("Embedding 计算失败，跳过语义去重: %s", exc)
+                    embedding_vector = None
+                else:
+                    # Execute semantic dedup check (skip for priority KOL)
+                    if self.db_enabled and self.news_repository and embedding_vector:
+                        if is_priority_kol:
+                            logger.debug(
+                                "⭐ 白名单 KOL 跳过早期语义去重检查: source=%s",
+                                source_name,
                             )
-                            return
+                        else:
+                            try:
+                                # Use stricter threshold for early dedup to save AI costs
+                                threshold = self.config.EMBEDDING_SIMILARITY_THRESHOLD
+                                similar = await self.news_repository.check_duplicate_by_embedding(
+                                    embedding=embedding_vector,
+                                    threshold=threshold,
+                                    time_window_hours=self.config.EMBEDDING_TIME_WINDOW_HOURS,
+                                )
+                                if similar:
+                                    self.stats["duplicates"] += 1
+                                    self.stats["dup_semantic"] += 1
+                                    logger.info(
+                                        "🔁 早期语义去重命中: event_id=%s similarity=%.3f content_preview=%s",
+                                        similar["id"],
+                                        similar["similarity"],
+                                        similar.get("content_text", "")[:50],
+                                    )
+                                    return
+                            except Exception as exc:  # pylint: disable=broad-except
+                                logger.warning("早期语义去重检查失败，继续处理: %s", exc)
 
             translated_text = None
             language = "unknown"
@@ -555,10 +562,15 @@ class TelegramListener:
                         else {}
                     ),
                     media=media_payload,
+                    is_priority_kol=is_priority_kol,
                 )
                 signal_result = await self.ai_engine.analyse(payload)
                 if signal_result:
                     self._update_ai_stats(signal_result)
+
+            if signal_result and is_priority_kol:
+                # Priority KOL: normalize confidence to 1.0 for downstream gating and persistence
+                signal_result.confidence = 1.0
 
             should_skip_forward = False
             if signal_result and signal_result.status != "error":
@@ -609,42 +621,62 @@ class TelegramListener:
                     hash_raw=hash_raw,
                     hash_canonical=hash_canonical,
                     embedding=embedding_vector,
+                    is_priority_kol=is_priority_kol,
                 )
                 return
 
-            ai_kwargs = self._build_ai_kwargs(signal_result, source_name)
+            ai_kwargs = self._build_ai_kwargs(signal_result, source_name, is_priority_kol)
             if not ai_kwargs:
-                # AI 分析未返回成功结果（可能是 asset=NONE 或其他原因）
-                self.stats["ai_skipped"] += 1
-                reason = (
-                    f"status={signal_result.status}"
-                    if signal_result and signal_result.status != "success"
-                    else "缺少 AI 摘要"
-                )
-                logger.info(
-                    "🤖 AI 分析未通过，跳过转发: source=%s reason=%s",
-                    source_name,
-                    reason,
-                )
-                await self._persist_event(
-                    source_name,
-                    message_text,
-                    translated_text,
-                    signal_result,
-                    False,
-                    source_message_id=source_message_id,
-                    source_url=source_url,
-                    published_at=published_at,
-                    processed_at=event_time,
-                    language=language,
-                    keywords_hit=keywords_hit,
-                    translation_confidence=translation_confidence,
-                    media_refs=media_payload,
-                    hash_raw=hash_raw,
-                    hash_canonical=hash_canonical,
-                    embedding=embedding_vector,
-                )
-                return
+                # Priority KOL with FORCE_FORWARD: allow forwarding even without full AI kwargs
+                if is_priority_kol and self.config.PRIORITY_KOL_FORCE_FORWARD and signal_result:
+                    logger.warning(
+                        "⭐ 白名单 KOL 强制转发模式: 即使 AI 分析不完整也转发 source=%s",
+                        source_name,
+                    )
+                    # Build minimal kwargs for priority KOL
+                    ai_kwargs = {
+                        "ai_summary": signal_result.summary or f"[{source_name}] {message_text[:100]}...",
+                        "ai_action": signal_result.action or "observe",
+                        "ai_confidence": 1.0,
+                        "ai_event_type": signal_result.event_type or "general",
+                        "ai_asset": signal_result.asset or "NONE",
+                    }
+                else:
+                    # AI 分析未返回成功结果（可能是 asset=NONE 或其他原因）
+                    self.stats["ai_skipped"] += 1
+                    reason = (
+                        f"status={signal_result.status}"
+                        if signal_result and signal_result.status != "success"
+                        else "缺少 AI 摘要"
+                    )
+                    logger.info(
+                        "🤖 AI 分析未通过，跳过转发: source=%s reason=%s",
+                        source_name,
+                        reason,
+                    )
+                    await self._persist_event(
+                        source_name,
+                        message_text,
+                        translated_text,
+                        signal_result,
+                        False,
+                        source_message_id=source_message_id,
+                        source_url=source_url,
+                        published_at=published_at,
+                        processed_at=event_time,
+                        language=language,
+                        keywords_hit=keywords_hit,
+                        translation_confidence=translation_confidence,
+                        media_refs=media_payload,
+                        hash_raw=hash_raw,
+                        hash_canonical=hash_canonical,
+                        embedding=embedding_vector,
+                        is_priority_kol=is_priority_kol,
+                    )
+                    return
+
+            if is_priority_kol:
+                ai_kwargs["ai_confidence"] = 1.0
 
             show_original = self._should_include_original(
                 original_text=message_text,
@@ -681,10 +713,21 @@ class TelegramListener:
             )
             if success:
                 self.stats["forwarded"] += 1
-                logger.info("📤 已转发来自 %s 的消息", source_name)
+                if is_priority_kol:
+                    logger.warning(
+                        "⭐ ✅ 白名单 KOL 消息已成功转发: source=%s confidence=%.2f action=%s",
+                        source_name,
+                        signal_result.confidence if signal_result else 0.0,
+                        signal_result.action if signal_result else "unknown",
+                    )
+                else:
+                    logger.info("📤 已转发来自 %s 的消息", source_name)
             else:
                 self.stats["errors"] += 1
-                logger.error("❌ 消息转发失败")
+                if is_priority_kol:
+                    logger.error("⭐ ❌ 白名单 KOL 消息转发失败: source=%s", source_name)
+                else:
+                    logger.error("❌ 消息转发失败")
 
             await self._persist_event(
                 source_name,
@@ -703,6 +746,7 @@ class TelegramListener:
                 hash_raw=hash_raw,
                 hash_canonical=hash_canonical,
                 embedding=embedding_vector,
+                is_priority_kol=is_priority_kol,
             )
         except Exception as exc:  # pylint: disable=broad-except
             self.stats["errors"] += 1
@@ -761,6 +805,7 @@ class TelegramListener:
         self,
         signal_result: SignalResult | None,
         source: str,
+        is_priority_kol: bool = False,
     ) -> dict[str, object]:
         if not signal_result:
             logger.debug("AI 结果为空，source=%s", source)
@@ -775,24 +820,42 @@ class TelegramListener:
             return {}
 
         if signal_result.status != "success":
-            logger.debug(
-                "AI 状态为 %s，非成功结果，source=%s",
-                signal_result.status,
-                source,
-            )
-            return {}
+            # Priority KOL: allow skip status if FORCE_FORWARD enabled
+            if is_priority_kol and self.config.PRIORITY_KOL_FORCE_FORWARD:
+                logger.debug(
+                    "⭐ 白名单 KOL 允许非成功状态: status=%s source=%s",
+                    signal_result.status,
+                    source,
+                )
+                # Continue to check summary
+            else:
+                logger.debug(
+                    "AI 状态为 %s，非成功结果，source=%s",
+                    signal_result.status,
+                    source,
+                )
+                return {}
 
         if not signal_result.summary:
-            raw_preview = (signal_result.raw_response or "").strip()
-            if len(raw_preview) > 160:
-                raw_preview = raw_preview[:157] + "..."
-            logger.info(
-                "AI 返回缺少摘要，source=%s action=%s raw=%s",
-                source,
-                signal_result.action,
-                raw_preview,
-            )
-            return {}
+            # Priority KOL: allow missing summary if FORCE_FORWARD enabled
+            if is_priority_kol and self.config.PRIORITY_KOL_FORCE_FORWARD:
+                logger.warning(
+                    "⭐ 白名单 KOL 缺少摘要但强制转发，source=%s",
+                    source,
+                )
+                # Return empty dict to trigger force forward logic in caller
+                return {}
+            else:
+                raw_preview = (signal_result.raw_response or "").strip()
+                if len(raw_preview) > 160:
+                    raw_preview = raw_preview[:157] + "..."
+                logger.info(
+                    "AI 返回缺少摘要，source=%s action=%s raw=%s",
+                    source,
+                    signal_result.action,
+                    raw_preview,
+                )
+                return {}
 
         return {
             "ai_summary": signal_result.summary,
@@ -874,6 +937,7 @@ class TelegramListener:
         hash_raw: str | None = None,
         hash_canonical: str | None = None,
         embedding: list[float] | None = None,
+        is_priority_kol: bool = False,
     ) -> None:
         if not self.db_enabled or not self.news_repository:
             return
@@ -925,7 +989,7 @@ class TelegramListener:
                 return
 
             # Level 2: Semantic embedding dedup
-            if embedding_vector:
+            if embedding_vector and not is_priority_kol:
                 intensity = analyze_event_intensity(
                     original_text,
                     translated_text or "",
@@ -955,6 +1019,11 @@ class TelegramListener:
                         similar.get("content_text", "")[:50],
                     )
                     return
+            elif is_priority_kol and embedding_vector:
+                logger.debug(
+                    "⭐ 白名单 KOL 跳过语义去重: source=%s",
+                    source_name,
+                )
 
             if not news_event_id:
                 payload = NewsEventPayload(
