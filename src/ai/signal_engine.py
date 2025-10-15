@@ -98,6 +98,7 @@ class EventPayload:
     keywords_hit: list[str] = field(default_factory=list)
     historical_reference: Dict[str, Any] = field(default_factory=dict)
     media: list[Dict[str, Any]] = field(default_factory=list)
+    is_priority_kol: bool = False
 
 
 @dataclass
@@ -654,7 +655,7 @@ class AiSignalEngine:
         try:
             data = json.loads(normalized_text)
             # Parse confidence safely for debug log
-            confidence_debug = data.get("confidence", 0.0)
+            confidence_debug = data.get("confidence", 1.0)
             if isinstance(confidence_debug, str):
                 confidence_map = {"high": 0.8, "medium": 0.5, "low": 0.3}
                 confidence_debug = confidence_map.get(confidence_debug.lower(), 0.0)
@@ -662,7 +663,7 @@ class AiSignalEngine:
                 try:
                     confidence_debug = float(confidence_debug)
                 except (ValueError, TypeError):
-                    confidence_debug = 0.0
+                    confidence_debug = 1.0
 
             logger.debug(
                 "AI JSON 解析成功: action=%s confidence=%.2f",
@@ -684,7 +685,7 @@ class AiSignalEngine:
             timeframe = str(data.get("timeframe", "medium")).lower()
 
             # Handle confidence - should be float but AI sometimes returns string like "high"
-            confidence_raw = data.get("confidence", 0.0)
+            confidence_raw = data.get("confidence", 1.0)
             if isinstance(confidence_raw, str):
                 # Map string values to numeric confidence
                 confidence_map = {"high": 0.8, "medium": 0.5, "low": 0.3}
@@ -699,10 +700,10 @@ class AiSignalEngine:
                     confidence = float(confidence_raw)
                 except (ValueError, TypeError):
                     logger.warning(
-                        "无法解析 confidence 值 '%s'，使用默认值 0.0",
+                        "无法解析 confidence 值 '%s'，使用默认值 1.0",
                         confidence_raw,
                     )
-                    confidence = 0.0
+                    confidence = 1.0
             risk_flags = data.get("risk_flags", []) or []
             if not isinstance(risk_flags, list):
                 risk_flags = [str(risk_flags)]
@@ -740,7 +741,7 @@ class AiSignalEngine:
             direction = "neutral"
             strength = "low"
             timeframe = "medium"
-            confidence = 0.0
+            confidence = 1.0
             risk_flags = ["confidence_low"]
             notes = ""
             links = []
@@ -932,6 +933,8 @@ def build_signal_prompt(payload: EventPayload) -> list[dict[str, str]]:
         "keywords_hit": payload.keywords_hit,
         "historical_reference": payload.historical_reference,
         "media_attachments": payload.media,
+        "is_priority_kol": payload.is_priority_kol,
+        "priority_flags": ["priority_kol"] if payload.is_priority_kol else [],
     }
 
     context_json = json.dumps(context, ensure_ascii=False)
@@ -971,6 +974,16 @@ def build_signal_prompt(payload: EventPayload) -> list[dict[str, str]]:
         "识别图片中的交易对、公告主体或链上指标；若图片与加密无关或无法读出，请 asset=NONE 并添加 data_incomplete，notes 说明“图片无法识别”或“与加密无关”。\n"
         "\n所有字段使用简体中文，禁止输出 Markdown、表格或多余解释，确保 JSON 可直接解析。"
     )
+
+    if payload.is_priority_kol:
+        system_prompt += (
+            "\n\n## 白名单 KOL 优先指引\n"
+            "该消息来自高度可信的优先 KOL，默认视为具备较高执行价值：\n"
+            "1. 重点提炼最具交易价值的要点，优先给出可执行动作及方向，必要时提供关键数据或链上证据。\n"
+            "2. 若信息仍然缺乏可执行性，请明确指出缺口，并阐明需要等待的补充要素，避免含糊其辞。\n"
+            "3. 避免因为语气保守而将 confidence 人为压低，如无明显噪音或矛盾信息，confidence 可适度提升至 0.5-0.8 区间。\n"
+            "4. 对于宏观或情绪类观点，需判断其对主流资产或赛道的可操作影响，并在 notes 中给出简洁的执行建议或观察重点。"
+        )
 
     user_prompt = (
         "请结合以下事件上下文给出最具操作性的建议，若包含多条信息需综合判断：\n"

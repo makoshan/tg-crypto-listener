@@ -6,7 +6,7 @@ import asyncio
 import json
 import math
 import time
-from typing import Dict, Optional
+from typing import Dict, Optional, TYPE_CHECKING
 
 import httpx
 
@@ -17,6 +17,9 @@ from src.config import PROJECT_ROOT
 from src.utils import setup_logger
 
 logger = setup_logger(__name__)
+
+if TYPE_CHECKING:
+    from src.ai.tools.search.fetcher import SearchTool
 
 
 class CoinMarketCapAssetRegistry:
@@ -79,10 +82,10 @@ class CoinMarketCapAssetRegistry:
 class CoinMarketCapPriceProvider(PriceProvider):
     """Fetch price snapshots using the CoinMarketCap API."""
 
-    API_BASE_URL = "https://pro-api.coinmarketcap.com/v2"
-    QUOTE_LATEST_ENDPOINT = "/cryptocurrency/quotes/latest"
-    MAP_ENDPOINT = "/cryptocurrency/map"
-    OHLCV_ENDPOINT = "/cryptocurrency/ohlcv/historical"
+    API_BASE_URL = "https://pro-api.coinmarketcap.com"
+    QUOTE_LATEST_ENDPOINT = "/v2/cryptocurrency/quotes/latest"
+    MAP_ENDPOINT = "/v1/cryptocurrency/map"
+    OHLCV_ENDPOINT = "/v2/cryptocurrency/ohlcv/historical"
 
     STABLECOIN_SYMBOLS = {
         "usdc",
@@ -112,12 +115,18 @@ class CoinMarketCapPriceProvider(PriceProvider):
             getattr(config, "PRICE_VOLATILITY_SPIKE_MULTIPLIER", 3.0)
         )
         self._binance_enabled = bool(getattr(config, "PRICE_BINANCE_FALLBACK_ENABLED", True))
+        self._crash_threshold = float(getattr(config, "PRICE_CRASH_ALERT_THRESHOLD", 7.0))
+        self._btc_correlation_threshold = float(
+            getattr(config, "PRICE_BTC_CORRELATION_THRESHOLD", 2.0)
+        )
 
         self._registry = CoinMarketCapAssetRegistry()
         self._volatility_baseline: Dict[str, float] = {}
         self._binance_base_url = getattr(
             config, "BINANCE_REST_BASE_URL", "https://api.binance.com"
         ).rstrip("/")
+        self._search_tool: Optional["SearchTool"] = None
+        self._search_tool_disabled = False
 
     async def snapshot(self, *, asset: str) -> ToolResult:
         asset_symbol = asset.lower()
@@ -211,6 +220,11 @@ class CoinMarketCapPriceProvider(PriceProvider):
                 confidence=0.0,
                 error="data_unavailable",
             )
+
+        await self._maybe_attach_context(
+            snapshot=price_snapshot,
+            asset_symbol=asset_symbol,
+        )
 
         return price_snapshot
 
@@ -467,3 +481,177 @@ class CoinMarketCapPriceProvider(PriceProvider):
             triggered=False,
             confidence=0.6,
         )
+
+    async def _maybe_attach_context(self, *, snapshot: ToolResult, asset_symbol: str) -> None:
+        metrics = snapshot.data.get("metrics") if isinstance(snapshot.data, dict) else {}
+        if not isinstance(metrics, dict):
+            return
+
+        drop_value = metrics.get("price_change_24h_pct")
+        try:
+            drop_value = float(drop_value)
+        except (TypeError, ValueError):
+            return
+
+        if drop_value > -self._crash_threshold:
+            return
+
+        context = await self._gather_crash_context(
+            asset_symbol=asset_symbol,
+            drop_pct=drop_value,
+        )
+        if not context:
+            return
+
+        snapshot.data["context_checks"] = context  # type: ignore[index]
+        notes = snapshot.data.get("notes") if isinstance(snapshot.data, dict) else None
+        suffix = "已执行大跌情境检查"
+        if isinstance(notes, str) and notes:
+            snapshot.data["notes"] = f"{notes}；{suffix}"  # type: ignore[index]
+        else:
+            snapshot.data["notes"] = suffix  # type: ignore[index]
+
+    async def _gather_crash_context(self, *, asset_symbol: str, drop_pct: float) -> dict:
+        checks: dict[str, dict] = {}
+        tasks: list[tuple[str, asyncio.Task]] = []
+
+        symbol_lower = asset_symbol.lower()
+        if symbol_lower != "btc":
+            tasks.append(("btc_market", asyncio.create_task(self._check_bitcoin_correlation())))
+
+        search_topics = [
+            ("us_trade_sanctions", ["美国 制裁 加密", "US sanctions crypto market"]),
+            ("trump_commentary", ["特朗普 加密 言论", "Trump crypto statement"]),
+            ("war_risk", ["战争 升级 crypto 市场", "geopolitical war crypto plunge"]),
+        ]
+
+        for label, queries in search_topics:
+            tasks.append((label, asyncio.create_task(self._search_topic(queries))))
+
+        if not tasks:
+            return {}
+
+        results = await asyncio.gather(
+            *(task for _, task in tasks),
+            return_exceptions=True,
+        )
+
+        for (label, _), result in zip(tasks, results, strict=False):
+            if isinstance(result, Exception):
+                logger.warning("大跌情境检查异常: %s error=%s", label, result)
+                checks[label] = {"status": "error", "reason": str(result)}
+            else:
+                checks[label] = result
+
+        if not any(
+            isinstance(value, dict) and value.get("status") not in {"unavailable", "error"}
+            for value in checks.values()
+        ):
+            return {}
+
+        return {
+            "detected_drop_pct": round(drop_pct, 3),
+            "threshold_pct": self._crash_threshold,
+            "checks": checks,
+        }
+
+    async def _check_bitcoin_correlation(self) -> dict:
+        try:
+            cmc_id = await self._resolve_asset_id("btc")
+        except Exception as exc:
+            logger.warning("比特币行情解析失败: %s", exc)
+            return {"status": "error", "reason": str(exc)}
+
+        if not cmc_id:
+            return {"status": "unavailable", "reason": "btc_id_not_found"}
+
+        headers = self._build_headers()
+        try:
+            async with httpx.AsyncClient(timeout=self._timeout, headers=headers) as client:
+                btc_quote = await self._fetch_quote(client, cmc_id)
+        except Exception as exc:
+            logger.warning("比特币行情请求失败: %s", exc)
+            return {"status": "error", "reason": str(exc)}
+
+        quote = btc_quote.get("quote", {}).get("USD", {}) if isinstance(btc_quote, dict) else {}
+        change_raw = quote.get("percent_change_24h")
+        price_raw = quote.get("price")
+
+        try:
+            change = float(change_raw)
+        except (TypeError, ValueError):
+            return {"status": "unavailable", "reason": "percent_change_missing"}
+
+        btc_price = None
+        try:
+            btc_price = round(float(price_raw), 2)
+        except (TypeError, ValueError):
+            btc_price = None
+
+        also_down = change <= -self._btc_correlation_threshold
+
+        return {
+            "status": "ok",
+            "percent_change_24h": round(change, 3),
+            "price_usd": btc_price,
+            "also_down": also_down,
+            "threshold_pct": self._btc_correlation_threshold,
+        }
+
+    async def _search_topic(self, queries: list[str]) -> dict:
+        tool = self._ensure_search_tool()
+        if not tool:
+            return {"status": "unavailable", "reason": "search_tool_unavailable"}
+
+        for query in queries:
+            try:
+                result = await tool.fetch(keyword=query, max_results=3)
+            except Exception as exc:
+                logger.warning("关键字搜索失败: query='%s' error=%s", query, exc)
+                return {"status": "error", "reason": str(exc)}
+
+            if not result.success:
+                continue
+
+            data = result.data or {}
+            raw_results = data.get("results") or []
+            if not raw_results:
+                continue
+
+            formatted_results = [
+                {
+                    "title": item.get("title", ""),
+                    "source": item.get("source", ""),
+                    "url": item.get("url", ""),
+                }
+                for item in raw_results[:3]
+            ]
+
+            return {
+                "status": "ok",
+                "query": query,
+                "hits": len(raw_results),
+                "multi_source": data.get("multi_source"),
+                "official": data.get("official_confirmed"),
+                "triggered": result.triggered,
+                "top_results": formatted_results,
+            }
+
+        return {"status": "ok", "query": queries[-1] if queries else "", "hits": 0}
+
+    def _ensure_search_tool(self) -> Optional["SearchTool"]:
+        if self._search_tool_disabled:
+            return None
+        if self._search_tool is not None:
+            return self._search_tool
+
+        try:
+            from src.ai.tools.search.fetcher import SearchTool as SearchToolFetcher
+
+            self._search_tool = SearchToolFetcher(self._config)
+            logger.info("搜索工具初始化成功，用于大跌情境分析")
+            return self._search_tool
+        except Exception as exc:
+            logger.warning("搜索工具不可用，将跳过新闻上下文检查: %s", exc)
+            self._search_tool_disabled = True
+            return None
