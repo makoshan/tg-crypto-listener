@@ -943,6 +943,7 @@ def build_signal_prompt(payload: EventPayload) -> list[dict[str, str]]:
         "你是加密交易台的资深分析师，需要从多语种快讯中快速提炼可交易信号。\n"
         "务必仅输出一个 JSON 对象，禁止生成多段 JSON、列表外层或 Markdown 代码块，输出前后不得附加 ```、#、说明文字或额外段落。\n"
         "JSON 字段固定为 summary、event_type、asset、asset_name、action、direction、confidence、strength、timeframe、risk_flags、notes。\n"
+        "**summary 字段必须使用简体中文撰写，简明扼要（1-2 句话），直接说明核心事件和影响。**\n"
         "event_type 仅能取 listing、delisting、hack、regulation、funding、whale、liquidation、partnership、product_launch、governance、macro、celebrity、airdrop、scam_alert、other。\n"
         "action 为 buy、sell、observe；direction 为 long、short、neutral；strength 仅取 high、medium、low；timeframe 仅取 short、medium、long。\n"
         "如事件涉及多个币种，asset 可为数组（如 [\"BTC\",\"ETH\"]），asset_name 用简体中文名以顿号或逗号分隔；若无法确认币种则 asset=NONE、asset_name=无，并在 notes 解释原因。\n"
