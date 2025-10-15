@@ -115,7 +115,9 @@ class SupabaseClient:
         if response.headers.get("Content-Type", "").startswith("application/json"):
             return response.json()
         return None
-_CLIENT_INSTANCE: SupabaseClient | None = None
+
+
+_CLIENT_CACHE: dict[tuple[str, str], SupabaseClient] = {}
 
 
 def get_supabase_client(
@@ -124,11 +126,16 @@ def get_supabase_client(
     *,
     timeout: float = 8.0,
 ) -> SupabaseClient:
-    """Return a shared Supabase client instance."""
+    """Return a cached Supabase client instance for the given credentials."""
 
-    global _CLIENT_INSTANCE  # noqa: PLW0603
-    if _CLIENT_INSTANCE is None:
-        if not url or not service_key:
-            raise SupabaseError("Supabase URL and service key are required")
-        _CLIENT_INSTANCE = SupabaseClient(rest_url=url, service_key=service_key, timeout=timeout)
-    return _CLIENT_INSTANCE
+    identifier = (url.strip(), service_key.strip())
+
+    if not identifier[0] or not identifier[1]:
+        raise SupabaseError("Supabase URL and service key are required")
+
+    client = _CLIENT_CACHE.get(identifier)
+    if client is None:
+        client = SupabaseClient(rest_url=identifier[0], service_key=identifier[1], timeout=timeout)
+        _CLIENT_CACHE[identifier] = client
+
+    return client

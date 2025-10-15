@@ -21,5 +21,7 @@
   "wbeth": "wrapped-beacon-eth",
   "tao": "bittensor",
   "aave": "aave",
-  "ena": "ethena"
+  "ena": "ethena",
+  "slerf": "slerf",
+  "hype": "hyperliquid"
 }

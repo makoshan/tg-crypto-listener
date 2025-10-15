@@ -46,7 +46,7 @@ async def _extract_media_stub(_message: Any) -> List[Dict[str, Any]]:
     return []
 
 
-def _build_ai_kwargs_stub(signal_result: Any, _source: str) -> Dict[str, Any]:
+def _build_ai_kwargs_stub(signal_result: Any, _source: str, _is_priority_kol: bool = False) -> Dict[str, Any]:
     if not signal_result or getattr(signal_result, "status", None) != "success":
         return {}
     return {
