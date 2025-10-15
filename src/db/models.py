@@ -24,6 +24,7 @@ class NewsEventPayload:
     media_refs: List[Dict[str, Any]] = field(default_factory=list)
     metadata: Dict[str, Any] = field(default_factory=dict)
     embedding: Optional[List[float]] = None
+    price_snapshot: Optional[Dict[str, Any]] = None
 
 
 @dataclass
@@ -45,6 +46,7 @@ class AiSignalPayload:
     latency_ms: Optional[int] = None
     asset_names: Optional[str] = None
     raw_response: Optional[str] = None
+    price_snapshot: Optional[Dict[str, Any]] = None
 
 
 @dataclass

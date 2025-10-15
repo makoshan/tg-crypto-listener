@@ -10,7 +10,7 @@ import sys
 import unicodedata
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Dict, Set
+from typing import Any, Dict, Set
 
 try:
     import colorlog
@@ -352,6 +352,7 @@ def format_forwarded_message(
     context_source: str | None = None,
     ai_alert: str | None = None,
     ai_severity: str | None = None,
+    price_snapshot: Dict[str, Any] | None = None,
 ) -> str:
     """Compose a compact forwarding message emphasising actionable insights."""
 
@@ -457,6 +458,19 @@ def format_forwarded_message(
         event_type_label = EVENT_TYPE_LABELS.get(ai_event_type or "", None)
         if event_type_label:
             parts.append(f"- 事件类型: {event_type_label}")
+
+        # Display price information if available
+        if price_snapshot:
+            metrics = price_snapshot.get("metrics", {})
+            price_usd = metrics.get("price_usd")
+            price_change_24h_pct = metrics.get("price_change_24h_pct")
+
+            if price_usd is not None:
+                price_parts = [f"${price_usd:,.4f}"]
+                if price_change_24h_pct is not None:
+                    change_sign = "+" if price_change_24h_pct >= 0 else ""
+                    price_parts.append(f"24h {change_sign}{price_change_24h_pct:.2f}%")
+                parts.append(f"- 当前价格: {' '.join(price_parts)}")
 
         localized_flags = [
             RISK_FLAG_LABELS.get(flag, flag) for flag in ai_risk_flags if flag

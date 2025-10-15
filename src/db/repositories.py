@@ -85,6 +85,7 @@ class NewsEventRepository:
             "keywords_hit": payload.keywords_hit or [],
             "ingest_status": payload.ingest_status,
             "metadata": payload.metadata or {},
+            "price_snapshot": payload.price_snapshot,
         }
         record = await self._client.insert("news_events", _strip_none(data))
         if record and "id" in record:
@@ -117,6 +118,7 @@ class AiSignalRepository:
             "should_alert": payload.should_alert,
             "latency_ms": payload.latency_ms,
             "raw_response": payload.raw_response,
+            "price_snapshot": payload.price_snapshot,
         }
         record = await self._client.insert("ai_signals", _strip_none(data))
         if record and "id" in record:

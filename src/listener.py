@@ -84,6 +84,8 @@ class TelegramListener:
         self.news_repository: NewsEventRepository | None = None
         self.signal_repository: AiSignalRepository | None = None
         self.memory_repository: SupabaseMemoryRepository | LocalMemoryStore | HybridMemoryRepository | None = None
+        self.price_tool: Any | None = None
+        self.price_enabled = bool(getattr(self.config, "PRICE_ENABLED", False))
 
     async def initialize(self) -> None:
         """Prepare Telethon client and verify configuration."""
@@ -173,6 +175,18 @@ class TelegramListener:
                     logger.debug("翻译模块已启用但缺少有效凭据，消息将保持原文")
             else:
                 self.translator = None
+
+        # Initialize PriceTool if enabled
+        if self.price_enabled:
+            try:
+                from .ai.tools.price.fetcher import PriceTool
+                self.price_tool = PriceTool(self.config)
+                provider = getattr(self.config, "PRICE_PROVIDER", "coingecko")
+                logger.info("💰 价格工具已初始化: provider=%s", provider)
+            except Exception as exc:
+                logger.warning("价格工具初始化失败，将跳过价格获取: %s", exc)
+                self.price_tool = None
+                self.price_enabled = False
 
         if self.pipeline_enabled:
             self._initialize_pipeline()
@@ -572,6 +586,21 @@ class TelegramListener:
                 # Priority KOL: normalize confidence to 1.0 for downstream gating and persistence
                 signal_result.confidence = 1.0
 
+            # Fetch price if enabled and asset is detected
+            price_snapshot: dict[str, Any] | None = None
+            if self.price_enabled and self.price_tool and signal_result and signal_result.asset and signal_result.asset != "NONE":
+                try:
+                    price_result = await self.price_tool.snapshot(asset=signal_result.asset)
+                    if price_result.success and price_result.data:
+                        price_snapshot = price_result.data
+                        metrics = price_snapshot.get("metrics", {})
+                        price_usd = metrics.get("price_usd")
+                        logger.info("💰 价格获取成功: asset=%s price=$%s",
+                                   signal_result.asset,
+                                   price_usd)
+                except Exception as exc:
+                    logger.warning("价格获取失败: asset=%s error=%s", signal_result.asset, exc)
+
             should_skip_forward = False
             if signal_result and signal_result.status != "error":
                 # Priority KOL: lower confidence threshold to 0.3
@@ -622,6 +651,7 @@ class TelegramListener:
                     hash_canonical=hash_canonical,
                     embedding=embedding_vector,
                     is_priority_kol=is_priority_kol,
+                    price_snapshot=price_snapshot,
                 )
                 return
 
@@ -672,6 +702,7 @@ class TelegramListener:
                         hash_canonical=hash_canonical,
                         embedding=embedding_vector,
                         is_priority_kol=is_priority_kol,
+                        price_snapshot=price_snapshot,
                     )
                     return
 
@@ -691,6 +722,7 @@ class TelegramListener:
                 original_text=message_text,
                 show_original=show_original,
                 show_translation=self.config.FORWARD_INCLUDE_TRANSLATION,
+                price_snapshot=price_snapshot,
                 **ai_kwargs,
             )
             links: list[str] = []
@@ -747,6 +779,7 @@ class TelegramListener:
                 hash_canonical=hash_canonical,
                 embedding=embedding_vector,
                 is_priority_kol=is_priority_kol,
+                price_snapshot=price_snapshot,
             )
         except Exception as exc:  # pylint: disable=broad-except
             self.stats["errors"] += 1
@@ -938,6 +971,7 @@ class TelegramListener:
         hash_canonical: str | None = None,
         embedding: list[float] | None = None,
         is_priority_kol: bool = False,
+        price_snapshot: dict[str, Any] | None = None,
     ) -> None:
         if not self.db_enabled or not self.news_repository:
             return
@@ -1042,6 +1076,7 @@ class TelegramListener:
                     keywords_hit=list(dict.fromkeys(keywords_hit or [])),
                     ingest_status=ingest_status,
                     metadata=metadata,
+                    price_snapshot=price_snapshot,
                 )
                 news_event_id = await self.news_repository.insert_event(payload)
 
@@ -1092,6 +1127,7 @@ class TelegramListener:
                 should_alert=forwarded,
                 latency_ms=latency_ms,
                 raw_response=signal_result.raw_response or None,
+                price_snapshot=price_snapshot,
             )
             await self.signal_repository.insert_signal(signal_payload)
         except SupabaseError as exc:

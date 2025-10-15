@@ -809,8 +809,8 @@ class LangGraphMessagePipeline:
                 deps.logger.info(
                     "🤖 AI 评估跳过转发: source=%s reason=%s confidence=%.2f",
                     raw_event.source_name,
-                    effective_confidence,
                     skip_reason,
+                    effective_confidence,
                 )
                 routing.forwarded = False
                 routing.ai_skipped = True
