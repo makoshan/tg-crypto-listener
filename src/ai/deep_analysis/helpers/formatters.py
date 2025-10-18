@@ -175,6 +175,16 @@ def format_macro_detail(macro_ev: dict | None) -> str:
     anomalies = data.get("anomalies", {})
     thresholds = data.get("thresholds", {})
 
+    # Handle anomalies as either dict or list
+    anomalies_str = 'None'
+    if anomalies:
+        if isinstance(anomalies, dict):
+            anomalies_str = str(list(anomalies.keys()))
+        elif isinstance(anomalies, list):
+            anomalies_str = str(anomalies)
+        else:
+            anomalies_str = str(anomalies)
+
     lines = [
         f"指标: {data.get('indicator_name') or data.get('indicator')}",
         f"最新值: {metrics.get('value')}",
@@ -186,7 +196,7 @@ def format_macro_detail(macro_ev: dict | None) -> str:
         f"发布时间: {metrics.get('release_time')}",
         "",
         f"触发阈值: {thresholds}",
-        f"触发异常: {list(anomalies.keys()) if anomalies else 'None'}",
+        f"触发异常: {anomalies_str}",
         "",
         f"说明: {data.get('notes', '')}",
     ]
@@ -249,6 +259,16 @@ def format_onchain_detail(onchain_ev: dict | None) -> str:
     anomalies = data.get("anomalies", {})
     thresholds = data.get("thresholds", {})
 
+    # Handle anomalies as either dict or list
+    anomalies_str = 'None'
+    if anomalies:
+        if isinstance(anomalies, dict):
+            anomalies_str = str(list(anomalies.keys()))
+        elif isinstance(anomalies, list):
+            anomalies_str = str(anomalies)
+        else:
+            anomalies_str = str(anomalies)
+
     lines = [
         f"资产: {metrics.get('asset', data.get('asset', 'N/A'))}",
         f"TVL (USD): {metrics.get('tvl_usd')}",
@@ -258,7 +278,7 @@ def format_onchain_detail(onchain_ev: dict | None) -> str:
         f"7d 赎回: {metrics.get('redemption_7d_usd')}",
         "",
         f"触发阈值: {thresholds}",
-        f"触发异常: {list(anomalies.keys()) if anomalies else 'None'}",
+        f"触发异常: {anomalies_str}",
         "",
         f"供应分布: {metrics.get('supply_breakdown')}",
         f"锚定类型: {metrics.get('peg_type')}",
@@ -320,6 +340,16 @@ def format_protocol_detail(protocol_ev: dict | None) -> str:
     anomalies = data.get("anomalies", {})
     thresholds = data.get("thresholds", {})
 
+    # Handle anomalies as either dict or list
+    anomalies_str = 'None'
+    if anomalies:
+        if isinstance(anomalies, dict):
+            anomalies_str = str(list(anomalies.keys()))
+        elif isinstance(anomalies, list):
+            anomalies_str = str(anomalies)
+        else:
+            anomalies_str = str(anomalies)
+
     top_chains = metrics.get("top_chains") or []
     chain_lines = [
         f"{item.get('chain')}: {item.get('tvl_usd')}"
@@ -334,7 +364,7 @@ def format_protocol_detail(protocol_ev: dict | None) -> str:
         f"7d 变化: {metrics.get('tvl_change_7d_pct')}% ({metrics.get('tvl_change_7d_usd')})",
         "",
         f"触发阈值: {thresholds}",
-        f"触发异常: {list(anomalies.keys()) if anomalies else 'None'}",
+        f"触发异常: {anomalies_str}",
         "",
         "主要链分布:",
         *chain_lines,

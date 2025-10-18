@@ -54,6 +54,8 @@ class PipelineDependencies:
     memory_repository: Optional[
         SupabaseMemoryRepository | LocalMemoryStore | HybridMemoryRepository
     ]
+    price_enabled: bool
+    price_tool: Optional[Any]
     db_enabled: bool
     stats: Dict[str, Any]
     logger: Any
@@ -130,6 +132,7 @@ class PipelineState(TypedDict, total=False):
     signal_result: Optional[SignalResult]
     historical_reference: List[Dict[str, Any]]
     metadata: Dict[str, Any]
+    price_snapshot: Optional[Dict[str, Any]]
 
 
 class LangGraphMessagePipeline:
@@ -857,6 +860,53 @@ class LangGraphMessagePipeline:
         if is_priority_kol:
             ai_kwargs["ai_confidence"] = 1.0
 
+        price_snapshot: Optional[Dict[str, Any]] = None
+        asset_for_price = (signal_result.asset if signal_result else "") or ""
+        normalized_asset = asset_for_price.strip().upper()
+        price_check_details: List[str] = []
+        if not deps.price_enabled:
+            price_check_details.append("disabled")
+        if not deps.price_tool:
+            price_check_details.append("tool_missing")
+        if not signal_result:
+            price_check_details.append("no_signal")
+        elif not asset_for_price.strip():
+            price_check_details.append("asset_missing")
+        elif normalized_asset == "NONE":
+            price_check_details.append("asset_none")
+
+        if not price_check_details:
+            try:
+                deps.logger.info("💰 开始获取价格: asset=%s", asset_for_price)
+                price_result = await deps.price_tool.snapshot(asset=asset_for_price)  # type: ignore[union-attr]
+                if price_result.success and price_result.data:
+                    price_snapshot = price_result.data
+                    metrics = price_snapshot.get("metrics", {}) if isinstance(price_snapshot, dict) else {}
+                    price_usd = metrics.get("price_usd")
+                    deps.logger.info(
+                        "💰 价格获取成功: asset=%s price=%s",
+                        asset_for_price,
+                        price_usd,
+                    )
+                else:
+                    deps.logger.warning(
+                        "💰 价格获取失败: asset=%s error=%s",
+                        asset_for_price,
+                        price_result.error if price_result else "unknown",
+                    )
+            except Exception as exc:  # pylint: disable=broad-except
+                deps.logger.warning(
+                    "💰 价格获取异常: asset=%s error=%s",
+                    asset_for_price or "unknown",
+                    exc,
+                )
+        else:
+            deps.logger.debug(
+                "💰 跳过价格获取: asset=%s reasons=%s",
+                asset_for_price or "unknown",
+                ",".join(price_check_details),
+            )
+
         show_original = deps.should_include_original(
             original_text=content.original_text,
             translated_text=content.translated_text,
@@ -869,6 +919,7 @@ class LangGraphMessagePipeline:
             original_text=content.original_text,
             show_original=show_original,
             show_translation=deps.config.FORWARD_INCLUDE_TRANSLATION,
+            price_snapshot=price_snapshot,
             **ai_kwargs,
         )
 
@@ -903,6 +954,7 @@ class LangGraphMessagePipeline:
             "routing": routing,
             "signal_result": signal_result,
             "hashes": hashes,
+            "price_snapshot": price_snapshot,
         }
 
     async def _node_persistence(self, state: PipelineState) -> PipelineState:
@@ -915,6 +967,7 @@ class LangGraphMessagePipeline:
         embedding = state.get("embedding")
         media_refs = state.get("media") or []
         hashes = state.get("hashes") or HashState()
+        price_snapshot = state.get("price_snapshot")
 
         if control.drop or not routing.should_persist:
             return {
@@ -946,6 +999,8 @@ class LangGraphMessagePipeline:
                 hash_raw=hashes.raw or None,
                 hash_canonical=hashes.canonical or None,
                 embedding=embedding,
+                is_priority_kol=routing.is_priority_kol,
+                price_snapshot=price_snapshot,
             )
         except Exception as exc:  # pylint: disable=broad-except
             deps.logger.warning("持久化流程异常: %s", exc)

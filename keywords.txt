@@ -2,6 +2,12 @@
 eth,以太坊,ethereum,ether,이더리움,эфириум,эфир
 btc,比特币,bitcoin,비트코인,биткоин
 sol,solana,솔라나,солана
+0xc2a30212a8ddac9e123944d6e29faddce994e5f2
+hyperbot
+聪明钱
+BitcoinOG,Trump,GOVERNMENT SHUTDOWN,U.S. Shutdown
+
+
 
 
 # 稳定币与锚定资产
@@ -15,28 +21,21 @@ xaut,tether gold token,tether gold,테더 골드,тезер голд
 
 # 热门项目与代币
 hype
-link,chainlink,체인링크,чейнлинк
 pump
 
 # Hyperliquid 专业术语（英文）
 hyperliquid,hype liquid,hypurrscan,onchain,short,long,leveraged,leverage,liquidation,liquidate,position,cascade,whale,trader,giant,profit,unrealized,notional,value,perp,perpetual,ancient whale,early whale,open position,hold position,entry price
 
 # Hyperliquid 专业术语（中文）
-做空,做多,杠杆,加仓,减仓,平仓,爆仓,级联,巨鲸,大户,神秘,内幕哥,神秘姐,交易员,获利,盈利,未实现,名义价值,仓位,多单,空单,永续合约,换仓,开仓,持仓,建仓,远古巨鲸,古早,开仓价,倍数
+做空,做多,杠杆,加仓,减仓,级联,巨鲸,大户,内幕哥,神秘姐,交易员,获利,盈利,多单,空单,永续合约,换仓,开仓
 
-# 卡片与支付
-bitget,Bitget,比特格特,비트겟,битгет
-crypto card,cypto card,加密卡,크립토 카드,криптокарта
-u卡,u card,U卡,유카드,у-карта
 
 # 金融机构与市场热点
 ath
-dat
 apr
 
 # 交易所
 coinbase
-robinhood
 circle
 
 # 钱包
@@ -44,38 +43,26 @@ metamask,메타마스크,метамаск
 phantom,팬텀,фантом
 
 # 热点话题
-yield basis
 rwa
 defi,디파이,дефи
-token2049
 polymarket
 plasma
-aave,아베,ааве
-xpl
 
 # 生态与公链扩展
 bnb,币安币,비앤비,бнб
-monad,모나드,монада
-aptos,Aptos,阿普托斯,앱토스,аптос
 
 # 机构与人物
 Vitalik,buterin,vitalk,维塔利克,以太坊创始人,비탈릭,비탈릭 부테린,виталик,бутерин
-satoshi,nakamoto,中本聪,사토시,나카모토,сатоши,накамото
+Paul Atkins
+Tom Lee
 
 # 监管与宏观关键词
 etf,spot etf,btc etf,eth etf
 sec,美国证监会,미국 증권거래위원회,комиссия по ценным бумагам и биржам сша
 cftc,미국 상품선물거래위원회,комиссия по торговле товарными фьючерсами
+trade war,贸易战
 
 # 监管与研究机构
 micar,markets in crypto-assets regulation,欧盟加密资产监管法案,미카르,микар
 infinityground,Infinity Ground,无限地带,인피니티그라운드,инфинитиграунд
-isa,个人储蓄账户,아이사,айса
-bahrain,巴林,바레인,бахрейн
-coinshares,CoinShares,科银资本,코인셰어스,коиншерс
-chainalysis,Chainalysis,链上分析,체이널리시스,чейнэлисис
-rlusd,RLUSD,瑞波美元,알엘유에스디,рлусд
-bvnk,BVNK,비브이엔케이,бвнк
-crypto.com,Crypto.com,加密网,크립토닷컴,криптодотком
-iren,IREN,아이렌,айрен
-coin98,Coin98,코인98,коин98
+黄金,Gold

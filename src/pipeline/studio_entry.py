@@ -128,6 +128,8 @@ def build_pipeline() -> LangGraphMessagePipeline:
         news_repository=None,
         signal_repository=None,
         memory_repository=None,
+        price_enabled=False,
+        price_tool=None,
         db_enabled=False,
         stats=stats,
         logger=logger,

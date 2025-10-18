@@ -407,20 +407,20 @@ class GeminiDeepAnalysisEngine(DeepAnalysisEngine):
             "name": "fetch_memories",
             "description": "根据资产或关键词检索历史行情记忆，用于辅助深度分析。",
             "parameters": {
-                "type": "OBJECT",
+                "type": "object",
                 "properties": {
                     "asset_codes": {
-                        "type": "ARRAY",
-                        "items": {"type": "STRING"},
+                        "type": "array",
+                        "items": {"type": "string"},
                         "description": "相关的资产代码列表（如 BTC、ETH）。",
                     },
                     "keywords": {
-                        "type": "ARRAY",
-                        "items": {"type": "STRING"},
+                        "type": "array",
+                        "items": {"type": "string"},
                         "description": "用于匹配历史模式的关键词。",
                     },
                     "limit": {
-                        "type": "INTEGER",
+                        "type": "integer",
                         "description": "最大返回记忆数量，默认使用配置值。",
                     },
                 },

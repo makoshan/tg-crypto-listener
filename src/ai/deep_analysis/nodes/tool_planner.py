@@ -1,9 +1,9 @@
 """Tool Planner node for deciding which tools to call."""
 import logging
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from .base import BaseNode
-from ..helpers.prompts import build_planner_prompt
+from ..planners import BasePlanner, create_planner
 
 logger = logging.getLogger(__name__)
 
@@ -11,106 +11,58 @@ logger = logging.getLogger(__name__)
 class ToolPlannerNode(BaseNode):
     """Node for AI-powered tool planning and keyword generation."""
 
+    def __init__(self, engine: Any):
+        """Initialize node with planner."""
+        super().__init__(engine)
+        self._planner: Optional[BasePlanner] = None
+
+    def _get_planner(self) -> BasePlanner:
+        """Lazy initialization of planner."""
+        if self._planner is None:
+            planner_type = getattr(
+                self.engine._config,
+                "DEEP_ANALYSIS_PLANNER",
+                "gemini"
+            )
+            self._planner = create_planner(
+                planner_type,
+                self.engine,
+                self.engine._config
+            )
+        return self._planner
+
     async def execute(self, state: Dict[str, Any]) -> Dict[str, Any]:
         """Decide which tools to call using AI-powered decision making."""
         logger.info("🤖 Tool Planner: AI 智能决策下一步工具")
 
-        # Use AI Function Calling for intelligent decision making
-        # No hardcoded rules - AI decides based on message content and context
-        return await self._decide_with_function_calling(state)
+        # Use planner abstraction for flexible backend selection
+        return await self._decide_with_planner(state)
 
-    async def _decide_with_function_calling(self, state: Dict[str, Any]) -> Dict[str, Any]:
-        """Use Gemini Function Calling for structured decision."""
-        prompt = build_planner_prompt(state, self.engine)
-
-        # Create tool definition using proper Gemini SDK types
-        tool_definition = {
-            "name": "decide_next_tools",
-            "description": "根据已有证据决定下一步需要调用的工具，并为搜索生成最优关键词",
-            "parameters": {
-                "type": "OBJECT",
-                "properties": {
-                    "tools": {
-                        "type": "ARRAY",
-                        "items": {"type": "STRING"},
-                        "description": "需要调用的工具列表,可选值: search, price, macro, onchain",
-                    },
-                    "search_keywords": {
-                        "type": "STRING",
-                        "description": "搜索关键词（中英文混合，仅当 tools 包含 search 时需要）",
-                    },
-                    "macro_indicators": {
-                        "type": "ARRAY",
-                        "items": {"type": "STRING"},
-                        "description": "当 tools 包含 macro 时，列出需要查询的宏观指标（如 CPI、FED_FUNDS、VIX）",
-                    },
-                    "onchain_assets": {
-                        "type": "ARRAY",
-                        "items": {"type": "STRING"},
-                        "description": "当 tools 包含 onchain 时，列出需要重点关注的链上资产代码（如 USDC、USDT）",
-                    },
-                    "protocol_slugs": {
-                        "type": "ARRAY",
-                        "items": {"type": "STRING"},
-                        "description": "当 tools 包含 protocol 时，列出需要查询的协议 slug（如 aave、curve-dex）",
-                    },
-                    "reason": {"type": "STRING", "description": "决策理由，说明为什么需要或不需要调用这些工具"},
-                },
-                "required": ["tools", "reason"],
-            },
-        }
-
-        # Try to use proper SDK types if available
+    async def _decide_with_planner(self, state: Dict[str, Any]) -> Dict[str, Any]:
+        """Use planner for intelligent decision making."""
         try:
-            from google.genai.types import FunctionDeclaration, Tool  # type: ignore
+            planner = self._get_planner()
+            available_tools = planner.discover_available_tools()
 
-            tools = [
-                Tool(
-                    function_declarations=[
-                        FunctionDeclaration(**tool_definition),
-                    ]
-                )
-            ]
-        except ImportError:
-            # Fallback to dict format
-            tools = [{"function_declarations": [tool_definition]}]
+            # Get planning decision
+            plan = await planner.plan(state, available_tools)
 
-        try:
-            response = await self.engine._client.generate_content_with_tools(
-                messages=[{"role": "user", "content": prompt}],
-                tools=tools,
-            )
-
-            if response and response.function_calls:
-                decision = response.function_calls[0].args
-                tools = decision.get("tools", [])
-                keywords = decision.get("search_keywords", "")
-                macro_indicators = decision.get("macro_indicators", []) or []
-                onchain_assets = decision.get("onchain_assets", []) or []
-                protocol_slugs = decision.get("protocol_slugs", []) or []
-                reason = decision.get("reason", "")
-
-                logger.info(
-                    "🤖 Tool Planner 决策: tools=%s, keywords='%s', macro=%s, onchain=%s, protocol=%s, 理由: %s",
-                    tools,
-                    keywords,
-                    macro_indicators,
-                    onchain_assets,
-                    protocol_slugs,
-                    reason,
-                )
-
-                return {
-                    "next_tools": tools,
-                    "search_keywords": keywords,
-                    "macro_indicators": macro_indicators,
-                    "onchain_assets": onchain_assets,
-                    "protocol_slugs": protocol_slugs,
-                }
-
-            logger.warning("Tool Planner 未返回工具调用")
-            return {"next_tools": [], "macro_indicators": [], "onchain_assets": [], "protocol_slugs": []}
+            # Convert ToolPlan to state dict
+            return plan.to_dict()
 
         except Exception as exc:
             logger.error("Tool Planner 执行失败: %s", exc)
-            return {"next_tools": [], "macro_indicators": [], "onchain_assets": [], "protocol_slugs": []}
+            # Return empty decision on failure
+            return {
+                "next_tools": [],
+                "search_keywords": "",
+                "macro_indicators": [],
+                "onchain_assets": [],
+                "protocol_slugs": [],
+            }
+
+    # Legacy method kept for reference - now using planner abstraction
+    # async def _decide_with_function_calling(self, state: Dict[str, Any]) -> Dict[str, Any]:
+    #     """Use Gemini Function Calling for structured decision."""
+    #     # This logic is now in GeminiPlanner class
+    #     pass

@@ -40,6 +40,7 @@ class EventPayload:
     keywords_hit: list[str] = field(default_factory=list)
     historical_reference: Dict[str, Any] = field(default_factory=dict)
     media: list[Dict[str, Any]] = field(default_factory=list)
+    is_priority_kol: bool = False
 
 
 @dataclass

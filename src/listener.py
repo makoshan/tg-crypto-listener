@@ -233,6 +233,8 @@ class TelegramListener:
             news_repository=self.news_repository,
             signal_repository=self.signal_repository,
             memory_repository=self.memory_repository,
+            price_enabled=self.price_enabled,
+            price_tool=self.price_tool,
             db_enabled=self.db_enabled,
             stats=self.stats,
             logger=logger,
@@ -588,8 +590,12 @@ class TelegramListener:
 
             # Fetch price if enabled and asset is detected
             price_snapshot: dict[str, Any] | None = None
+            logger.debug("💰 价格获取检查: price_enabled=%s, price_tool=%s, signal_result=%s, asset=%s",
+                        self.price_enabled, bool(self.price_tool), bool(signal_result),
+                        signal_result.asset if signal_result else None)
             if self.price_enabled and self.price_tool and signal_result and signal_result.asset and signal_result.asset != "NONE":
                 try:
+                    logger.info("💰 开始获取价格: asset=%s", signal_result.asset)
                     price_result = await self.price_tool.snapshot(asset=signal_result.asset)
                     if price_result.success and price_result.data:
                         price_snapshot = price_result.data
@@ -598,8 +604,11 @@ class TelegramListener:
                         logger.info("💰 价格获取成功: asset=%s price=$%s",
                                    signal_result.asset,
                                    price_usd)
+                    else:
+                        logger.warning("💰 价格获取返回失败: asset=%s error=%s",
+                                     signal_result.asset, price_result.error if price_result else "unknown")
                 except Exception as exc:
-                    logger.warning("价格获取失败: asset=%s error=%s", signal_result.asset, exc)
+                    logger.warning("价格获取异常: asset=%s error=%s", signal_result.asset, exc)
 
             should_skip_forward = False
             if signal_result and signal_result.status != "error":

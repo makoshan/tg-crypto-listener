@@ -33,6 +33,51 @@ def _normalize_keyword(value: str) -> str:
     return normalized.lower()
 
 
+def _parse_source_channels(value: str) -> List[str]:
+    """Parse comma/newline separated channel handles while tolerating line continuations."""
+    if not value:
+        return []
+
+    cleaned = value.replace("\\\r\n", "\n").replace("\\\n", "\n").replace("\r\n", "\n")
+    tokens: List[str] = []
+    invalid: List[str] = []
+    seen: Set[str] = set()
+
+    def _add_token(raw: str) -> None:
+        candidate = raw.strip()
+        if not candidate:
+            return
+
+        if candidate.startswith("#"):
+            return
+
+        candidate = candidate.strip("'\"").strip()
+        candidate = candidate.rstrip("\\").strip()
+
+        if not candidate:
+            invalid.append(raw)
+            return
+
+        if candidate == "\\":
+            invalid.append(raw)
+            return
+
+        if candidate not in seen:
+            tokens.append(candidate)
+            seen.add(candidate)
+
+    for segment in cleaned.split("\n"):
+        if not segment:
+            continue
+        for piece in segment.split(","):
+            _add_token(piece)
+
+    if invalid:
+        logger.warning("忽略无效 SOURCE_CHANNELS 条目: %s", ", ".join(sorted(set(invalid))))
+
+    return tokens
+
+
 def _load_keywords_from_env() -> Set[str]:
     return {
         _normalize_keyword(keyword)
@@ -89,11 +134,7 @@ class Config:
     TARGET_CHAT_ID: str = os.getenv("TARGET_CHAT_ID", "")
     TARGET_CHAT_ID_BACKUP: str = os.getenv("TARGET_CHAT_ID_BACKUP", "")
 
-    SOURCE_CHANNELS: List[str] = [
-        channel.strip()
-        for channel in os.getenv("SOURCE_CHANNELS", "").split(",")
-        if channel.strip()
-    ]
+    SOURCE_CHANNELS: List[str] = _parse_source_channels(os.getenv("SOURCE_CHANNELS", ""))
 
     FILTER_KEYWORDS_FILE: str = os.getenv("FILTER_KEYWORDS_FILE", "").strip()
     _ENV_FILTER_KEYWORDS: Set[str] = _load_keywords_from_env()
@@ -114,6 +155,15 @@ class Config:
     # AI configuration
     AI_ENABLED: bool = _as_bool(os.getenv("AI_ENABLED", "false"))
     GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
+    # Support multiple Gemini API keys for rotation (comma-separated)
+    GEMINI_API_KEYS: List[str] = [
+        key.strip()
+        for key in os.getenv("GEMINI_API_KEYS", "").split(",")
+        if key.strip()
+    ]
+    # If GEMINI_API_KEYS is not set, fall back to single GEMINI_API_KEY
+    if not GEMINI_API_KEYS and GEMINI_API_KEY:
+        GEMINI_API_KEYS = [GEMINI_API_KEY]
     AI_API_KEY: str = os.getenv("AI_API_KEY", "") or GEMINI_API_KEY
     AI_PROVIDER: str = os.getenv("AI_PROVIDER", "gemini")
     AI_BASE_URL: str = os.getenv("AI_BASE_URL", "")
@@ -156,6 +206,18 @@ class Config:
         "DEEP_ANALYSIS_PROVIDER",
         "claude" if CLAUDE_ENABLED else "gemini",
     ).strip().lower()
+    DEEP_ANALYSIS_PLANNER: str = os.getenv("DEEP_ANALYSIS_PLANNER", "gemini").strip().lower()
+    CODEX_CLI_PATH: str = os.getenv("CODEX_CLI_PATH", "codex").strip()
+    CODEX_CLI_TIMEOUT: float = float(os.getenv("CODEX_CLI_TIMEOUT", "60"))
+    CODEX_CLI_MAX_TOKENS: int = int(os.getenv("CODEX_CLI_MAX_TOKENS", "4000"))
+    CODEX_CLI_CONTEXT: str = os.getenv(
+        "CODEX_CLI_CONTEXT",
+        "@docs/codex_cli_integration_plan.md",
+    ).strip()
+    TEXT_PLANNER_PROVIDER: str = os.getenv("TEXT_PLANNER_PROVIDER", "").strip().lower()
+    TEXT_PLANNER_API_KEY: str = os.getenv("TEXT_PLANNER_API_KEY", "")
+    TEXT_PLANNER_MODEL: str = os.getenv("TEXT_PLANNER_MODEL", "")
+    TEXT_PLANNER_BASE_URL: str = os.getenv("TEXT_PLANNER_BASE_URL", "")
     DEEP_ANALYSIS_FALLBACK_PROVIDER: str = os.getenv(
         "DEEP_ANALYSIS_FALLBACK_PROVIDER",
         "",
@@ -293,14 +355,24 @@ class Config:
     }
 
     # Future tools (Phase 2+)
+    PRICE_ENABLED: bool = _as_bool(os.getenv("PRICE_ENABLED", "false"))
+    PRICE_PROVIDER: str = os.getenv("PRICE_PROVIDER", "coinmarketcap")
     TOOL_PRICE_ENABLED: bool = _as_bool(os.getenv("TOOL_PRICE_ENABLED", "false"))
     TOOL_MACRO_ENABLED: bool = _as_bool(os.getenv("TOOL_MACRO_ENABLED", "false"))
     TOOL_ONCHAIN_ENABLED: bool = _as_bool(os.getenv("TOOL_ONCHAIN_ENABLED", "false"))
     TOOL_PROTOCOL_ENABLED: bool = _as_bool(os.getenv("TOOL_PROTOCOL_ENABLED", "false"))
-    DEEP_ANALYSIS_PRICE_PROVIDER: str = os.getenv("DEEP_ANALYSIS_PRICE_PROVIDER", "coingecko")
+    DEEP_ANALYSIS_PRICE_PROVIDER: str = os.getenv("DEEP_ANALYSIS_PRICE_PROVIDER", "coinmarketcap")
     DEEP_ANALYSIS_MACRO_PROVIDER: str = os.getenv("DEEP_ANALYSIS_MACRO_PROVIDER", "fred")
     DEEP_ANALYSIS_ONCHAIN_PROVIDER: str = os.getenv("DEEP_ANALYSIS_ONCHAIN_PROVIDER", "defillama")
     DEEP_ANALYSIS_PROTOCOL_PROVIDER: str = os.getenv("DEEP_ANALYSIS_PROTOCOL_PROVIDER", "defillama")
+
+    # CoinMarketCap configuration
+    COINMARKETCAP_API_KEY: str = os.getenv("COINMARKETCAP_API_KEY", "")
+    COINMARKETCAP_API_BASE_URL: str = os.getenv("COINMARKETCAP_API_BASE_URL", "https://pro-api.coinmarketcap.com")
+    PRICE_CRASH_ALERT_THRESHOLD: float = float(os.getenv("PRICE_CRASH_ALERT_THRESHOLD", "7.0"))
+    PRICE_BTC_CORRELATION_THRESHOLD: float = float(os.getenv("PRICE_BTC_CORRELATION_THRESHOLD", "2.0"))
+
+    # CoinGecko configuration (fallback)
     COINGECKO_API_KEY: str = os.getenv("COINGECKO_API_KEY", "")
     COINGECKO_API_BASE_URL: str = os.getenv("COINGECKO_API_BASE_URL", "https://api.coingecko.com/api/v3")
     PRICE_CACHE_TTL_SECONDS: int = int(os.getenv("PRICE_CACHE_TTL_SECONDS", "60"))
@@ -403,6 +475,7 @@ class Config:
                 "max_retries": cls.GEMINI_DEEP_RETRY_ATTEMPTS,
                 "retry_backoff": cls.GEMINI_DEEP_RETRY_BACKOFF_SECONDS,
                 "api_key": cls.GEMINI_API_KEY,
+                "api_keys": cls.GEMINI_API_KEYS,
             },
         }
         return config

@@ -58,6 +58,9 @@ def create_deep_analysis_engine(
         if not api_key:
             raise DeepAnalysisError("Gemini API key 未配置，无法启用深度分析")
 
+        # Get all Gemini API keys for rotation
+        api_keys = gemini_cfg.get("api_keys") or getattr(config, "GEMINI_API_KEYS", [])
+
         client = GeminiFunctionCallingClient(
             api_key=api_key,
             model_name=gemini_cfg.get("model") or getattr(config, "GEMINI_DEEP_MODEL", "gemini-2.5-pro"),
@@ -66,6 +69,7 @@ def create_deep_analysis_engine(
             retry_backoff_seconds=float(
                 gemini_cfg.get("retry_backoff") or getattr(config, "GEMINI_DEEP_RETRY_BACKOFF_SECONDS", 1.5)
             ),
+            api_keys=api_keys if api_keys else None,
         )
 
         memory_limit = getattr(config, "MEMORY_MAX_NOTES", 3)

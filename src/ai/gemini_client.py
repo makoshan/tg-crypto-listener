@@ -5,14 +5,27 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
+import ssl
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Iterator, List, Optional
+
 try:  # pragma: no cover - optional dependency
     from google import genai
     from google.genai import errors as genai_errors
 except ImportError:  # pragma: no cover - runtime fallback
     genai = None  # type: ignore
     genai_errors = None  # type: ignore
+
+try:  # pragma: no cover - optional dependency
+    import httpx
+except ImportError:  # pragma: no cover - runtime fallback
+    httpx = None  # type: ignore
+
+try:
+    from src.ai.gemini_key_rotator import GeminiKeyRotator
+except ImportError:
+    GeminiKeyRotator = None  # type: ignore
 
 
 class AiServiceError(RuntimeError):
@@ -53,23 +66,61 @@ class GeminiClient:
         timeout: float,
         max_retries: int = 1,
         retry_backoff_seconds: float = 1.5,
+        api_keys: Optional[List[str]] = None,
+        force_http_fallback: Optional[bool] = None,
+        base_url: Optional[str] = None,
     ) -> None:
-        if not api_key:
-            raise AiServiceError("Gemini API key is required")
-        if genai is None:
-            raise AiServiceError(
-                "google-genai 未安装，请先在环境中安装该依赖"
-            )
-
-        self._client = None
         self._model_name = model_name
-        self._timeout = timeout
+        self._timeout = float(timeout)
         self._max_retries = max(0, int(max_retries))
         self._retry_backoff = max(0.0, float(retry_backoff_seconds))
-        try:
-            self._client = genai.Client(api_key=api_key)
-        except Exception as exc:  # pragma: no cover - network/proxy issues
-            raise AiServiceError(str(exc)) from exc
+        self._client = None
+        self._client_api_key: Optional[str] = None
+
+        self._http_base_url = (
+            base_url
+            or os.getenv("GEMINI_API_BASE_URL")
+            or "https://generativelanguage.googleapis.com"
+        ).rstrip("/")
+        self._force_http_fallback = (
+            force_http_fallback
+            if force_http_fallback is not None
+            else self._env_flag("GEMINI_HTTP_FORCE_HTTP1")
+        )
+        self._use_http_fallback = bool(self._force_http_fallback)
+
+        # Initialize key rotation if multiple keys provided
+        self._key_rotator: Optional[GeminiKeyRotator] = None
+        if api_keys and len(api_keys) > 1 and GeminiKeyRotator is not None:
+            self._key_rotator = GeminiKeyRotator(api_keys)
+            logger.info(f"🔑 启用 Gemini API key 轮换机制，共 {len(api_keys)} 个 keys")
+            self._current_api_key = self._key_rotator.get_next_key()
+        else:
+            self._current_api_key = (api_key or "").strip()
+
+        if not self._current_api_key:
+            raise AiServiceError("Gemini API key is required")
+
+        if not self._use_http_fallback:
+            if genai is None:
+                raise AiServiceError("google-genai 未安装，请先在环境中安装该依赖")
+            try:
+                self._client = genai.Client(api_key=self._current_api_key)
+            except Exception as exc:  # pragma: no cover - network/proxy issues
+                if self._should_switch_to_http_fallback(exc):
+                    logger.warning(
+                        "Gemini 客户端初始化失败，切换至 HTTP/1.1 fallback 通道: %s",
+                        exc,
+                    )
+                    self._use_http_fallback = True
+                    self._client = None
+                else:
+                    raise AiServiceError(str(exc)) from exc
+            else:
+                self._client_api_key = self._current_api_key
+
+        if self._use_http_fallback and httpx is None:
+            raise AiServiceError("httpx 未安装，无法启用 Gemini HTTP fallback 通道")
 
     async def generate_signal(self, prompt: str | list, images: list[dict] = None) -> GeminiResponse:
         """Execute prompt against Gemini and return plain text.
@@ -128,11 +179,92 @@ class GeminiClient:
         raise AiServiceError(last_error_message, temporary=last_error_temporary) from last_exc
 
     def _call_model(self, prompt: str | list, images: list[dict] = None) -> GeminiResponse:
-        import base64
+        if self._use_http_fallback:
+            return self._call_model_http(prompt, images, rotate=True)
 
-        # Convert OpenAI-style messages to Gemini format
+        try:
+            return self._call_model_native(prompt, images)
+        except Exception as exc:
+            if self._should_switch_to_http_fallback(exc):
+                logger.warning(
+                    "Gemini 遇到网络/SSL 异常，切换至 HTTP/1.1 fallback 通道: %s",
+                    exc,
+                )
+                self._use_http_fallback = True
+                return self._call_model_http(prompt, images, rotate=False)
+            raise
+
+    def _call_model_native(self, prompt: str | list, images: list[dict] | None) -> GeminiResponse:
+        if genai is None:
+            raise AiServiceError("google-genai 未安装，请先在环境中安装该依赖")
+
+        api_key = self._select_api_key(rotate=True)
+
+        if self._client is None or self._client_api_key != api_key:
+            try:
+                self._client = genai.Client(api_key=api_key)
+            except Exception as exc:
+                logger.warning("切换 Gemini API key 失败: %s", exc)
+                if self._key_rotator is not None:
+                    self._key_rotator.mark_key_failed(api_key)
+                raise
+            else:
+                self._client_api_key = api_key
+
+        contents = self._prepare_contents_native(prompt, images)
+
+        response = self._client.models.generate_content(
+            model=self._model_name,
+            contents=contents,
+        )
+        return self._build_response(response)
+
+    def _call_model_http(
+        self,
+        prompt: str | list,
+        images: list[dict] | None,
+        *,
+        rotate: bool,
+    ) -> GeminiResponse:
+        if httpx is None:
+            raise AiServiceError("httpx 未安装，无法使用 Gemini HTTP fallback 通道")
+
+        api_key = self._select_api_key(rotate=rotate)
+        contents = self._prepare_contents_http(prompt, images)
+        payload: dict[str, Any] = {
+            "model": self._model_name,
+            "contents": contents,
+        }
+
+        url = f"{self._http_base_url}/v1beta/models/{self._model_name}:generateContent"
+
+        try:
+            with httpx.Client(timeout=httpx.Timeout(self._timeout), http2=False) as client:
+                response = client.post(
+                    url,
+                    params={"key": api_key},
+                    json=payload,
+                )
+                response.raise_for_status()
+        except httpx.TimeoutException as exc:  # pragma: no cover - runtime fallback
+            raise AiServiceError("Gemini HTTP 请求超时", temporary=True) from exc
+        except httpx.HTTPStatusError as exc:  # pragma: no cover - runtime fallback
+            status_code = exc.response.status_code if exc.response is not None else None
+            temporary = bool(status_code and (status_code == 429 or 500 <= status_code < 600))
+            message = f"Gemini HTTP 错误 (HTTP {status_code})" if status_code else "Gemini HTTP 请求失败"
+            raise AiServiceError(message, temporary=temporary) from exc
+        except httpx.RequestError as exc:  # pragma: no cover - runtime fallback
+            raise AiServiceError(f"Gemini HTTP 请求异常: {exc}") from exc
+
+        try:
+            data = response.json()
+        except json.JSONDecodeError as exc:  # pragma: no cover - unexpected response format
+            raise AiServiceError("Gemini 返回了无法解析的 JSON 响应") from exc
+
+        return self._build_response(data)
+
+    def _prepare_contents_native(self, prompt: str | list, images: list[dict] | None) -> Any:
         if isinstance(prompt, list) and prompt and isinstance(prompt[0], dict) and "role" in prompt[0]:
-            # Extract content from OpenAI-style messages [{'role': 'system', 'content': '...'}, ...]
             text_parts = []
             for msg in prompt:
                 if isinstance(msg, dict) and "content" in msg:
@@ -141,51 +273,175 @@ class GeminiClient:
         elif isinstance(prompt, str):
             prompt_text = prompt
         else:
-            # Assume it's already in the correct format
             prompt_text = prompt
 
-        # Build multimodal content if images provided
         if images:
-            contents = [prompt_text]
-
-            # Add image parts
+            contents: list[Any] = [prompt_text]
             for img in images:
-                if img.get("base64") and img.get("mime_type"):
-                    # Gemini expects inline_data format
-                    contents.append({
-                        "inline_data": {
-                            "mime_type": img["mime_type"],
-                            "data": img["base64"]  # Already base64 encoded
+                base64_data = img.get("base64")
+                mime_type = img.get("mime_type")
+                if base64_data and mime_type:
+                    contents.append(
+                        {
+                            "inline_data": {
+                                "mime_type": mime_type,
+                                "data": base64_data,
+                            }
                         }
-                    })
+                    )
+            return contents
+        return prompt_text
+
+    def _prepare_contents_http(self, prompt: str | list, images: list[dict] | None) -> list[dict[str, Any]]:
+        contents: list[dict[str, Any]] = []
+
+        if isinstance(prompt, list):
+            for message in prompt:
+                if not isinstance(message, dict):
+                    continue
+                role = message.get("role") or "user"
+                content = message.get("content")
+                parts = self._normalise_plain_parts(content)
+                if not parts:
+                    continue
+                contents.append(
+                    {
+                        "role": "model" if role == "assistant" else "user",
+                        "parts": parts,
+                    }
+                )
+        elif isinstance(prompt, str):
+            contents.append(
+                {
+                    "role": "user",
+                    "parts": [{"text": prompt}],
+                }
+            )
+        elif isinstance(prompt, dict):
+            role = prompt.get("role", "user")
+            parts = prompt.get("parts")
+            if isinstance(parts, list):
+                contents.append({"role": role, "parts": parts})
         else:
-            contents = prompt_text
+            parts = self._normalise_plain_parts(prompt)
+            if parts:
+                contents.append({"role": "user", "parts": parts})
 
-        response = self._client.models.generate_content(
-            model=self._model_name,
-            contents=contents,
-        )
+        if not contents:
+            contents.append(
+                {
+                    "role": "user",
+                    "parts": [{"text": ""}],
+                }
+            )
 
-        parts = self._extract_parts(response)
+        if images:
+            inline_parts: list[dict[str, Any]] = []
+            for img in images:
+                base64_data = img.get("base64")
+                mime_type = img.get("mime_type")
+                if base64_data and mime_type:
+                    inline_parts.append(
+                        {
+                            "inline_data": {
+                                "mime_type": mime_type,
+                                "data": base64_data,
+                            }
+                        }
+                    )
+            if inline_parts:
+                target = contents[-1]
+                if target.get("role") != "user":
+                    target = {"role": "user", "parts": []}
+                    contents.append(target)
+                target_parts = target.setdefault("parts", [])
+                target_parts.extend(inline_parts)
+
+        return contents
+
+    def _normalise_plain_parts(self, content: Any) -> list[dict[str, Any]]:
+        parts: list[dict[str, Any]] = []
+
+        if content is None:
+            return parts
+
+        if isinstance(content, list):
+            for item in content:
+                parts.extend(self._normalise_plain_parts(item))
+            return parts
+
+        if isinstance(content, dict):
+            if "text" in content:
+                parts.append({"text": str(content["text"])})
+            elif "inline_data" in content:
+                parts.append({"inline_data": content["inline_data"]})
+            elif "functionCall" in content or "function_call" in content:
+                function_call = content.get("functionCall") or content.get("function_call")
+                parts.append({"functionCall": function_call})
+            else:
+                parts.append({"text": json.dumps(content, ensure_ascii=False)})
+            return parts
+
+        if isinstance(content, str):
+            parts.append({"text": content})
+        else:
+            try:
+                parts.append({"text": json.dumps(content, ensure_ascii=False)})
+            except TypeError:
+                parts.append({"text": str(content)})
+        return parts
+
+    def _build_response(self, payload: Any) -> GeminiResponse:
+        parts = self._extract_parts(payload)
         text = self._combine_text_from_parts(parts)
 
         if not text:
-            direct_text = getattr(response, "text", None)
-            if direct_text:
-                text = str(direct_text)
+            if isinstance(payload, dict) and payload.get("text"):
+                text = str(payload["text"])
+            else:
+                direct_text = getattr(payload, "text", None)
+                if direct_text:
+                    text = str(direct_text)
 
         return GeminiResponse(text=text or "", parts=parts)
 
+    def _select_api_key(self, *, rotate: bool) -> str:
+        if rotate and self._key_rotator is not None:
+            key = self._key_rotator.get_next_key()
+        else:
+            key = self._current_api_key or (
+                self._key_rotator.get_next_key() if self._key_rotator is not None else ""
+            )
+
+        if not key:
+            raise AiServiceError("Gemini API key is required")
+
+        self._current_api_key = key
+        return key
+
+    @staticmethod
+    def _env_flag(name: str) -> bool:
+        value = os.getenv(name, "")
+        return value.lower() in {"1", "true", "yes", "on"}
+
     def _extract_parts(self, response: Any) -> list[GeminiContentPart]:
-        candidates = getattr(response, "candidates", None) or []
+        if isinstance(response, dict):
+            candidates = response.get("candidates") or []
+        else:
+            candidates = getattr(response, "candidates", None) or []
         normalized_parts: list[GeminiContentPart] = []
 
         for candidate in candidates:
-            content = getattr(candidate, "content", None)
+            if isinstance(candidate, dict):
+                content = candidate.get("content")
+                parts = (content or {}).get("parts") if isinstance(content, dict) else []
+            else:
+                content = getattr(candidate, "content", None)
+                parts = getattr(content, "parts", None)
             if not content:
                 continue
-            parts = getattr(content, "parts", None) or []
-            for part in parts:
+            parts_iterable = parts or []
+            for part in parts_iterable:
                 normalized_parts.append(self._normalize_part(part))
             if normalized_parts:
                 break  # 优先取第一候选项，其余通常重复
@@ -340,11 +596,52 @@ class GeminiClient:
                 sanitized[key] = value
         return sanitized or None
 
+    def _should_switch_to_http_fallback(self, exc: Exception) -> bool:
+        for candidate in self._iter_exception_chain(exc):
+            if isinstance(candidate, ssl.SSLError):
+                return True
+            message = str(candidate).lower()
+            if any(
+                token in message
+                for token in (
+                    "wrong version number",
+                    "bad record mac",
+                    "decryption_failed_or_bad_record_mac",
+                    "server disconnected without sending a response",
+                )
+            ):
+                return True
+        return False
+
+    def _iter_exception_chain(self, exc: Exception) -> Iterator[Exception]:
+        seen: set[int] = set()
+        current: Optional[Exception] = exc
+        while current is not None and id(current) not in seen:
+            yield current
+            seen.add(id(current))
+            current = getattr(current, "__cause__", None) or getattr(current, "__context__", None)
+
     def _normalize_exception(self, exc: Exception) -> tuple[str, bool]:
         """Return a human-readable message and whether the error is temporary."""
 
         message = str(exc).strip() or "Gemini 调用失败"
         temporary = False
+
+        if isinstance(exc, ssl.SSLError):
+            return ("Gemini SSL 握手失败，请检查代理或禁用 HTTP/2", True)
+
+        if httpx is not None:
+            if isinstance(exc, httpx.TimeoutException):
+                return ("Gemini 请求超时", True)
+            if isinstance(exc, httpx.HTTPStatusError):
+                status_code = exc.response.status_code if exc.response is not None else None
+                if status_code == 429:
+                    return ("Gemini 请求过于频繁，请稍后重试", True)
+                if status_code and 500 <= status_code < 600:
+                    return (f"Gemini 服务端错误 (HTTP {status_code})", True)
+                return (f"Gemini HTTP 错误 (HTTP {status_code})", False)
+            if isinstance(exc, httpx.RequestError):
+                return (f"Gemini 请求异常: {exc}", False)
 
         if genai_errors is not None and isinstance(exc, genai_errors.APIError):
             code = getattr(exc, "code", None)

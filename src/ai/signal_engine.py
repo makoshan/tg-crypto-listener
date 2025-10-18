@@ -407,12 +407,15 @@ class AiSignalEngine:
         try:
             # Use native GeminiClient for Gemini (supports multimodal)
             if provider == "gemini":
+                # Get all Gemini API keys for rotation
+                api_keys = getattr(config, "GEMINI_API_KEYS", [])
                 client = GeminiClient(
                     api_key=str(api_key),
                     model_name=getattr(config, "AI_MODEL_NAME", "gemini-2.0-flash-exp"),
                     timeout=getattr(config, "AI_TIMEOUT_SECONDS", 8.0),
                     max_retries=getattr(config, "AI_RETRY_ATTEMPTS", 1),
                     retry_backoff_seconds=getattr(config, "AI_RETRY_BACKOFF_SECONDS", 1.5),
+                    api_keys=api_keys if api_keys else None,
                 )
             else:
                 # Use OpenAI-compatible client for others
