@@ -102,42 +102,6 @@ class BaseDeepAnalysisEngine:
 
 **使用场景**：已购买 Codex 订阅，希望避免额外 API 调用费用。
 
-将 Codex CLI 作为完整的深度分析引擎：
-
-```python
-class GeminiPlanner(BasePlanner):
-    async def plan(state, available_tools):
-        # 构建 Function Declaration
-        tool_def = {
-            "name": "decide_next_tools",
-            "parameters": {
-                "tools": {"type": "ARRAY", ...},
-                "search_keywords": {"type": "STRING", ...},
-                ...
-            }
-        }
-
-        # 调用 Gemini Function Calling
-        response = await client.generate_with_tools(
-            messages=[prompt],
-            tools=[tool_def]
-        )
-
-        # 直接返回结构化结果
-        return ToolPlan(**response.function_calls[0].args)
-```
-
-**特点**：
-- ✅ 高质量结构化输出（原生 Function Calling）
-- ✅ 延迟低（~1.5s）
-- ✅ JSON 格式稳定（99%）
-- ⚠️ 依赖 Gemini SDK
-
-**适用场景**：
-- 需要快速响应的高频分析
-- 对结构化输出稳定性要求高
-- 愿意承担 API 调用成本
-
 ---
 
 ### 3.2 Codex CLI Engine 详细实现
@@ -371,43 +335,6 @@ Context Gather (收集历史)
 
 ---
 
-### 3.4 Text-Only Engine（简化方案）
-
-支持任意文本生成模型：
-
-```python
-class TextOnlyPlanner(BasePlanner):
-    async def plan(state, available_tools):
-        # 构建类似 Codex CLI 的 Prompt
-        prompt = self._build_planning_prompt(state, available_tools)
-
-        # 根据配置调用不同 Provider
-        if self.provider == "openai":
-            response = await openai.ChatCompletion.create(
-                model="gpt-4",
-                messages=[{"role": "user", "content": prompt}]
-            )
-            text = response.choices[0].message.content
-
-        elif self.provider == "deepseek":
-            response = await http_client.post(
-                "https://api.deepseek.com/v1/chat/completions",
-                json={"model": "deepseek-chat", "messages": [...]}
-            )
-            text = response.json()['choices'][0]['message']['content']
-
-        # 解析 JSON
-        data = json.loads(self._extract_json(text))
-        return ToolPlan(**data)
-```
-
-**特点**：
-- ✅ 支持任意文本模型（OpenAI、DeepSeek、Qwen）
-- ✅ 成本可控
-- ⚠️ JSON 格式稳定性低于 Function Calling
-
----
-
 ## 4. 架构改造方案
 
 ### 4.1 引擎级别抽象（推荐）
@@ -443,35 +370,19 @@ class AiSignalEngine:
 - ✅ 接口统一，切换简单
 - ✅ Codex CLI 和 Gemini 完全解耦
 - ✅ 无需修改 LangGraph（LangGraph 只在 GeminiEngine 内部使用）
-- ✅ 可添加降级逻辑（Codex 失败 → Gemini）
 
-### 4.2 混合策略（可选）
+### 4.2 未来扩展选项
 
-如果需要更细粒度的控制，可以根据事件类型动态选择引擎：
+**降级方案**（可选，暂不实现）：
+- 引擎失败时自动切换到备用引擎
+- 配置示例：`DEEP_ANALYSIS_FALLBACK_ENGINE=gemini`
+- 当前：保持简单，只需要选择一个引擎
 
-```python
-async def analyze_with_deep_analysis(self, payload):
-    \"\"\"根据事件特征动态选择引擎\"\"\"
-    confidence = payload.preliminary_analysis.get('confidence', 0.5)
-    event_type = payload.preliminary_analysis.get('event_type', 'other')
+**其他引擎支持**（预留）：
+- **Claude CLI**（Claude Code CLI）：类似 Codex CLI，完整 Agent 能力
+- **ChatGLM Function Calling**：智谱 ChatGLM Function Call，可与外部函数库连接
 
-    # 重大事件使用 Codex CLI（质量优先）
-    if confidence >= 0.9 or event_type in ["hack", "regulation", "macro"]:
-        engine = self.codex_engine
-    else:
-        # 一般事件使用 Gemini（速度优先）
-        engine = self.gemini_engine
-
-    try:
-        return await engine.analyze(payload)
-    except Exception as e:
-        # 降级逻辑
-        logger.warning(f"{engine.__class__.__name__} failed, fallback")
-        fallback_engine = self.gemini_engine if engine == self.codex_engine else None
-        if fallback_engine:
-            return await fallback_engine.analyze(payload)
-        raise
-```
+所有引擎实现相同的 `BaseDeepAnalysisEngine` 接口，共享提示词和工具定义。
 
 ---
 
@@ -480,18 +391,19 @@ async def analyze_with_deep_analysis(self, payload):
 ### 5.1 环境变量
 
 ```bash
-# 深度分析引擎选择
+# 深度分析引擎选择（二选一）
 DEEP_ANALYSIS_ENGINE=gemini  # gemini | codex_cli
 
 # Codex CLI Engine 配置
 CODEX_CLI_PATH=/home/mako/.nvm/versions/node/v22.20.0/bin/codex
 CODEX_CLI_TIMEOUT=60           # 超时时间（秒），建议 60s
 CODEX_CLI_MODEL=gpt-5-codex    # 可选：指定模型
-DEEP_ANALYSIS_FALLBACK_ENGINE=gemini  # 降级方案
 
 # Gemini Engine 配置
 GEMINI_API_KEY=...
 GEMINI_DEEP_MODEL=gemini-2.0-flash-exp
+
+# 注：未来可考虑降级方案（DEEP_ANALYSIS_FALLBACK_ENGINE），暂不实现
 ```
 
 ### 5.2 选择示例
@@ -514,16 +426,6 @@ GEMINI_DEEP_MODEL=gemini-2.0-flash-exp
 # 延迟：5-10秒（含多次工具调用），适合高频事件
 ```
 
-**场景 3：混合策略（推荐）**
-```bash
-DEEP_ANALYSIS_ENGINE=codex_cli
-DEEP_ANALYSIS_FALLBACK_ENGINE=gemini
-
-# 代码中动态选择策略：
-# - confidence >= 0.9 或 event_type in ["hack", "regulation"] → Codex CLI
-# - 一般事件 → Gemini
-# - Codex 超时/失败 → 自动降级到 Gemini
-```
 
 ---
 
