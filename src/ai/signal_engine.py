@@ -544,6 +544,8 @@ class AiSignalEngine:
         )
 
         # 排除低价值事件类型（macro、other 触发过多且价值低，scam_alert 已经是风险警告）
+        # airdrop: 空投类活动价值低、投机性强
+        # Binance Alpha 相关的 listing 也倾向于低市值、高投机，通过 AI prompt 控制置信度
         excluded_event_types = {"macro", "other", "airdrop", "governance", "celebrity", "scam_alert"}
         should_skip_deep = gemini_result.event_type in excluded_event_types
 
@@ -950,8 +952,27 @@ def build_signal_prompt(payload: EventPayload) -> list[dict[str, str]]:
         "event_type 仅能取 listing、delisting、hack、regulation、funding、whale、liquidation、partnership、product_launch、governance、macro、celebrity、airdrop、scam_alert、other。\n"
         "action 为 buy、sell、observe；direction 为 long、short、neutral；strength 仅取 high、medium、low；timeframe 仅取 short、medium、long。\n"
         "如事件涉及多个币种，asset 可为数组（如 [\"BTC\",\"ETH\"]），asset_name 用简体中文名以顿号或逗号分隔；若无法确认币种则 asset=NONE、asset_name=无，并在 notes 解释原因。\n"
+        "\n## 主流币市场指标重要性 ⚠️ 核心优先级\n"
+        "**BTC（比特币）是整个加密市场的风向标和宏观指标**：\n"
+        "1. **宏观关联性**：比特币价格与全球宏观环境（美联储政策、美元指数、地缘政治）高度相关，是加密市场风险偏好的核心指标。\n"
+        "2. **市场联动性**：当比特币涨跌时，整个加密市场（ETH、SOL、山寨币）通常同向波动，BTC 跌意味着全币圈承压。\n"
+        "3. **宏观传导机制**：\n"
+        "   - 贸易战/地缘冲突 → 风险偏好下降 → BTC 下跌 → 全币圈下跌\n"
+        "   - 美联储加息/美元走强 → 流动性收紧 → BTC 承压 → 加密市场整体回调\n"
+        "   - 宏观利好（降息预期、机构入场） → BTC 上涨 → 带动整个加密市场\n"
+        "4. **主流币优先级**：BTC > ETH > SOL，这三个币种的价格变化必须重点关注并提醒。\n"
+        "5. **主流币信号增强规则**：\n"
+        "   - 涉及 BTC/ETH/SOL 价格涨跌 ≥3% → confidence 自动 +0.15 到 +0.25\n"
+        "   - 涉及 BTC 突破关键心理关口（如 $100K、$90K） → confidence ≥0.75, strength=high\n"
+        "   - 涉及 BTC 与宏观事件（川普、贸易战、美联储、CPI） → 必须在 summary 中明确说明宏观影响和市场联动\n"
+        "   - 主流币大涨（≥5%）或大跌（≤-5%） → action 必须明确（buy/sell），避免模糊的 observe\n"
         "\n## 置信度（confidence）\n"
         "confidence 衡量该信号是否值得执行：0.7-1.0 高可信、0.4-0.7 中等、0.0-0.4 仅提示风险或噪音；即使事件真实但不可执行，也应降低 confidence 至 ≤0.4。\n"
+        "**可执行性判断标准**：\n"
+        "- ✅ 可执行（confidence ≥0.6）：明确的买入/卖出标的 + 时间窗口 + 具体价格/数据支撑\n"
+        "- ⚠️ 部分可执行（confidence 0.4-0.6）：有交易方向但缺少时间节点，或有数据但缺少明确标的\n"
+        "- ❌ 不可执行（confidence ≤0.4）：纯统计数字、笼统趋势、情绪观察、无具体标的或时间\n"
+        "**特别注意**：涉及主流币（BTC/ETH/SOL）价格变化的消息，默认具有更高执行价值，confidence 应适当提升（+0.15 到 +0.25）。\n"
         "\n## 时间范围（timeframe）\n"
         "timeframe 表示建议持仓时间或影响周期：\n"
         "- short（短期，<1周）：链上数据突变、巨鲸短期操作、短期事件催化（如空投、IDO）、技术面信号等需快速反应的机会\n"
@@ -972,6 +993,26 @@ def build_signal_prompt(payload: EventPayload) -> list[dict[str, str]]:
         "5. 若提供链上数据、成交量、资金流等客观指标，可据此提高 confidence，并在 notes 概述关键数字。\n"
         "6. Meme 币爆料、营销文案或活动预告若缺少可执行细节，应输出 event_type=scam_alert 或 other，action=observe，confidence ≤0.4，并说明风险。\n"
         "7. 交易所/衍生品上线仅公告而无成交、资金费率、流动性指标时，action=observe、direction=neutral，confidence ≤0.5，必要时标记 speculative 或 data_incomplete。\n"
+        "8. **宏观统计数据（event_type=macro）严格限制**：\n"
+        '   - 仅统计数字（如"总供应量创新高"、"市值突破XX"、"整体增长XX%"）而无具体交易机会 → confidence ≤0.4，添加 data_incomplete 或 speculative\n'
+        "   - 稳定币总供应量/总市值类消息，除非明确说明资金流入具体链（ETH/SOL）、协议（Aave/Curve）或配合链上数据（DEX交易量激增），否则 confidence ≤0.4\n"
+        "   - 机构采用、DeFi能力、长期趋势等笼统观察，无时间节点和可执行标的 → action=observe，confidence ≤0.5，添加 vague_timeline\n"
+        '   - event_type=macro + action=observe 组合时，必须有明确交易催化剂（如"X机构宣布本周买入Y亿美元BTC"）才能 confidence >0.6\n'
+        "9. **低市值代币风险控制**：\n"
+        "   - 市值 < 5000万美元的代币，默认视为高风险投机标的 → confidence 自动 -0.15 到 -0.25\n"
+        "   - 市值 < 1000万美元的代币，极高风险 → confidence 自动 -0.25 到 -0.35，必须添加 liquidity_risk\n"
+        "   - 未上线主流交易所（仅在 DEX 或小型 CEX）的代币 → confidence 降低 0.1-0.2，添加 liquidity_risk\n"
+        "   - 低市值 + 无明确催化剂（如仅空投、仅上线小交易所） → confidence ≤0.4，action=observe\n"
+        "10. **Binance Alpha 特殊处理**：\n"
+        "   - Binance Alpha 平台上线的代币通常市值较小、投机性强 → 自动降低 confidence 0.2-0.3\n"
+        "   - Binance Alpha 空投活动，除非有明确的交易机会和时间节点 → action=observe，confidence ≤0.5\n"
+        "   - 对于 Binance Alpha 消息，必须在 summary 中明确标注 '市值较小' 或 '投机性强' 等风险提示\n"
+        "11. **稳定币不可交易原则**：\n"
+        "   - USDC、USDT、DAI、BUSD、TUSD、USDP、GUSD、FRAX、LUSD、USDD 等稳定币设计目标为保持 1 美元价格，不存在价格波动交易机会\n"
+        "   - 涉及稳定币的基础设施、供应量、市值等消息 → asset=NONE，action=observe，confidence ≤0.4\n"
+        "   - **示例**：\"Circle 获得美联储支付通道，USDC 市场地位提升\" → asset=NONE，notes 说明 \"USDC 是稳定币不可交易，若想受益应关注使用 USDC 的 DeFi 协议或支付类代币\"\n"
+        "   - **例外情况**：仅当稳定币出现明确脱锚风险（价格偏离 >5%、depeg、暴跌等） → action=sell、direction=short，confidence ≥0.8\n"
+        "   - 对于稳定币相关利好消息，应在 notes 中建议关注受益的 DeFi 协议（Aave、Curve、Uniswap 等）或其原生代币，而非稳定币本身\n"
         "\n## 历史参考\n"
         "historical_reference.entries 若非空，请对比相似案例并在 notes 简述结论（如“与 2024-08 BTC ETF 净流入类似”）；若为空可忽略。\n"
         "\n## 图片处理\n"
