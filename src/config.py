@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import shlex
 import unicodedata
 from pathlib import Path
 from typing import Any, Dict, List, Set
@@ -78,6 +79,24 @@ def _parse_source_channels(value: str) -> List[str]:
     return tokens
 
 
+def _parse_cli_args(value: str) -> List[str]:
+    if not value:
+        return []
+    try:
+        parsed = shlex.split(value)
+    except ValueError as exc:
+        logger.warning("无法解析 CLI 参数字符串 '%s': %s", value, exc)
+        parsed = value.split()
+    return [token.strip() for token in parsed if token.strip()]
+
+
+def _parse_tool_list(value: str) -> List[str]:
+    """Parse comma-separated tool list."""
+    if not value:
+        return []
+    return [tool.strip() for tool in value.split(",") if tool.strip()]
+
+
 def _load_keywords_from_env() -> Set[str]:
     return {
         _normalize_keyword(keyword)
@@ -133,6 +152,7 @@ class Config:
 
     TARGET_CHAT_ID: str = os.getenv("TARGET_CHAT_ID", "")
     TARGET_CHAT_ID_BACKUP: str = os.getenv("TARGET_CHAT_ID_BACKUP", "")
+    FORWARD_TO_CHANNEL_ENABLED: bool = _as_bool(os.getenv("FORWARD_TO_CHANNEL_ENABLED", "true"))
 
     SOURCE_CHANNELS: List[str] = _parse_source_channels(os.getenv("SOURCE_CHANNELS", ""))
 
@@ -176,6 +196,12 @@ class Config:
     AI_RETRY_BACKOFF_SECONDS: float = float(os.getenv("AI_RETRY_BACKOFF_SECONDS", "1.5"))
     AI_SKIP_NEUTRAL_FORWARD: bool = _as_bool(os.getenv("AI_SKIP_NEUTRAL_FORWARD", "false"))
 
+    # Forwarding thresholds (confidence-based filtering)
+    AI_MIN_CONFIDENCE: float = float(os.getenv("AI_MIN_CONFIDENCE", "0.4"))
+    AI_OBSERVE_THRESHOLD: float = float(os.getenv("AI_OBSERVE_THRESHOLD", "0.70"))
+    AI_MIN_CONFIDENCE_KOL: float = float(os.getenv("AI_MIN_CONFIDENCE_KOL", "0.3"))
+    AI_OBSERVE_THRESHOLD_KOL: float = float(os.getenv("AI_OBSERVE_THRESHOLD_KOL", "0.5"))
+
     FORWARD_INCLUDE_TRANSLATION: bool = _as_bool(
         os.getenv("FORWARD_INCLUDE_TRANSLATION", "true")
     )
@@ -214,6 +240,17 @@ class Config:
         "CODEX_CLI_CONTEXT",
         "@docs/codex_cli_integration_plan.md",
     ).strip()
+    CODEX_CLI_RETRY_ATTEMPTS: int = int(os.getenv("CODEX_CLI_RETRY_ATTEMPTS", "1"))
+    CODEX_CLI_EXTRA_ARGS: List[str] = _parse_cli_args(os.getenv("CODEX_CLI_EXTRA_ARGS", ""))
+    CODEX_CLI_WORKDIR: str = os.getenv("CODEX_CLI_WORKDIR", "").strip()
+
+    # Claude CLI configuration
+    CLAUDE_CLI_PATH: str = os.getenv("CLAUDE_CLI_PATH", "claude").strip()
+    CLAUDE_CLI_TIMEOUT: float = float(os.getenv("CLAUDE_CLI_TIMEOUT", "60"))
+    CLAUDE_CLI_RETRY_ATTEMPTS: int = int(os.getenv("CLAUDE_CLI_RETRY_ATTEMPTS", "1"))
+    CLAUDE_CLI_EXTRA_ARGS: List[str] = _parse_cli_args(os.getenv("CLAUDE_CLI_EXTRA_ARGS", ""))
+    CLAUDE_CLI_WORKDIR: str = os.getenv("CLAUDE_CLI_WORKDIR", "").strip()
+    CLAUDE_CLI_ALLOWED_TOOLS: List[str] = _parse_tool_list(os.getenv("CLAUDE_CLI_ALLOWED_TOOLS", "Bash,Read"))
     TEXT_PLANNER_PROVIDER: str = os.getenv("TEXT_PLANNER_PROVIDER", "").strip().lower()
     TEXT_PLANNER_API_KEY: str = os.getenv("TEXT_PLANNER_API_KEY", "")
     TEXT_PLANNER_MODEL: str = os.getenv("TEXT_PLANNER_MODEL", "")
@@ -423,15 +460,6 @@ class Config:
     )
 
     # Hyperliquid source prioritization configuration
-    MARKETFEED_KEYWORDS: Set[str] = {
-        keyword.strip().lower()
-        for keyword in os.getenv(
-            "MARKETFEED_KEYWORDS",
-            "etf,cpi,非农,nonfarm,财政部,treasury,收益率,yield,联储,fed,fomc,btc,eth,bitcoin,ethereum"
-        ).split(",")
-        if keyword.strip()
-    }
-    MARKETFEED_TOPIC_WINDOW_SECONDS: int = int(os.getenv("MARKETFEED_TOPIC_WINDOW_SECONDS", "600"))
     PRIORITY_KOL_HANDLES: Set[str] = {
         handle.strip().lower()
         for handle in os.getenv("PRIORITY_KOL_HANDLES", "sleepinrain,journey_of_someone,retardfrens").split(",")
@@ -439,6 +467,19 @@ class Config:
     }
     PRIORITY_KOL_FORCE_FORWARD: bool = _as_bool(os.getenv("PRIORITY_KOL_FORCE_FORWARD", "true"))
     PRIORITY_KOL_DEDUP_THRESHOLD: float = float(os.getenv("PRIORITY_KOL_DEDUP_THRESHOLD", "0.95"))
+
+    # Email notification configuration
+    EMAIL_ENABLED: bool = _as_bool(os.getenv("EMAIL_ENABLED", "false"))
+    EMAIL_SMTP_HOST: str = os.getenv("EMAIL_SMTP_HOST", "smtp.gmail.com")
+    EMAIL_SMTP_PORT: int = int(os.getenv("EMAIL_SMTP_PORT", "587"))
+    EMAIL_FROM: str = os.getenv("EMAIL_FROM", "")
+    EMAIL_PASSWORD: str = os.getenv("EMAIL_PASSWORD", "")
+    EMAIL_TO: str = os.getenv("EMAIL_TO", "")
+
+    # Telegram Bot notification configuration
+    BOT_ENABLED: bool = _as_bool(os.getenv("BOT_ENABLED", "false"))
+    BOT_TOKEN: str = os.getenv("BOT_TOKEN", "")
+    BOT_USER_CHAT_ID: str = os.getenv("BOT_USER_CHAT_ID", "")
 
     @classmethod
     def get_deep_analysis_config(cls) -> Dict[str, Any]:
@@ -453,15 +494,33 @@ class Config:
             )
 
         enabled = cls.DEEP_ANALYSIS_ENABLED
-        if provider not in {"claude", "gemini"}:
+        allowed_providers = {"claude", "gemini", "codex_cli", "claude_cli"}
+        if provider not in allowed_providers:
             if provider:
                 logger.warning("未知的 DEEP_ANALYSIS_PROVIDER=%s，自动回退为 claude", provider)
             provider = "claude" if cls.CLAUDE_ENABLED else "gemini"
 
+        if fallback not in allowed_providers:
+            if fallback:
+                logger.warning("未知的深度分析备用引擎 %s，已忽略", fallback)
+            fallback = ""
+        elif fallback == provider:
+            fallback = ""
+
+        def _parse_context_refs(value: str) -> List[str]:
+            if not value:
+                return []
+            refs: List[str] = []
+            for raw in value.replace(",", "\n").splitlines():
+                candidate = raw.strip()
+                if candidate:
+                    refs.append(candidate)
+            return refs
+
         config: Dict[str, Any] = {
             "enabled": enabled,
             "provider": provider,
-            "fallback_provider": fallback if fallback in {"claude", "gemini"} else "",
+            "fallback_provider": fallback,
             "claude": {
                 "api_key": cls.CLAUDE_API_KEY,
                 "model": cls.CLAUDE_MODEL,
@@ -476,6 +535,22 @@ class Config:
                 "retry_backoff": cls.GEMINI_DEEP_RETRY_BACKOFF_SECONDS,
                 "api_key": cls.GEMINI_API_KEY,
                 "api_keys": cls.GEMINI_API_KEYS,
+            },
+            "codex_cli": {
+                "cli_path": cls.CODEX_CLI_PATH,
+                "timeout": cls.CODEX_CLI_TIMEOUT,
+                "max_retries": cls.CODEX_CLI_RETRY_ATTEMPTS,
+                "context_refs": _parse_context_refs(cls.CODEX_CLI_CONTEXT),
+                "extra_args": list(cls.CODEX_CLI_EXTRA_ARGS),
+                "working_directory": cls.CODEX_CLI_WORKDIR,
+            },
+            "claude_cli": {
+                "cli_path": cls.CLAUDE_CLI_PATH,
+                "timeout": cls.CLAUDE_CLI_TIMEOUT,
+                "max_retries": cls.CLAUDE_CLI_RETRY_ATTEMPTS,
+                "extra_args": list(cls.CLAUDE_CLI_EXTRA_ARGS),
+                "working_directory": cls.CLAUDE_CLI_WORKDIR,
+                "allowed_tools": list(cls.CLAUDE_CLI_ALLOWED_TOOLS),
             },
         }
         return config

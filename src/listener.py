@@ -19,6 +19,8 @@ from .ai.translator import Translator, build_translator_from_config
 from .ai.gemini_client import AiServiceError
 from .config import Config
 from .forwarder import MessageForwarder
+from .email_sender import EmailSender
+from .bot_sender import BotSender
 from .utils import (
     MessageDeduplicator,
     analyze_event_intensity,
@@ -100,11 +102,31 @@ class TelegramListener:
             self.config.TG_API_HASH,
         )
 
+        # Initialize email sender
+        email_sender = EmailSender(
+            smtp_host=self.config.EMAIL_SMTP_HOST,
+            smtp_port=self.config.EMAIL_SMTP_PORT,
+            from_email=self.config.EMAIL_FROM,
+            password=self.config.EMAIL_PASSWORD,
+            to_email=self.config.EMAIL_TO,
+            enabled=self.config.EMAIL_ENABLED,
+        )
+
+        # Initialize bot sender
+        bot_sender = BotSender(
+            bot_token=self.config.BOT_TOKEN,
+            user_chat_id=self.config.BOT_USER_CHAT_ID,
+            enabled=self.config.BOT_ENABLED,
+        )
+
         self.forwarder = MessageForwarder(
             self.client,
             self.config.TARGET_CHAT_ID,
             self.config.TARGET_CHAT_ID_BACKUP,
             cooldown_seconds=self.config.FORWARD_COOLDOWN_SECONDS,
+            email_sender=email_sender,
+            bot_sender=bot_sender,
+            forward_to_channel_enabled=self.config.FORWARD_TO_CHANNEL_ENABLED,
         )
 
         if self.db_enabled:
@@ -346,27 +368,6 @@ class TelegramListener:
             # Check if source is KOL whitelist (priority processing, skip keyword filter)
             is_priority_kol = self._is_priority_kol(source_name, channel_username)
 
-            # Check if source is marketfeed (memory-only mode)
-            is_marketfeed = self._is_marketfeed(source_name, channel_username)
-
-            if is_marketfeed:
-                # Marketfeed: check marketfeed keywords, then store to memory only (no AI)
-                if not self._contains_marketfeed_keywords(message_text):
-                    self.stats["filtered_out"] += 1
-                    logger.debug("🚫 Marketfeed 消息被关键词过滤器拒绝")
-                    return
-
-                # Skip dedup check for marketfeed to allow frequent macro updates
-                logger.info("📰 Marketfeed 消息，记忆模式：跳过 AI，直接存储到记忆层")
-                await self._handle_marketfeed_message(
-                    message_text=message_text,
-                    source_name=source_name,
-                    source_message_id=source_message_id,
-                    source_url=source_url,
-                    published_at=published_at,
-                )
-                return
-
             # Priority KOL: skip keyword filter
             if not is_priority_kol and not contains_keywords(message_text, self.config.FILTER_KEYWORDS):
                 self.stats["filtered_out"] += 1
@@ -595,26 +596,67 @@ class TelegramListener:
                         signal_result.asset if signal_result else None)
             if self.price_enabled and self.price_tool and signal_result and signal_result.asset and signal_result.asset != "NONE":
                 try:
-                    logger.info("💰 开始获取价格: asset=%s", signal_result.asset)
-                    price_result = await self.price_tool.snapshot(asset=signal_result.asset)
-                    if price_result.success and price_result.data:
-                        price_snapshot = price_result.data
-                        metrics = price_snapshot.get("metrics", {})
-                        price_usd = metrics.get("price_usd")
-                        logger.info("💰 价格获取成功: asset=%s price=$%s",
-                                   signal_result.asset,
-                                   price_usd)
+                    # Support multiple assets (comma-separated)
+                    assets = [a.strip() for a in signal_result.asset.split(",") if a.strip()]
+                    if len(assets) == 1:
+                        # Single asset - keep existing behavior
+                        logger.info("💰 开始获取价格: asset=%s", signal_result.asset)
+                        price_result = await self.price_tool.snapshot(asset=signal_result.asset)
+                        if price_result.success and price_result.data:
+                            price_snapshot = price_result.data
+                            metrics = price_snapshot.get("metrics", {})
+                            price_usd = metrics.get("price_usd")
+                            logger.info("💰 价格获取成功: asset=%s price=$%s",
+                                       signal_result.asset,
+                                       price_usd)
+                        else:
+                            logger.warning("💰 价格获取返回失败: asset=%s error=%s",
+                                         signal_result.asset, price_result.error if price_result else "unknown")
                     else:
-                        logger.warning("💰 价格获取返回失败: asset=%s error=%s",
-                                     signal_result.asset, price_result.error if price_result else "unknown")
+                        # Multiple assets - fetch up to 3 prices to avoid too many requests
+                        assets_to_fetch = assets[:3]
+                        if len(assets) > 3:
+                            logger.info("💰 资产数量过多，仅获取前3个: %s (共%d个)", assets_to_fetch, len(assets))
+                        else:
+                            logger.info("💰 开始获取多个资产价格: assets=%s", assets_to_fetch)
+
+                        price_snapshots = []
+                        for asset in assets_to_fetch:
+                            try:
+                                price_result = await self.price_tool.snapshot(asset=asset)
+                                if price_result.success and price_result.data:
+                                    price_snapshots.append({
+                                        "asset": asset,
+                                        "data": price_result.data
+                                    })
+                                    metrics = price_result.data.get("metrics", {})
+                                    price_usd = metrics.get("price_usd")
+                                    logger.info("💰 价格获取成功: asset=%s price=$%s", asset, price_usd)
+                            except Exception as exc:
+                                logger.warning("价格获取异常: asset=%s error=%s", asset, exc)
+
+                        if price_snapshots:
+                            # Store multiple price snapshots
+                            price_snapshot = {
+                                "multiple": True,
+                                "snapshots": price_snapshots
+                            }
+                        else:
+                            logger.warning("💰 所有资产价格获取失败: assets=%s", assets_to_fetch)
                 except Exception as exc:
                     logger.warning("价格获取异常: asset=%s error=%s", signal_result.asset, exc)
 
             should_skip_forward = False
             if signal_result and signal_result.status != "error":
-                # Priority KOL: lower confidence threshold to 0.3
-                confidence_threshold = 0.3 if is_priority_kol else 0.4
-                observe_threshold = 0.5 if is_priority_kol else 0.85
+                # Use configurable thresholds (from .env)
+                confidence_threshold = (
+                    self.config.AI_MIN_CONFIDENCE_KOL if is_priority_kol
+                    else self.config.AI_MIN_CONFIDENCE
+                )
+                observe_threshold = (
+                    self.config.AI_OBSERVE_THRESHOLD_KOL if is_priority_kol
+                    else self.config.AI_OBSERVE_THRESHOLD
+                )
 
                 low_confidence_skip = signal_result.confidence < confidence_threshold
                 neutral_skip = (
@@ -1279,99 +1321,6 @@ class TelegramListener:
             candidates.append(channel_username.lower().strip().lstrip("@"))
 
         return any(handle in self.config.PRIORITY_KOL_HANDLES for handle in candidates)
-
-    def _is_marketfeed(self, source_name: str | None, channel_username: str | None) -> bool:
-        """Check if source is marketfeed channel."""
-        marketfeed_identifiers = ["marketfeed", "market feed", "market_feed"]
-        candidates = []
-        if source_name:
-            candidates.append(source_name.lower().strip())
-        if channel_username:
-            candidates.append(channel_username.lower().strip().lstrip("@"))
-
-        return any(
-            identifier in candidate
-            for candidate in candidates
-            for identifier in marketfeed_identifiers
-        )
-
-    def _contains_marketfeed_keywords(self, text: str) -> bool:
-        """Check if text contains marketfeed-specific keywords."""
-        if not self.config.MARKETFEED_KEYWORDS:
-            return True  # If no keywords configured, allow all marketfeed messages
-
-        normalized_text = text.lower()
-        return any(keyword in normalized_text for keyword in self.config.MARKETFEED_KEYWORDS)
-
-    async def _handle_marketfeed_message(
-        self,
-        message_text: str,
-        source_name: str,
-        source_message_id: str,
-        source_url: str | None,
-        published_at: datetime,
-    ) -> None:
-        """Handle marketfeed message: store to memory only, no AI processing."""
-        if not self.db_enabled or not self.news_repository:
-            logger.debug("数据库未启用，跳过 marketfeed 消息存储")
-            return
-
-        try:
-            hash_raw = compute_sha256(message_text)
-            hash_canonical = compute_canonical_hash(message_text)
-
-            # Check exact hash duplicate (avoid storing identical marketfeed messages)
-            existing_event_id = await self.news_repository.check_duplicate(hash_raw)
-            if existing_event_id:
-                logger.debug("Marketfeed 消息重复，跳过存储: event_id=%s", existing_event_id)
-                return
-
-            # Compute embedding for memory retrieval
-            embedding_vector: list[float] | None = None
-            if self.config.OPENAI_API_KEY:
-                embedding_vector = await compute_embedding(
-                    message_text,
-                    api_key=self.config.OPENAI_API_KEY,
-                    model=self.config.OPENAI_EMBEDDING_MODEL,
-                )
-
-            # Store to database with special marketfeed status
-            keywords_hit = self._collect_keywords(message_text)
-            metadata = {
-                "source": source_name,
-                "marketfeed_mode": True,
-                "processed_at": datetime.now().isoformat(),
-            }
-            if embedding_vector:
-                metadata["embedding_model"] = self.config.OPENAI_EMBEDDING_MODEL
-                metadata["embedding_generated_at"] = datetime.now().isoformat()
-
-            payload = NewsEventPayload(
-                source=source_name,
-                source_message_id=source_message_id,
-                source_url=source_url,
-                published_at=published_at,
-                content_text=message_text,
-                translated_text=None,  # No translation for marketfeed
-                summary=None,  # No AI summary
-                language="unknown",
-                media_refs=[],
-                hash_raw=hash_raw,
-                hash_canonical=hash_canonical,
-                embedding=embedding_vector,
-                keywords_hit=keywords_hit,
-                ingest_status="memory_only",  # Special status for marketfeed
-                metadata=metadata,
-            )
-
-            news_event_id = await self.news_repository.insert_event(payload)
-            if news_event_id:
-                logger.info("✅ Marketfeed 消息已存储到记忆层: event_id=%s", news_event_id)
-            else:
-                logger.warning("⚠️ Marketfeed 消息存储失败")
-
-        except Exception as exc:  # pylint: disable=broad-except
-            logger.warning("Marketfeed 消息处理失败: %s", exc)
 
 
 async def main() -> None:

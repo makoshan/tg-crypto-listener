@@ -40,23 +40,89 @@ class PriceTool:
 
         errors: List[Tuple[str, str]] = []
         last_failure: Optional[ToolResult] = None
+        successes: List[Tuple[str, ToolResult]] = []
+        triggered_any = False
+        max_confidence = 0.0
 
-        for idx, symbol in enumerate(candidates):
+        for symbol in candidates:
             result = await self._snapshot_single(symbol, force_refresh=force_refresh)
             if result.success:
-                if idx > 0:
-                    logger.info(
-                        "价格工具在多资产输入 '%s' 中选择候选 %s",
-                        asset,
-                        symbol.upper(),
-                    )
-                return result
+                successes.append((symbol, result))
+                triggered_any = triggered_any or result.triggered
+                max_confidence = max(max_confidence, float(result.confidence))
+                continue
 
             errors.append((symbol, result.error or "unknown"))
             last_failure = result
 
-        if len(candidates) > 1 and errors:
-            error_summary = "; ".join(f"{sym}:{err}" for sym, err in errors)
+        if len(candidates) == 1:
+            return successes[0][1] if successes else last_failure or ToolResult(
+                source=self._provider.__class__.__name__,
+                timestamp=ToolResult._format_timestamp(),
+                success=False,
+                data={},
+                triggered=False,
+                confidence=0.0,
+                error=errors[0][1] if errors else "asset_not_supported",
+            )
+
+        if successes:
+            asset_codes = [symbol.upper() for symbol, _ in successes]
+            if errors:
+                error_summary = "; ".join(f"{sym.upper()}:{err}" for sym, err in errors)
+                logger.warning(
+                    "价格工具多资产输入部分失败: raw='%s', successes=%s, failures=%s",
+                    asset,
+                    asset_codes,
+                    error_summary,
+                )
+            else:
+                logger.info(
+                    "价格工具多资产输入成功: raw='%s' assets=%s",
+                    asset,
+                    asset_codes,
+                )
+
+            primary_symbol, primary_result = successes[0]
+            primary_data = primary_result.data or {}
+
+            snapshots = [
+                {
+                    "asset": symbol.upper(),
+                    "data": result.data,
+                    "triggered": result.triggered,
+                    "confidence": result.confidence,
+                    "timestamp": result.timestamp,
+                }
+                for symbol, result in successes
+            ]
+
+            multi_payload: Dict[str, object] = {
+                "multiple": True,
+                "asset": ",".join(asset_codes),
+                "assets": asset_codes,
+                "metrics": primary_data.get("metrics", {}) if isinstance(primary_data, dict) else {},
+                "anomalies": primary_data.get("anomalies", {}) if isinstance(primary_data, dict) else {},
+                "notes": primary_data.get("notes") if isinstance(primary_data, dict) else None,
+                "snapshots": snapshots,
+            }
+            if errors:
+                multi_payload["failed_assets"] = [
+                    {"asset": sym.upper(), "error": err}
+                    for sym, err in errors
+                ]
+
+            return ToolResult(
+                source=primary_result.source,
+                timestamp=primary_result.timestamp,
+                success=True,
+                data=multi_payload,
+                triggered=triggered_any,
+                confidence=round(max_confidence, 2),
+            )
+
+        if errors:
+            error_summary = "; ".join(f"{sym.upper()}:{err}" for sym, err in errors)
             logger.warning(
                 "价格工具多资产输入全部失败: raw='%s', details=%s",
                 asset,
@@ -72,7 +138,7 @@ class PriceTool:
                 error=f"multi_asset_failed: {error_summary}",
             )
 
-        return last_failure or ToolResult(
+        return ToolResult(
             source=self._provider.__class__.__name__,
             timestamp=ToolResult._format_timestamp(),
             success=False,

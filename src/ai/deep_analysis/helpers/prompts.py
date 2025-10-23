@@ -280,6 +280,13 @@ def build_synthesis_prompt(state: Mapping[str, Any], _engine: Any | None = None)
 - 置信度: {preliminary.confidence}
 - 摘要: {preliminary.summary}
 
+⚠️ **主流币市场地位提醒**：
+- **BTC 是加密市场风向标**：比特币价格反映宏观环境（美联储、美元、地缘政治），BTC 跌意味着全币圈承压
+- **市场联动性**：BTC 涨跌带动 ETH/SOL 及整个加密市场同向波动
+- **主流币优先级**：BTC > ETH > SOL 的价格变化必须重点关注
+- **宏观传导机制**：贸易战/加息 → BTC 下跌 → 全市场下跌；降息预期/机构入场 → BTC 上涨 → 市场回暖
+- **信号增强规则**：涉及 BTC/ETH/SOL 价格变化 ≥3%，或 BTC 与宏观事件相关时，应提升 confidence (+0.15 到 +0.25)
+
 【历史记忆】
 {memory_text}
 

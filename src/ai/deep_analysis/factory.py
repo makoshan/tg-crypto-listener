@@ -7,6 +7,8 @@ from typing import Any, Callable, Optional
 
 from src.ai.anthropic_client import AnthropicClient
 from src.ai.deep_analysis.base import DeepAnalysisEngine, DeepAnalysisError
+from src.ai.deep_analysis.claude_cli import ClaudeCliDeepAnalysisEngine
+from src.ai.deep_analysis.codex_cli import CodexCliDeepAnalysisEngine
 from src.ai.deep_analysis.claude import ClaudeDeepAnalysisEngine
 from src.ai.deep_analysis.gemini import GeminiDeepAnalysisEngine
 from src.ai.gemini_function_client import GeminiFunctionCallingClient
@@ -24,6 +26,105 @@ def create_deep_analysis_engine(
 ) -> DeepAnalysisEngine:
     provider = provider.strip().lower()
     deep_config = getattr(config, "get_deep_analysis_config", lambda: {})()
+
+    if provider == "claude_cli":
+        logger.info("🔧 开始初始化 Claude CLI 深度分析引擎...")
+
+        claude_cli_cfg = deep_config.get("claude_cli", {})
+        logger.debug("Claude CLI 配置: %s", claude_cli_cfg)
+
+        cli_path = claude_cli_cfg.get("cli_path") or getattr(config, "CLAUDE_CLI_PATH", "claude")
+        if not cli_path:
+            logger.error("❌ Claude CLI 路径未配置")
+            raise DeepAnalysisError("Claude CLI 路径未配置，无法启用深度分析")
+
+        logger.debug("Claude CLI 可执行文件路径: %s", cli_path)
+
+        extra_args = claude_cli_cfg.get("extra_args") or []
+        if isinstance(extra_args, str):
+            extra_args = [extra_args]
+        extra_args = [str(arg).strip() for arg in extra_args if str(arg).strip()]
+        if extra_args:
+            logger.debug("Claude CLI 额外参数: %s", extra_args)
+
+        allowed_tools = claude_cli_cfg.get("allowed_tools") or []
+        if isinstance(allowed_tools, str):
+            allowed_tools = [allowed_tools]
+        allowed_tools = [str(tool).strip() for tool in allowed_tools if str(tool).strip()]
+        if allowed_tools:
+            logger.debug("Claude CLI 允许的工具: %s", allowed_tools)
+
+        timeout = float(claude_cli_cfg.get("timeout") or getattr(config, "CLAUDE_CLI_TIMEOUT", 60.0))
+        max_retries = int(claude_cli_cfg.get("max_retries") or getattr(config, "CLAUDE_CLI_RETRY_ATTEMPTS", 1))
+        working_dir = claude_cli_cfg.get("working_directory") or getattr(config, "CLAUDE_CLI_WORKDIR", "") or None
+
+        logger.info(
+            "🧠 Claude CLI 深度分析引擎已初始化: path=%s timeout=%.1fs max_retries=%d working_dir=%s allowed_tools=%s",
+            cli_path,
+            timeout,
+            max_retries,
+            working_dir or ".",
+            allowed_tools,
+        )
+        return ClaudeCliDeepAnalysisEngine(
+            cli_path=cli_path,
+            timeout=timeout,
+            parse_json_callback=parse_callback,
+            extra_cli_args=tuple(extra_args),
+            max_retries=max_retries,
+            working_directory=working_dir,
+            allowed_tools=tuple(allowed_tools) if allowed_tools else None,
+        )
+
+    if provider == "codex_cli":
+        logger.info("🔧 开始初始化 Codex CLI 深度分析引擎...")
+
+        codex_cfg = deep_config.get("codex_cli", {})
+        logger.debug("Codex CLI 配置: %s", codex_cfg)
+
+        cli_path = codex_cfg.get("cli_path") or getattr(config, "CODEX_CLI_PATH", "codex")
+        if not cli_path:
+            logger.error("❌ Codex CLI 路径未配置")
+            raise DeepAnalysisError("Codex CLI 路径未配置，无法启用深度分析")
+
+        logger.debug("Codex CLI 可执行文件路径: %s", cli_path)
+
+        context_refs = codex_cfg.get("context_refs") or []
+        if isinstance(context_refs, str):
+            context_refs = [context_refs]
+        context_refs = [str(ref).strip() for ref in context_refs if str(ref).strip()]
+        if context_refs:
+            logger.debug("Codex CLI 上下文引用数量: %d", len(context_refs))
+
+        extra_args = codex_cfg.get("extra_args") or []
+        if isinstance(extra_args, str):
+            extra_args = [extra_args]
+        extra_args = [str(arg).strip() for arg in extra_args if str(arg).strip()]
+        if extra_args:
+            logger.debug("Codex CLI 额外参数: %s", extra_args)
+
+        timeout = float(codex_cfg.get("timeout") or getattr(config, "CODEX_CLI_TIMEOUT", 60.0))
+        max_retries = int(codex_cfg.get("max_retries") or getattr(config, "CODEX_CLI_RETRY_ATTEMPTS", 1))
+        working_dir = codex_cfg.get("working_directory") or getattr(config, "CODEX_CLI_WORKDIR", "") or None
+
+        logger.info(
+            "🧠 Codex CLI 深度分析引擎已初始化: path=%s timeout=%.1fs max_retries=%d working_dir=%s context_refs=%d extra_args=%d",
+            cli_path,
+            timeout,
+            max_retries,
+            working_dir or ".",
+            len(context_refs),
+            len(extra_args),
+        )
+        return CodexCliDeepAnalysisEngine(
+            cli_path=cli_path,
+            timeout=timeout,
+            parse_json_callback=parse_callback,
+            context_refs=tuple(context_refs),
+            extra_cli_args=tuple(extra_args),
+            max_retries=max_retries,
+            working_directory=working_dir,
+        )
 
     if provider == "claude":
         claude_cfg = deep_config.get("claude", {})

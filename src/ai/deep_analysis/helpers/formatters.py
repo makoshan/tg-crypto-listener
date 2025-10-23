@@ -101,12 +101,53 @@ def format_price_evidence(price_ev: dict | None) -> str:
         return "无价格数据或获取失败"
 
     data = price_ev.get("data", {})
-    metrics = data.get("metrics", {})
-    anomalies = data.get("anomalies", {})
-    notes = data.get("notes", "")
+
+    if isinstance(data, dict) and data.get("multiple"):
+        snapshots = data.get("snapshots", [])
+        if not snapshots:
+            return "多资产价格查询失败"
+
+        asset_sections: list[str] = []
+        for snap in snapshots:
+            asset = snap.get("asset", "N/A")
+            snap_data = snap.get("data", {}) if isinstance(snap, dict) else {}
+            metrics = snap_data.get("metrics", {}) if isinstance(snap_data, dict) else {}
+            anomalies = snap_data.get("anomalies", {}) if isinstance(snap_data, dict) else {}
+            notes = snap_data.get("notes", "") if isinstance(snap_data, dict) else ""
+
+            lines = [
+                f"资产: {asset}",
+                f"价格: ${metrics.get('price_usd', 'N/A')}",
+                f"偏离锚定价: {metrics.get('deviation_pct', 'N/A')}%",
+                f"24h 变动: {metrics.get('price_change_24h_pct', 'N/A')}%",
+                f"24h 成交量: ${metrics.get('volume_24h_usd', 'N/A')}",
+                f"波动率(24h): {metrics.get('volatility_24h', 'N/A')}%",
+                f"稳定币脱锚: {anomalies.get('price_depeg', False)}",
+                f"波动率异常: {anomalies.get('volatility_spike', False)}",
+                f"资金费率极端: {anomalies.get('funding_extreme', False)}",
+                f"备注: {notes or '无'}",
+            ]
+            asset_sections.append("\n".join(lines))
+
+        summary_lines = ["多资产价格数据:"]
+        summary_lines.append("\n\n".join(asset_sections))
+
+        failed = data.get("failed_assets", [])
+        if failed:
+            failures = ", ".join(
+                f"{item.get('asset', 'N/A')}({item.get('error', 'unknown')})"
+                for item in failed
+            )
+            summary_lines.append(f"未成功获取: {failures}")
+
+        return "\n".join(summary_lines)
+
+    metrics = data.get("metrics", {}) if isinstance(data, dict) else {}
+    anomalies = data.get("anomalies", {}) if isinstance(data, dict) else {}
+    notes = data.get("notes", "") if isinstance(data, dict) else ""
 
     lines = [
-        f"资产: {data.get('asset', 'N/A')}",
+        f"资产: {data.get('asset', 'N/A') if isinstance(data, dict) else 'N/A'}",
         f"当前价格: ${metrics.get('price_usd', 'N/A')}",
         f"偏离锚定价: {metrics.get('deviation_pct', 'N/A')}%",
         f"24h 价格变动: {metrics.get('price_change_24h_pct', 'N/A')}%",

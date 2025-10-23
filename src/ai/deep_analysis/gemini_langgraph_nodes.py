@@ -36,7 +36,8 @@ async def _node_tool_planner(self, state):
 
     preliminary = state["preliminary"]
 
-    # Blacklist: Skip search for certain event types
+    # Blacklist: Skip search for certain event types (低价值、噪音多的事件类型)
+    # airdrop: 空投类活动通常市值小、投机性强，不适合深度搜索
     NEVER_SEARCH_EVENT_TYPES = {"macro", "governance", "airdrop", "celebrity"}
     if preliminary.event_type in NEVER_SEARCH_EVENT_TYPES:
         logger.info("🤖 Tool Planner: 事件类型 '%s' 在黑名单，跳过搜索", preliminary.event_type)

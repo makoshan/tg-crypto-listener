@@ -1,7 +1,7 @@
 # Hyperliquid Source Prioritization — Minimal Plan
 
 ## 核心策略
-通过**关键词驱动 + 记忆优先级 + 白名单**实现 Hyperliquid 信号精准捕获，同时控制 AI 成本。
+通过**关键词驱动 + 白名单**实现 Hyperliquid 信号精准捕获。
 
 ---
 
@@ -21,30 +21,9 @@
 
 ---
 
-## 2. 宏观消息策略（仅记忆模式）
+## 2. 白名单来源（优先处理）
 
-### 2.1 目标频道
-- **@marketfeed**：宏观经济新闻源
-
-### 2.2 处理方式
-- 直接写入记忆层，**不调用 AI**（节省 60%+ 成本）
-- 10 分钟内同主题去重
-- 保留 24-72 小时供后续事件参考
-
-### 2.3 关键词过滤
-etf, cpi, 非农, nonfarm, 财政部, treasury, 收益率, yield, 联储, fed, fomc, btc, eth, bitcoin, ethereum
-
-### 2.4 配置
-```
-MARKETFEED_KEYWORDS=etf,cpi,非农,nonfarm,财政部,treasury,收益率,yield,联储,fed,fomc,btc,eth,bitcoin,ethereum
-MARKETFEED_TOPIC_WINDOW_SECONDS=600
-```
-
----
-
-## 3. 白名单来源（优先处理）
-
-### 3.1 核心 KOL 白名单
+### 2.1 核心 KOL 白名单
 
 | 频道 | 专业领域 | 特殊处理 |
 |-----|---------|---------|
@@ -52,40 +31,32 @@ MARKETFEED_TOPIC_WINDOW_SECONDS=600
 | **@journey_of_someone** | DeFi 和链上分析 | 同上 |
 | **@RetardFrens** | 社区信号和热点 | 同上 |
 
-### 3.2 配置
+### 2.2 配置
 ```
 PRIORITY_KOL_HANDLES=sleepinrain,journey_of_someone,retardfrens
 ```
 
 ---
 
-## 4. 预期效果
-
-### 成本优化
-- marketfeed 不调用 AI：年节省 $1,060
-- 总体 AI 调用率：88% → 39%（减少 56%）
+## 3. 预期效果
 
 ### 信号质量提升
 - Hyperliquid 召回率：+40%
 - KOL 信号完整性：+60%
-- 宏观背景利用率：+100%
 
 ### 响应速度
 - Hyperliquid 信号延迟：3 分钟 → 1 分钟
 
 ---
 
-## 5. 实施检查清单
+## 4. 实施检查清单
 
 ### 配置准备
 - [ ] `keywords.txt` 添加 30+ Hyperliquid 关键词
-- [ ] `.env` 配置 `MARKETFEED_KEYWORDS`
 - [ ] `.env` 配置 `PRIORITY_KOL_HANDLES=sleepinrain,journey_of_someone,retardfrens`
 
 ### 验证测试
-- [ ] marketfeed 消息仅存入记忆，不调用 AI
 - [ ] KOL 白名单消息正常转发（confidence ≥ 0.3）
-- [ ] 记忆优先召回 24h 内 Hyperliquid 信号
 
 ---
 

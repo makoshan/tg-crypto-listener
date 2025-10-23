@@ -576,24 +576,32 @@ class AiSignalEngine:
             )
         elif self._deep_enabled and deep_engine and is_high_value:
             logger.info(
-                "🧠 触发 %s 深度分析: event_type=%s confidence=%.2f asset=%s (阈值: %.2f)",
+                "🧠 触发 %s 深度分析: event_type=%s confidence=%.2f asset=%s (阈值: %.2f) source=%s",
                 deep_label,
                 gemini_result.event_type,
                 gemini_result.confidence,
                 gemini_result.asset,
                 self._high_value_threshold,
+                payload.source,
+            )
+            logger.debug(
+                "深度分析引擎类型: %s, 有备用引擎: %s",
+                type(deep_engine).__name__,
+                "是" if fallback_engine else "否",
             )
             self._last_deep_call_time = time.time()
             try:
+                logger.debug("正在调用 %s 引擎执行深度分析...", deep_label)
                 deep_result = await deep_engine.analyse(payload, gemini_result)
                 logger.info(
-                    "✅ %s 深度分析完成: action=%s confidence=%.2f (%s 初判: %.2f) asset=%s",
+                    "✅ %s 深度分析完成: action=%s confidence=%.2f (%s 初判: %.2f) asset=%s summary=%s",
                     deep_label,
                     deep_result.action,
                     deep_result.confidence,
                     self._provider_label,
                     gemini_result.confidence,
                     deep_result.asset,
+                    deep_result.summary[:100] if deep_result.summary else "",
                 )
                 return deep_result
             except DeepAnalysisError as exc:
@@ -605,13 +613,14 @@ class AiSignalEngine:
                 )
                 if fallback_engine:
                     try:
-                        logger.info("🔁 尝试备用深度引擎 %s", fallback_label)
+                        logger.info("🔁 尝试备用深度引擎 %s (类型: %s)", fallback_label, type(fallback_engine).__name__)
                         fallback_result = await fallback_engine.analyse(payload, gemini_result)
                         logger.info(
-                            "✅ 备用引擎 %s 深度分析完成: action=%s confidence=%.2f",
+                            "✅ 备用引擎 %s 深度分析完成: action=%s confidence=%.2f summary=%s",
                             fallback_label,
                             fallback_result.action,
                             fallback_result.confidence,
+                            fallback_result.summary[:100] if fallback_result.summary else "",
                         )
                         return fallback_result
                     except DeepAnalysisError as fallback_exc:
@@ -621,6 +630,8 @@ class AiSignalEngine:
                             fallback_exc,
                             exc_info=True,
                         )
+                else:
+                    logger.debug("无备用深度引擎可用，将使用主引擎分析结果")
 
         return gemini_result
 
@@ -952,6 +963,7 @@ def build_signal_prompt(payload: EventPayload) -> list[dict[str, str]]:
         "event_type 仅能取 listing、delisting、hack、regulation、funding、whale、liquidation、partnership、product_launch、governance、macro、celebrity、airdrop、scam_alert、other。\n"
         "action 为 buy、sell、observe；direction 为 long、short、neutral；strength 仅取 high、medium、low；timeframe 仅取 short、medium、long。\n"
         "如事件涉及多个币种，asset 可为数组（如 [\"BTC\",\"ETH\"]），asset_name 用简体中文名以顿号或逗号分隔；若无法确认币种则 asset=NONE、asset_name=无，并在 notes 解释原因。\n"
+        "**黄金映射规则**：当消息涉及黄金（Gold/XAU/黄金期货）时，使用 asset=XAUT（Tether Gold 代币）来查询价格和分析。\n"
         "\n## 主流币市场指标重要性 ⚠️ 核心优先级\n"
         "**BTC（比特币）是整个加密市场的风向标和宏观指标**：\n"
         "1. **宏观关联性**：比特币价格与全球宏观环境（美联储政策、美元指数、地缘政治）高度相关，是加密市场风险偏好的核心指标。\n"

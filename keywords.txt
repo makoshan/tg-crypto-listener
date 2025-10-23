@@ -4,6 +4,9 @@ btc,比特币,bitcoin,비트코인,биткоин
 sol,solana,솔라나,солана
 0xc2a30212a8ddac9e123944d6e29faddce994e5f2
 hyperbot
+0xb317d2bc2d3d2df5fa441b5bae0ab9d8b07283ae
+内幕地址
+央行利率,十五五规划,Michael S. Barr
 聪明钱
 BitcoinOG,Trump,GOVERNMENT SHUTDOWN,U.S. Shutdown
 
@@ -43,8 +46,6 @@ metamask,메타마스크,метамаск
 phantom,팬텀,фантом
 
 # 热点话题
-rwa
-defi,디파이,дефи
 polymarket
 plasma
 
@@ -60,7 +61,7 @@ Tom Lee
 etf,spot etf,btc etf,eth etf
 sec,美国证监会,미국 증권거래위원회,комиссия по ценным бумагам и биржам сша
 cftc,미국 상품선물거래위원회,комиссия по торговле товарными фьючерсами
-trade war,贸易战
+trade war,贸易战,稀土,中美经贸,CPI
 
 # 监管与研究机构
 micar,markets in crypto-assets regulation,欧盟加密资产监管法案,미카르,микар

@@ -60,6 +60,120 @@
    - 推送至 TG 私人频道 (原文+翻译+执行动作)
 ```
 
+### 5.1 LangGraph 处理流程图（实验性管道）
+
+```mermaid
+graph TD
+    START([开始]) --> ingest[📥 消息接收<br/>Ingest Node]
+
+    ingest --> |提取文本与元数据| keyword_filter{🔍 关键词过滤<br/>Keyword Filter}
+
+    keyword_filter --> |未命中关键词| drop1[❌ 丢弃]
+    keyword_filter --> |优先KOL/通过| dedup_memory{💾 内存去重<br/>Memory Dedup}
+
+    dedup_memory --> |重复消息| drop2[❌ 丢弃]
+    dedup_memory --> |新消息| dedup_hash{#️⃣ 哈希去重<br/>Hash Dedup}
+
+    dedup_hash --> |数据库已存在| drop3[❌ 丢弃]
+    dedup_hash --> |继续| dedup_semantic{🧬 语义去重<br/>Semantic Dedup}
+
+    dedup_semantic --> |相似度超阈值| drop4[❌ 丢弃]
+    dedup_semantic --> |通过| media_extract[🖼️ 媒体提取<br/>Media Extract]
+
+    media_extract --> |提取图片/视频| translation[🌐 翻译<br/>Translation]
+
+    translation --> |DeepL/Azure/Google| keyword_collect[🔖 关键词收集<br/>Keyword Collect]
+
+    keyword_collect --> |提取匹配关键词| memory_fetch[🧠 记忆检索<br/>Memory Fetch]
+
+    memory_fetch --> |检索历史相似事件| ai_signal[🤖 AI 信号分析<br/>AI Signal Engine]
+
+    ai_signal --> |双引擎分析<br/>Gemini/Claude| ai_decision{📊 AI 决策}
+
+    ai_decision --> |置信度过低| skip[⚠️ 跳过转发<br/>但仍持久化]
+    ai_decision --> |置信度达标| forward[📤 消息转发<br/>Forward to TG]
+
+    skip --> persistence
+    forward --> |格式化消息| persistence[💾 数据持久化<br/>Persistence]
+
+    persistence --> |保存到 Supabase| finalize[✅ 完成<br/>Finalize]
+
+    drop1 --> finalize
+    drop2 --> finalize
+    drop3 --> finalize
+    drop4 --> finalize
+
+    finalize --> END([结束])
+
+    style START fill:#e1f5e1
+    style END fill:#ffe1e1
+    style drop1 fill:#ffcccc
+    style drop2 fill:#ffcccc
+    style drop3 fill:#ffcccc
+    style drop4 fill:#ffcccc
+    style skip fill:#fff4cc
+    style ai_signal fill:#cce5ff
+    style forward fill:#d4edda
+    style persistence fill:#d1ecf1
+```
+
+### 5.2 LangGraph 节点详细说明
+
+| 节点名称 | 功能描述 | 输入 | 输出 | 关键配置 |
+|---------|---------|------|------|---------|
+| **ingest** | 消息接收与元数据提取 | Telegram Event | `source_name`, `original_text`, `hashes` | - |
+| **keyword_filter** | 关键词匹配过滤 | `original_text` | `drop=True/False` | `FILTER_KEYWORDS`, `PRIORITY_KOL_HANDLES` |
+| **dedup_memory** | 内存窗口去重 | `original_text` | `dedup.memory` | `DEDUP_WINDOW_HOURS` |
+| **dedup_hash** | 数据库哈希去重 | `hash_raw` | `dedup.hash`, `similar_event` | Supabase `news_events.hash_raw` |
+| **dedup_semantic** | 向量语义去重 | `embedding` | `dedup.semantic`, `similarity` | `EMBEDDING_SIMILARITY_THRESHOLD`, `EMBEDDING_TIME_WINDOW_HOURS` |
+| **media_extract** | 提取图片/视频 | `message.media` | `media[]` (base64) | `MAX_INLINE_MEDIA_BYTES=4MB` |
+| **translation** | 多语言翻译 | `original_text` | `translated_text`, `language` | `TRANSLATION_PROVIDERS` (DeepL/Azure/Google) |
+| **keyword_collect** | 收集匹配关键词 | `original_text`, `translated_text` | `keywords[]` | - |
+| **memory_fetch** | 检索历史记忆 | `embedding`/`keywords` | `memory_context`, `historical_reference[]` | `MEMORY_BACKEND`, `MEMORY_MAX_NOTES`, `MEMORY_SIMILARITY_THRESHOLD` |
+| **ai_signal** | AI 双引擎分析 | `EventPayload` (含翻译+记忆) | `SignalResult` (summary/action/confidence) | `AI_PROVIDER`, `DEEP_ANALYSIS_ENABLED`, `HIGH_VALUE_CONFIDENCE_THRESHOLD` |
+| **forward** | 格式化并转发消息 | `SignalResult`, `price_snapshot` | `forwarded=True/False` | `AI_MIN_CONFIDENCE`, `AI_OBSERVE_THRESHOLD`, `PRIORITY_KOL_FORCE_FORWARD` |
+| **persistence** | 持久化到数据库 | 完整状态 | 插入 `news_events`, `ai_signals` | `ENABLE_DB_PERSISTENCE` |
+| **finalize** | 状态最终化 | `control.status` | `PipelineResult` | - |
+
+### 5.3 LangGraph vs 传统 Listener 对比
+
+| 维度 | 传统 Listener (`listener.py`) | LangGraph Pipeline (`langgraph_pipeline.py`) |
+|------|------------------------------|-------------------------------------------|
+| **架构** | 顺序式函数调用 | 显式状态图 (StateGraph) |
+| **状态管理** | 局部变量传递 | TypedDict 全局状态 |
+| **可观测性** | 分散的日志 | 每个节点独立日志 + 状态追踪 |
+| **可测试性** | 需模拟完整流程 | 可单独测试每个节点 |
+| **扩展性** | 修改需改主流程 | 新增节点 + 修改边 |
+| **调试** | 难以定位中间状态 | 每个节点返回完整状态快照 |
+| **启用方式** | 默认 | `USE_LANGGRAPH_PIPELINE=true` |
+| **生产就绪** | ✅ 稳定运行 | ⚠️ 实验性功能 |
+
+### 5.4 关键流程特性
+
+#### 三层去重机制
+1. **内存去重** (`dedup_memory`): 使用滑动窗口 (默认 24h) 快速过滤
+2. **哈希去重** (`dedup_hash`): SHA256 精确匹配数据库已存在消息
+3. **语义去重** (`dedup_semantic`): 向量余弦相似度检测近似重复 (阈值 0.95)
+
+#### 优先 KOL 特权路径
+- **跳过关键词过滤**: 白名单来源自动通过
+- **降低置信度门槛**: 0.3 (普通 0.4)
+- **降低去重门槛**: 0.85 (普通 0.95)
+- **强制转发**: 可配置 `PRIORITY_KOL_FORCE_FORWARD=true`
+
+#### AI 双引擎分析
+- **主引擎**: Gemini Flash / OpenAI 快速分析 (90% 消息)
+- **深度引擎**: Claude / Gemini Function Calling (高价值信号 confidence >= 0.75)
+- **速率限制**: `DEEP_ANALYSIS_MIN_INTERVAL=25s` 防止过度调用
+
+#### 条件转发逻辑
+消息在以下情况会被**跳过转发**但**仍会持久化**:
+- `confidence < AI_MIN_CONFIDENCE` (默认 0.4)
+- `action=observe AND confidence < AI_OBSERVE_THRESHOLD` (默认 0.85)
+- `status=skip AND AI_SKIP_NEUTRAL_FORWARD=true`
+
+优先 KOL 消息会强制覆盖这些限制。
+
 ## 6. AI 集成方案
 1. **AI 处理节点**：在 `src/listener.py:137`–`158` 的过滤与去重后加入 `AiSignalEngine`，输入原文、来源、时间戳等元数据。
 2. **Gemini 客户端**：

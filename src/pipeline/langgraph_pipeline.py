@@ -773,8 +773,15 @@ class LangGraphMessagePipeline:
             signal_result.confidence = 1.0
 
         if signal_result and signal_result.status != "error":
-            confidence_threshold = 0.3 if is_priority_kol else 0.4
-            observe_threshold = 0.5 if is_priority_kol else 0.85
+            # Use configurable thresholds (from .env)
+            confidence_threshold = (
+                deps.config.AI_MIN_CONFIDENCE_KOL if is_priority_kol
+                else deps.config.AI_MIN_CONFIDENCE
+            )
+            observe_threshold = (
+                deps.config.AI_OBSERVE_THRESHOLD_KOL if is_priority_kol
+                else deps.config.AI_OBSERVE_THRESHOLD
+            )
             raw_confidence = signal_result.confidence or 0.0
             if force_priority_forward:
                 effective_confidence = 1.0

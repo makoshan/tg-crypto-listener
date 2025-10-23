@@ -461,16 +461,34 @@ def format_forwarded_message(
 
         # Display price information if available
         if price_snapshot:
-            metrics = price_snapshot.get("metrics", {})
-            price_usd = metrics.get("price_usd")
-            price_change_24h_pct = metrics.get("price_change_24h_pct")
+            if price_snapshot.get("multiple"):
+                # Multiple assets - display all prices
+                snapshots = price_snapshot.get("snapshots", [])
+                for snap in snapshots:
+                    asset = snap.get("asset", "")
+                    data = snap.get("data", {})
+                    metrics = data.get("metrics", {})
+                    price_usd = metrics.get("price_usd")
+                    price_change_24h_pct = metrics.get("price_change_24h_pct")
 
-            if price_usd is not None:
-                price_parts = [f"${price_usd:,.4f}"]
-                if price_change_24h_pct is not None:
-                    change_sign = "+" if price_change_24h_pct >= 0 else ""
-                    price_parts.append(f"24h {change_sign}{price_change_24h_pct:.2f}%")
-                parts.append(f"- 当前价格: {' '.join(price_parts)}")
+                    if price_usd is not None:
+                        price_parts = [f"{asset}: ${price_usd:,.4f}"]
+                        if price_change_24h_pct is not None:
+                            change_sign = "+" if price_change_24h_pct >= 0 else ""
+                            price_parts.append(f"24h {change_sign}{price_change_24h_pct:.2f}%")
+                        parts.append(f"- 当前价格 ({asset}): {' '.join(price_parts)}")
+            else:
+                # Single asset - keep existing behavior
+                metrics = price_snapshot.get("metrics", {})
+                price_usd = metrics.get("price_usd")
+                price_change_24h_pct = metrics.get("price_change_24h_pct")
+
+                if price_usd is not None:
+                    price_parts = [f"${price_usd:,.4f}"]
+                    if price_change_24h_pct is not None:
+                        change_sign = "+" if price_change_24h_pct >= 0 else ""
+                        price_parts.append(f"24h {change_sign}{price_change_24h_pct:.2f}%")
+                    parts.append(f"- 当前价格: {' '.join(price_parts)}")
 
         localized_flags = [
             RISK_FLAG_LABELS.get(flag, flag) for flag in ai_risk_flags if flag
