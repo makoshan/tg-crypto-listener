@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Sequence
+from typing import Optional, Sequence
+
+from src.memory.claude_deep_memory_handler import ClaudeDeepAnalysisMemoryHandler
 
 from .base import DeepAnalysisEngine, DeepAnalysisError, build_deep_analysis_messages
 
@@ -32,6 +34,7 @@ class ClaudeCliDeepAnalysisEngine(DeepAnalysisEngine):
         max_retries: int = 1,
         working_directory: str | None = None,
         allowed_tools: Sequence[str] | None = None,
+        memory_handler: Optional[ClaudeDeepAnalysisMemoryHandler] = None,
     ) -> None:
         super().__init__(provider_name="claude_cli", parse_json_callback=parse_json_callback)
         self._cli_path = cli_path or "claude"
@@ -42,6 +45,11 @@ class ClaudeCliDeepAnalysisEngine(DeepAnalysisEngine):
         self._working_directory = working_directory
         # Default allowed tools for deep analysis
         self._allowed_tools = list(allowed_tools) if allowed_tools else ["Bash", "Read"]
+        # Memory handler for deep analysis
+        self._memory_handler = memory_handler
+
+        if self._memory_handler:
+            logger.info("Claude CLI 深度分析记忆系统已启用")
 
     async def analyse(  # pragma: no cover - exercised via dedicated tests
         self,
@@ -87,6 +95,10 @@ class ClaudeCliDeepAnalysisEngine(DeepAnalysisEngine):
                     result.confidence,
                     result.asset,
                 )
+
+                # Store analysis result to memory system
+                self._store_analysis_result(payload, preliminary, result)
+
                 return result
             except (DeepAnalysisError, asyncio.TimeoutError) as exc:
                 last_error = exc
@@ -141,6 +153,15 @@ class ClaudeCliDeepAnalysisEngine(DeepAnalysisEngine):
             joined_refs = "\n".join(self._context_refs)
             sections.append(f"参考资料:\n{joined_refs}")
 
+        # Add memory context if available
+        if self._memory_handler:
+            memory_context = self._retrieve_memory_context(
+                asset=preliminary.asset,
+                event_type=preliminary.event_type
+            )
+            if memory_context:
+                sections.append(memory_context)
+
         # Add tool usage guidelines (same as Codex CLI)
         tool_guidelines = """工具使用守则（必读）:
 
@@ -148,38 +169,47 @@ class ClaudeCliDeepAnalysisEngine(DeepAnalysisEngine):
 
 1. **新闻搜索工具** (search_news.py)
    - 用途：验证事件真实性、获取多源确认、发现关键细节
-   - 命令格式：
-     uvx --with-requirements requirements.txt python scripts/codex_tools/search_news.py \\
+   - 优先命令：
+     python3 scripts/codex_tools/search_news.py \\
+        --query "关键词" --max-results 6
+   - 备用命令（仅当本地 Python 缺少依赖时再使用，会触发网络下载）：
+     uvx --with-requirements requirements.txt python3 scripts/codex_tools/search_news.py \\
          --query "关键词" --max-results 6
    - 输出：JSON 格式，包含 success、data、confidence、triggered、error 字段
    - 何时使用：需要验证消息真伪、获取官方确认、查找事件细节
    - 示例：
-     uvx --with-requirements requirements.txt python scripts/codex_tools/search_news.py \\
+     uvx --with-requirements requirements.txt python3 scripts/codex_tools/search_news.py \\
          --query "Binance ABC token listing official announcement" --max-results 6
 
 2. **价格数据工具** (fetch_price.py)
    - 用途：获取资产实时价格、涨跌幅、市值、交易量数据
-   - 命令格式：
-     uvx --with-requirements requirements.txt python scripts/codex_tools/fetch_price.py \\
+   - 优先命令：
+     python3 scripts/codex_tools/fetch_price.py \\
+        --assets 资产1 资产2 资产3
+   - 备用命令（仅当本地 Python 缺少依赖时再使用，会触发网络下载）：
+     uvx --with-requirements requirements.txt python3 scripts/codex_tools/fetch_price.py \\
          --assets 资产1 资产2 资产3
    - 输出：JSON 格式，包含 success、count、assets 字段（每个资产包含 price、price_change_24h、price_change_1h、price_change_7d、market_cap、volume_24h）
    - 何时使用：需要验证价格异常、评估市场反应、量化涨跌幅
    - 示例（单个资产）：
-     uvx --with-requirements requirements.txt python scripts/codex_tools/fetch_price.py \\
+     python3 scripts/codex_tools/fetch_price.py \\
          --assets BTC
    - 示例（多个资产）：
-     uvx --with-requirements requirements.txt python scripts/codex_tools/fetch_price.py \\
+     python3 scripts/codex_tools/fetch_price.py \\
          --assets BTC ETH SOL
 
 3. **历史记忆检索工具** (fetch_memory.py)
    - 用途：查找历史相似事件、参考过去案例的处理方式
-   - 命令格式：
-     uvx --with-requirements requirements.txt python scripts/codex_tools/fetch_memory.py \\
+   - 优先命令：
+     python3 scripts/codex_tools/fetch_memory.py \\
+        --query "主题描述" --asset 资产代码 --limit 3
+   - 备用命令（仅当本地 Python 缺少依赖时再使用，会触发网络下载）：
+     uvx --with-requirements requirements.txt python3 scripts/codex_tools/fetch_memory.py \\
          --query "主题描述" --asset 资产代码 --limit 3
    - 输出：JSON 格式，包含 success、entries、similarity_floor 字段
    - 何时使用：需要历史案例参考、判断事件独特性、评估风险
    - 示例：
-     uvx --with-requirements requirements.txt python scripts/codex_tools/fetch_memory.py \\
+     python3 scripts/codex_tools/fetch_memory.py \\
          --query "USDC depeg risk" --asset USDC --limit 3
 
 **工具调用规则**：
@@ -202,9 +232,9 @@ class ClaudeCliDeepAnalysisEngine(DeepAnalysisEngine):
 **证据引用示例**（在 notes 中）：
 - "通过搜索工具验证：找到 5 条来源，多源确认=true，官方确认=true，confidence=0.85"
 - "价格数据：BTC $107,817 (-0.68% 24h), ETH $3,245 (+1.2% 24h), SOL $185 (+0.5% 24h)"
-- "价格命令：uvx ... fetch_price.py --assets BTC ETH SOL"
+- "价格命令：python3 scripts/codex_tools/fetch_price.py --assets BTC ETH SOL"
 - "历史记忆检索到 2 条相似案例（similarity > 0.8），过去处理方式为 observe"
-- "搜索命令：uvx ... search_news.py --query 'Binance ABC listing official'"
+- "搜索命令：python3 scripts/codex_tools/search_news.py --query 'Binance ABC listing official'"
 - "链接：[source1_url, source2_url]（来自搜索结果）"
 """
         sections.append(tool_guidelines)
@@ -379,6 +409,94 @@ class ClaudeCliDeepAnalysisEngine(DeepAnalysisEngine):
 
         logger.debug("JSON 提取完成，最终长度: %d", len(candidate))
         return candidate
+
+    def _retrieve_memory_context(self, asset: str, event_type: str) -> str:
+        """
+        检索相关的记忆上下文
+
+        Args:
+            asset: 资产代码
+            event_type: 事件类型
+
+        Returns:
+            格式化的记忆上下文字符串
+        """
+        if not self._memory_handler:
+            return ""
+
+        try:
+            memories = self._memory_handler.retrieve_similar_analyses(
+                asset=asset,
+                event_type=event_type,
+                limit=3
+            )
+
+            if not memories:
+                logger.debug("未找到相关历史记忆")
+                return ""
+
+            # 格式化记忆上下文
+            context_parts = ["历史记忆参考（供深度分析参考）:\n"]
+
+            for i, memory in enumerate(memories, 1):
+                memory_type = memory.get("type", "unknown")
+                content = memory.get("content", "")
+                source = memory.get("source", "")
+
+                # 限制每条记忆的长度
+                if len(content) > 1000:
+                    content = content[:1000] + "\n...[内容已截断]"
+
+                context_parts.append(f"{i}. **{memory_type}** (来源: {source})")
+                context_parts.append(f"```\n{content}\n```\n")
+
+            logger.info("✅ 检索到 %d 条历史记忆，已添加到 prompt", len(memories))
+            return "\n".join(context_parts)
+
+        except Exception as exc:
+            logger.error("检索记忆上下文失败: %s", exc, exc_info=True)
+            return ""
+
+    def _store_analysis_result(
+        self,
+        payload: "EventPayload",
+        preliminary: "SignalResult",
+        final_result: "SignalResult",
+    ):
+        """
+        存储分析结果到记忆系统
+
+        Args:
+            payload: 事件载荷
+            preliminary: 初步分析结果
+            final_result: 最终分析结果
+        """
+        if not self._memory_handler:
+            return
+
+        try:
+            analysis_data = {
+                "timestamp": payload.timestamp.isoformat(),
+                "event_summary": preliminary.summary[:100],  # 截断摘要
+                "preliminary_confidence": preliminary.confidence,
+                "preliminary_action": preliminary.action,
+                "final_confidence": final_result.confidence,
+                "adjustment_reason": f"confidence {preliminary.confidence:.2f} → {final_result.confidence:.2f}",
+                "verification_summary": "工具验证已完成" if final_result.notes else "无工具验证",
+                "key_insights": final_result.notes[:200] if final_result.notes else "无洞察",
+                "improvement_suggestions": "继续改进分析流程",
+            }
+
+            self._memory_handler.store_analysis_memory(
+                asset=final_result.asset,
+                event_type=final_result.event_type,
+                analysis_data=analysis_data
+            )
+
+            logger.info("✅ 分析结果已存储到记忆系统")
+
+        except Exception as exc:
+            logger.error("存储分析结果到记忆失败: %s", exc, exc_info=True)
 
 
 from typing import TYPE_CHECKING  # isort: skip

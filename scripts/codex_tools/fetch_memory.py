@@ -3,7 +3,13 @@
 Codex CLI 工具：记忆检索
 功能：调用 HybridMemoryRepository.fetch_memories() 并输出标准 JSON 格式供 Agent 解析
 
-使用示例：
+推荐用法：
+    python scripts/codex_tools/fetch_memory.py \
+        --query "USDC depeg risk" \
+        --asset USDC \
+        --limit 3
+
+备用（缺少依赖时再使用，需网络下载）：
     uvx --with-requirements requirements.txt python scripts/codex_tools/fetch_memory.py \
         --query "USDC depeg risk" \
         --asset USDC \
@@ -20,7 +26,7 @@ from pathlib import Path
 project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
-from src.config import load_runtime_config
+from src.config import Config
 from src.memory.factory import create_memory_backend
 
 
@@ -46,8 +52,8 @@ async def main():
     args = parser.parse_args()
 
     try:
-        # Load runtime configuration
-        config = load_runtime_config()
+        # Load configuration
+        config = Config()
 
         # Create memory backend
         memory_bundle = create_memory_backend(config)
