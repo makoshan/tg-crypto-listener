@@ -181,19 +181,10 @@ DEEP_ANALYSIS_FALLBACK_PROVIDER=codex_cli
 
 ## 测试验证
 
-运行集成测试：
+使用现有深度分析测试集回归：
 
 ```bash
-python3 test_claude_cli_integration.py
-```
-
-预期输出：
-```
-✅ PASS: Config validation
-✅ PASS: Factory creation
-✅ PASS: Prompt building
-Total: 3/3 tests passed
-🎉 All integration tests passed!
+pytest tests/ai/deep_analysis -v
 ```
 
 ## 性能调优

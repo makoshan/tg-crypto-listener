@@ -106,10 +106,10 @@ memories/
 
 ```bash
 # 测试 Supabase 连接和表结构
-uv run --with-requirements requirements.txt python test_supabase.py
+pytest tests/db/test_supabase.py -v
 
 # 测试记忆检索效果
-uv run --with-requirements requirements.txt python test_memory_retrieval.py
+pytest tests/memory/test_multi_source_repository.py -v
 ```
 
 ## 优势

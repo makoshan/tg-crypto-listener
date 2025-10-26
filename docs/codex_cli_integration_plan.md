@@ -800,7 +800,7 @@ Claude CLI 是 Anthropic 官方的命令行工具，具有完整的 AI Agent 能
 - ✅ **批量价格查询**：成功查询 BTC, XAUT, ETH 等多个币种
 - ✅ **零额外费用**：使用现有 Claude 订阅，无需额外 API 费用
 
-**测试结果**（`test_claude_cli.py`）：
+**测试结果（手动验证）**：
 
 | 测试项 | 结果 | 延迟 | 详情 |
 |--------|------|------|------|
@@ -1227,11 +1227,8 @@ codex exec --skip-git-repo-check -o /tmp/out.txt "返回 JSON: {\"test\": true}"
 cat /tmp/out.txt
 ```
 
-**Claude CLI 测试**✅：
+**Claude CLI 快速验证**✅：
 ```bash
-# 运行完整测试套件
-python3 test_claude_cli.py
-
 # 单次快速测试
 echo "返回 JSON: {\"test\": true}" | claude --print --dangerously-skip-permissions --output-format text
 ```

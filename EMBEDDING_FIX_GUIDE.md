@@ -69,30 +69,15 @@ WITH (lists = 100);
 
 ## 🧪 验证修复
 
-执行迁移脚本后，运行验证工具：
+执行迁移脚本后，运行 Supabase 向量检索用例：
 
 ```bash
-python3 verify_embedding_issue.py
+pytest tests/db/test_supabase.py::test_3_embedding_search -v
 ```
 
-**期望输出**：
-
-```
-✅ 找到 5 条记录
-
-记录 #1 (ID: 1863)
-  ✅ 格式正确：vector 类型（返回为列表）
-  维度: 1536
-  前 5 个值: [-0.002, -0.017, ...]
-
-✅ RPC 调用成功
-返回结果数量: 3
-
-✅ 成功检索到记忆！
-  [1] similarity=0.856, confidence=0.75, assets=['BTC']
-  [2] similarity=0.823, confidence=0.80, assets=['ETH']
-  [3] similarity=0.791, confidence=0.70, assets=['SOL']
-```
+**期望结果**：
+- 测试用例通过（pytest 输出 `PASSED`）
+- 日志显示成功检索到多条相似记忆记录
 
 ---
 
@@ -211,9 +196,8 @@ USING hnsw(embedding vector_cosine_ops);
 ## ✅ 检查清单
 
 - [ ] 执行数据库迁移脚本
-- [ ] 运行 `python3 verify_embedding_issue.py` 验证
-- [ ] 确认输出显示 "✅ 格式正确：vector 类型"
-- [ ] 确认 RPC 查询返回 > 0 条结果
+- [ ] 运行 `pytest tests/db/test_supabase.py::test_3_embedding_search -v`
+- [ ] 检查日志确认检索到的记忆条目数量 > 0
 - [ ] 重启应用
 - [ ] 观察日志确认 Memory 功能正常
 - [ ] 触发一条 AI 分析，确认记忆注入

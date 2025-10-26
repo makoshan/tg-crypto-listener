@@ -36,19 +36,14 @@ npm run monitor    # Real-time monitoring
 
 PM2 configuration is in `ecosystem.config.js`, which runs `uvx --with-requirements requirements.txt python -m src.listener`.
 
-### Testing Utilities
+### Tests
 
 ```bash
-# Test Gemini API
-python scripts/gemini_stream_example.py
+# Run full test suite
+pytest
 
-# Database verification
-python verify_supabase.py
-python check_db.py
-
-# Memory system testing
-python test_memory_retrieval.py
-python diagnose_memory.py
+# Run only AI-related tests
+pytest tests/ai -v
 ```
 
 ## Architecture Overview
@@ -241,11 +236,11 @@ src/
 
 ## Testing
 
-No formal test suite currently. Key verification scripts:
-- `verify_supabase.py`: Test Supabase connection and RPC functions
-- `test_memory_retrieval.py`: Validate memory repository operations
-- `test_context_management.py`: Test memory context editing for Claude
-- `diagnose_memory.py`: Debug memory backend issues
+Primary automated tests live under `tests/`. Focus areas include:
+- `tests/ai/` for deep analysis engines and tooling
+- `tests/db/` for Supabase repositories
+- `tests/memory/` for memory backends
+- `tests/test_signal_deduplicator.py` for duplicate detection
 
 ## Documentation
 

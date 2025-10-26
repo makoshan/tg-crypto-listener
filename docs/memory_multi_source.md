@@ -383,8 +383,8 @@ rg --no-heading SUPABASE_SECONDARY .env
 
 ### 7.2 本地验证流程
 
-1. 运行 `diagnose_memory.py`，确认主库配置正常。
-2. 运行新增的 `diagnose_secondary_memory.py`（可选），专门检查副库 RPC 是否可用。
+1. 运行 `pytest tests/db/test_supabase.py -v`，确认主库配置正常。
+2. 运行 `pytest tests/memory/test_multi_source_repository.py -v`，验证副库合并逻辑。
 
 ### 7.3 集成测试示例
 
