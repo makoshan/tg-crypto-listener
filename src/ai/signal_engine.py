@@ -555,7 +555,17 @@ class AiSignalEngine:
         # airdrop: 空投类活动价值低、投机性强
         # Binance Alpha 相关的 listing 也倾向于低市值、高投机，通过 AI prompt 控制置信度
         excluded_event_types = {"macro", "other", "airdrop", "governance", "celebrity", "scam_alert"}
-        should_skip_deep = gemini_result.event_type in excluded_event_types
+
+        # 主流币例外：即使是macro事件，如果涉及BTC/ETH/SOL也触发深度分析
+        # 例如：川普贸易战、美联储政策等宏观事件对主流币有直接影响
+        mainstream_assets = {"BTC", "ETH", "SOL"}
+        asset_set = set(gemini_result.asset.split(",")) if gemini_result.asset and gemini_result.asset != "NONE" else set()
+        is_mainstream = bool(asset_set & mainstream_assets)
+
+        should_skip_deep = (
+            gemini_result.event_type in excluded_event_types and
+            not is_mainstream  # 主流币涉及的macro事件不跳过
+        )
 
         deep_engine = self._deep_engine
         fallback_engine = self._deep_fallback_engine
@@ -569,9 +579,12 @@ class AiSignalEngine:
         rate_limited = time_since_last_call < self._deep_min_interval
 
         if should_skip_deep and is_high_value:
+            skip_reason = f"低价值事件类型 {gemini_result.event_type}"
+            if is_mainstream:
+                skip_reason += " (主流币例外，将触发深度分析)"
             logger.debug(
-                "⏭️  跳过深度分析（低价值事件类型 %s）: confidence=%.2f asset=%s",
-                gemini_result.event_type,
+                "⏭️  跳过深度分析（%s）: confidence=%.2f asset=%s",
+                skip_reason,
                 gemini_result.confidence,
                 gemini_result.asset,
             )
@@ -860,6 +873,10 @@ class AiSignalEngine:
             has_crypto_asset=has_crypto_asset,
             has_noise_flag=has_noise_flag,
         )
+
+        # Apply post-validation rules to catch AI inconsistencies
+        self._apply_post_validation_rules(result)
+
         return result
 
 
@@ -954,6 +971,114 @@ class AiSignalEngine:
         if not has_crypto_asset and "data_incomplete" not in result.risk_flags:
             result.risk_flags.append("data_incomplete")
 
+    def _apply_post_validation_rules(self, result: SignalResult) -> None:
+        """Apply hard validation rules to catch AI inconsistencies.
+
+        This method enforces critical business rules that the AI prompt alone
+        cannot guarantee, particularly around conflicting signals (e.g., high
+        confidence but stale event, buy action but no tradeable asset).
+        """
+        modified = False
+        validation_notes = []
+
+        # Rule 1: stale_event flag MUST force low confidence and observe action
+        if "stale_event" in result.risk_flags:
+            if result.confidence > 0.4:
+                logger.warning(
+                    "⚠️ 后置验证：检测到 stale_event 但 confidence=%.2f > 0.4，强制降低到 0.35",
+                    result.confidence,
+                )
+                result.confidence = 0.35
+                validation_notes.append("消息过期，置信度已强制降低")
+                modified = True
+
+            if result.action in {"buy", "sell"}:
+                logger.warning(
+                    "⚠️ 后置验证：检测到 stale_event 但 action=%s，强制改为 observe",
+                    result.action,
+                )
+                result.action = "observe"
+                result.direction = "neutral"
+                validation_notes.append("消息过期，操作已改为观察")
+                modified = True
+
+        # Rule 2: Conflicting risk flags (speculative + high confidence buy/sell)
+        high_risk_flags = {"speculative", "vague_timeline", "unverifiable"}
+        has_high_risk = any(flag in high_risk_flags for flag in result.risk_flags)
+
+        if has_high_risk and result.action in {"buy", "sell"} and result.confidence >= 0.7:
+            logger.warning(
+                "⚠️ 后置验证：检测到高风险标志 %s 但 action=%s confidence=%.2f，强制改为 observe 并降低置信度",
+                [f for f in result.risk_flags if f in high_risk_flags],
+                result.action,
+                result.confidence,
+            )
+            result.action = "observe"
+            result.direction = "neutral"
+            result.confidence = min(result.confidence, 0.55)
+            validation_notes.append("投机性内容，已改为观察")
+            modified = True
+
+        # Rule 3: No tradeable asset (NONE) but action is buy/sell
+        if result.asset == "NONE" and result.action in {"buy", "sell"}:
+            logger.warning(
+                "⚠️ 后置验证：asset=NONE 但 action=%s，强制改为 observe",
+                result.action,
+            )
+            result.action = "observe"
+            result.direction = "neutral"
+            result.confidence = min(result.confidence, 0.40)
+            validation_notes.append("无可交易标的，已改为观察")
+            modified = True
+
+        # Rule 4: Notes mention "未发行"/"将推出"/"计划" but action is buy/sell
+        future_keywords = ["未发行", "将推出", "计划推出", "即将推出", "将要", "准备推出"]
+        if result.notes and any(kw in result.notes for kw in future_keywords):
+            if result.action in {"buy", "sell"}:
+                logger.warning(
+                    "⚠️ 后置验证：备注提及未来事件但 action=%s，强制改为 observe",
+                    result.action,
+                )
+                result.action = "observe"
+                result.direction = "neutral"
+                result.confidence = min(result.confidence, 0.40)
+                validation_notes.append("代币未发行，暂无交易机会")
+                modified = True
+
+        # Rule 5: Confidence and action mismatch with risk level
+        # If confidence < 0.5 but action is buy/sell with high strength, force corrections
+        if result.confidence < 0.5 and result.action in {"buy", "sell"} and result.strength == "high":
+            logger.warning(
+                "⚠️ 后置验证：低置信度 %.2f 但 action=%s strength=%s，强制改为 observe 和 low strength",
+                result.confidence,
+                result.action,
+                result.strength,
+            )
+            result.action = "observe"
+            result.direction = "neutral"
+            result.strength = "low"
+            validation_notes.append("置信度与操作强度不匹配")
+            modified = True
+
+        # Append validation notes if corrections were made
+        if validation_notes:
+            prefix = "【后置验证修正】"
+            corrections = "；".join(validation_notes)
+            if result.notes:
+                result.notes = f"{prefix}{corrections}。{result.notes}"
+            else:
+                result.notes = f"{prefix}{corrections}"
+
+        # Re-evaluate status after modifications
+        if modified:
+            self._refresh_signal_status(result)
+            logger.info(
+                "✅ 后置验证完成: action=%s confidence=%.2f status=%s",
+                result.action,
+                result.confidence,
+                result.status,
+            )
+
     def _refresh_signal_status(self, result: SignalResult) -> None:
         """Re-run status gating using current signal attributes."""
         has_crypto_asset = bool(result.asset and result.asset != "NONE")
@@ -1032,10 +1157,12 @@ def build_signal_prompt(payload: EventPayload) -> list[dict[str, str]]:
         "   - **强制降低 confidence -0.30 to -0.50**，市场大概率已消化\n"
         "   - action 强制改为 \"observe\"（除非是长期趋势分析）\n"
         "   - 在 notes 中明确标注：\"消息已过期（X小时前），市场可能已反应\"\n"
-        "4. **事后回顾/历史总结（识别语义特征）**：\n"
+        "4. **事后回顾/历史总结/重复观点（识别语义特征）**：\n"
         "   - 关键词：\"回顾\"、\"总结\"、\"...之后\"、\"事件后\"、\"历史上...\" → 这不是实时交易机会\n"
+        "   - 历史记忆显示类似观点曾多次出现（重复性言论）→ 非新鲜信息\n"
+        "   - 仅观点表达，无实际行动或数据支撑（如名人喊单、分析师观点）→ 不可执行\n"
         "   - **强制降低 confidence -0.40 to -0.60**，action=observe\n"
-        "   - 在 notes 中标注：\"事后回顾类内容，非实时交易信号\"\n"
+        "   - 在 notes 中标注：\"事后回顾/重复观点/纯观点表达，非实时交易信号\"\n"
         "5. **特殊情况例外**：\n"
         "   - 长期趋势分析（如机构采用、监管政策）即使消息较旧，但如果仍具备长期影响 → timeframe=long，confidence 适度降低但不强制 ≤0.4\n"
         "   - 历史数据对比（如\"与2024年X月类似\"）用于增强判断可信度 → 不视为过期，但需结合当前市场状态\n"
@@ -1092,8 +1219,27 @@ def build_signal_prompt(payload: EventPayload) -> list[dict[str, str]]:
         "   - **示例**：\"Circle 获得美联储支付通道，USDC 市场地位提升\" → asset=NONE，notes 说明 \"USDC 是稳定币不可交易，若想受益应关注使用 USDC 的 DeFi 协议或支付类代币\"\n"
         "   - **例外情况**：仅当稳定币出现明确脱锚风险（价格偏离 >5%、depeg、暴跌等） → action=sell、direction=short，confidence ≥0.8\n"
         "   - 对于稳定币相关利好消息，应在 notes 中建议关注受益的 DeFi 协议（Aave、Curve、Uniswap 等）或其原生代币，而非稳定币本身\n"
-        "\n## 历史参考\n"
-        "historical_reference.entries 若非空，请对比相似案例并在 notes 简述结论（如“与 2024-08 BTC ETF 净流入类似”）；若为空可忽略。\n"
+        "\n## 历史参考与深度对比分析 ⚠️ 必读\n"
+        "**历史记忆系统已为你检索了最相似的历史事件，你必须认真分析对比**：\n"
+        "1. **宏观事件深度对比**（如川普贸易战、美联储政策、地缘冲突）：\n"
+        "   - 当前消息涉及宏观主题时，必须查找 historical_reference.entries 中是否有相似的宏观事件\n"
+        "   - 对比历史事件的市场反应：当时BTC/ETH/SOL价格如何变化？风险偏好如何？\n"
+        "   - 分析本次事件与历史事件的异同：是否有新变量？市场环境是否不同？\n"
+        "   - 在 notes 中明确写明：\"参考历史记忆 [X月Y日类似事件]，当时市场反应为..., 本次差异在于...\"\n"
+        "2. **资产价格联动分析**：\n"
+        "   - 历史记忆显示某资产在类似事件下的表现 → 评估本次是否会重复\n"
+        "   - 如历史记忆显示BTC因宏观事件下跌5% → 评估本次事件是否会导致类似下跌\n"
+        "   - 必须在 summary 或 notes 中明确说明联动逻辑：\"[宏观事件] → BTC下跌 → 全币圈承压\"\n"
+        "3. **巨鲸行为模式识别**：\n"
+        "   - 历史记忆中有巨鲸在类似事件下的操作 → 评估当前巨鲸动向是否符合模式\n"
+        "   - 某巨鲸历史上在X事件前精准开空 → 本次该巨鲸再次开空 → 高置信度信号\n"
+        "4. **事件独特性判断**：\n"
+        "   - 如果历史记忆中找不到相似案例 → 说明这是独特事件 → 提高警惕或降低置信度\n"
+        "   - 如果历史记忆显示该主题/观点反复出现 → 说明是老生常谈 → 大幅降低置信度\n"
+        "5. **强制检查规则**：\n"
+        "   - 如果 historical_reference.entries 非空（有历史记忆）→ 必须在 notes 中引用至少1条历史案例\n"
+        "   - 如果 historical_reference.entries 为空 → 在 notes 中说明\"无历史相似案例，属独特事件\"\n"
+        "   - 禁止忽略历史记忆！每条历史记忆都是宝贵的决策参考\n"
         "\n## 图片处理\n"
         "识别图片中的交易对、公告主体或链上指标；若图片与加密无关或无法读出，请 asset=NONE 并添加 data_incomplete，notes 说明“图片无法识别”或“与加密无关”。\n"
         "\n所有字段使用简体中文，禁止输出 Markdown、表格或多余解释，确保 JSON 可直接解析。"
