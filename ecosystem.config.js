@@ -14,12 +14,13 @@ module.exports = {
     log_file: './logs/combined.log',
     out_file: './logs/out.log',
     error_file: './logs/error.log',
-    log_date_format: 'YYYY-MM-DD HH:mm:ss Z',
+    time: false,  // Disable PM2 timestamps (Python logs already have Beijing time)
 
     // 环境变量（会自动读取 .env 文件）
     env: {
       NODE_ENV: 'production',
       PYTHONPATH: '.',
+      TZ: 'Asia/Shanghai',
     },
     env_file: '.env',
 

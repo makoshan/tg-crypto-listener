@@ -262,7 +262,7 @@ async def test_claude_cli_price_query():
 
 任务：
 1. 使用以下命令查询价格：
-   uvx --with-requirements requirements.txt python scripts/codex_tools/fetch_price.py --assets BTC XAUT ETH
+   python scripts/codex_tools/fetch_price.py --assets BTC XAUT ETH
 
 2. 解析输出并返回分析结果
 

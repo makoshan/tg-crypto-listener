@@ -70,6 +70,11 @@ class GeminiClient:
         force_http_fallback: Optional[bool] = None,
         base_url: Optional[str] = None,
     ) -> None:
+        logger.info(
+            "GeminiClient.__init__ called with api_keys=%s (type=%s)",
+            "provided" if api_keys else "None",
+            type(api_keys).__name__ if api_keys else "NoneType",
+        )
         self._model_name = model_name
         self._timeout = float(timeout)
         self._max_retries = max(0, int(max_retries))
@@ -91,12 +96,24 @@ class GeminiClient:
 
         # Initialize key rotation if multiple keys provided
         self._key_rotator: Optional[GeminiKeyRotator] = None
+        logger.info(
+            "🔍 Key rotation check: api_keys_provided=%s (count=%d), GeminiKeyRotator=%s",
+            bool(api_keys),
+            len(api_keys) if api_keys else 0,
+            "available" if GeminiKeyRotator is not None else "NOT_AVAILABLE",
+        )
         if api_keys and len(api_keys) > 1 and GeminiKeyRotator is not None:
             self._key_rotator = GeminiKeyRotator(api_keys)
             logger.info(f"🔑 启用 Gemini API key 轮换机制，共 {len(api_keys)} 个 keys")
             self._current_api_key = self._key_rotator.get_next_key()
         else:
             self._current_api_key = (api_key or "").strip()
+            if api_keys and len(api_keys) > 1:
+                logger.warning(
+                    "⚠️ 配置了 %d 个 API keys 但轮换器未初始化 (GeminiKeyRotator=%s)",
+                    len(api_keys),
+                    "None" if GeminiKeyRotator is None else "available",
+                )
 
         if not self._current_api_key:
             raise AiServiceError("Gemini API key is required")
@@ -150,6 +167,22 @@ class GeminiClient:
                     attempt + 1,
                     self._max_retries + 1,
                 )
+                # 超时也是暂时性错误,轮换 API key
+                if self._key_rotator is not None:
+                    old_key_preview = self._current_api_key[:8] if self._current_api_key else "unknown"
+                    self._current_api_key = self._key_rotator.get_next_key()
+                    new_key_preview = self._current_api_key[:8]
+                    logger.info(
+                        "🔄 检测到超时错误，轮换 API key: %s... → %s...",
+                        old_key_preview,
+                        new_key_preview,
+                    )
+                    # 标记失败的 key
+                    if self._client_api_key:
+                        self._key_rotator.mark_key_failed(self._client_api_key)
+                    # 强制下次调用重建客户端
+                    self._client = None
+                    self._client_api_key = None
             except Exception as exc:  # pragma: no cover - broader network errors
                 last_exc = exc
                 last_error_message, last_error_temporary = self._normalize_exception(exc)
@@ -161,6 +194,23 @@ class GeminiClient:
                 )
                 debug_hint = "Gemini 暂时性异常详情" if last_error_temporary else "Gemini 非暂时性异常详情"
                 logger.debug(debug_hint, exc_info=True)
+
+                # 如果是暂时性错误且配置了多个 key,立即轮换到下一个 key
+                if last_error_temporary and self._key_rotator is not None:
+                    old_key_preview = self._current_api_key[:8] if self._current_api_key else "unknown"
+                    self._current_api_key = self._key_rotator.get_next_key()
+                    new_key_preview = self._current_api_key[:8]
+                    logger.info(
+                        "🔄 检测到暂时性错误，轮换 API key: %s... → %s...",
+                        old_key_preview,
+                        new_key_preview,
+                    )
+                    # 标记失败的 key
+                    if self._client_api_key:
+                        self._key_rotator.mark_key_failed(self._client_api_key)
+                    # 强制下次调用重建客户端
+                    self._client = None
+                    self._client_api_key = None
             else:
                 if not response.text and not response.parts:
                     raise AiServiceError("Gemini 返回空响应")

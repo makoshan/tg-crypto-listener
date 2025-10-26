@@ -3,12 +3,16 @@
 Codex CLI 工具：价格数据获取
 功能：调用 PriceTool.snapshot() 批量获取多个资产的价格数据
 
-使用示例：
+推荐用法：
     # 单个资产
-    uvx --with-requirements requirements.txt python scripts/codex_tools/fetch_price.py \
+    python scripts/codex_tools/fetch_price.py \
         --assets BTC
 
     # 多个资产
+    python scripts/codex_tools/fetch_price.py \
+        --assets BTC ETH SOL
+
+备用（缺少依赖时再使用，需网络下载）：
     uvx --with-requirements requirements.txt python scripts/codex_tools/fetch_price.py \
         --assets BTC ETH SOL
 """

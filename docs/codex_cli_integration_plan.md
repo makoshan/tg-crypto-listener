@@ -418,22 +418,343 @@ Context Gather (收集历史)
 
 ---
 
+### 3.4 OpenAI Compatible Engine（千问3 Max / OpenAI Function Calling 方案）✨
+
+**测试状态**: ✅ **已验证可用** (2025-10-24)
+**使用场景**：有阿里云百炼/OpenAI API密钥，追求统一OpenAI接口、低延迟、内置联网搜索能力（千问特色）。
+
+**核心理念**：千问3 Max 和 OpenAI GPT-4 都采用 **OpenAI 兼容 API**，通过统一的 `OpenAI` SDK + 不同 `base_url` 实现多provider支持。
+
+**关键设计思想**：
+- ✅ **与 Gemini 深度分析代码逻辑完全相同**：同样是 Function Calling + 多轮工具调用 + 综合分析
+- ✅ **复用 Gemini 的提示词和工具定义**：无需重新设计分析逻辑
+- ✅ **仅 API 调用层不同**：Gemini 使用 `google.generativeai`，千问使用 `openai.OpenAI`
+- ✅ **本质都是 API 引擎**：区别于 CLI Agent（Codex/Claude CLI）的黑盒执行方式
+
+#### 3.4.1 统一实现设计
+
+```python
+# src/ai/deep_analysis/openai_compatible.py
+from openai import OpenAI
+
+class OpenAICompatibleEngine(BaseDeepAnalysisEngine):
+    """统一的 OpenAI 兼容 API 引擎（千问3 Max、OpenAI GPT-4等）"""
+
+    def __init__(self, api_key: str, base_url: str, model: str, parse_json_callback, ...):
+        self.client = OpenAI(
+            api_key=api_key,
+            base_url=base_url,  # 关键：通过base_url区分不同provider
+        )
+        self.model = model
+        self._parse_json_callback = parse_json_callback
+
+    async def analyze(self, payload: NewsEventPayload) -> dict:
+        """通过 OpenAI Compatible Function Calling 执行深度分析"""
+
+        # 1. 构建分析上下文和工具定义
+        messages = self._build_analysis_messages(payload)
+        tools = self._build_tools()  # 搜索、价格、链上数据等
+
+        # 2. Tool Calling Loop: 自主决策和调用工具
+        while not planning_complete:
+            # 2.1 调用 OpenAI Compatible Function Calling
+            extra_body = {}
+            if self.provider == "qwen" and self.enable_search:
+                extra_body = {"enable_search": True}  # 千问特色：内置联网搜索
+
+            response = await self.client.chat.completions.create(
+                model=self.model,
+                messages=messages,
+                tools=tools,
+                extra_body=extra_body,
+            )
+
+            # 2.2 处理工具调用
+            if response.choices[0].message.tool_calls:
+                for tool_call in response.choices[0].message.tool_calls:
+                    tool_result = await self._execute_tool(tool_call)
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tool_call.id,
+                        "content": tool_result
+                    })
+            else:
+                planning_complete = True
+
+        # 3. 解析最终 JSON 信号
+        final_signal = self._parse_json(response.choices[0].message.content)
+        return final_signal
+```
+
+#### 3.4.2 支持的 Provider（当前 + 预留）
+
+| Provider | 状态 | Base URL | API Key 配置 | 模型示例 | 特色功能 |
+|----------|------|----------|-------------|---------|---------|
+| **千问3 Max** | ✨ **优先实现** | `https://dashscope.aliyuncs.com/compatible-mode/v1` | `DASHSCOPE_API_KEY` | `qwen-plus`, `qwen-max` | ✅ 内置联网搜索 `enable_search=True` |
+| **OpenAI** | 🔮 预留 | `https://api.openai.com/v1` | `OPENAI_API_KEY` | `gpt-4-turbo`, `gpt-4o` | - |
+| **DeepSeek** | 🔮 预留 | `https://api.deepseek.com/v1` | `DEEPSEEK_API_KEY` | `deepseek-chat` | - |
+
+**关键设计**：
+- ✅ **统一代码实现**：所有 OpenAI 兼容 provider 共享 `openai_compatible.py`
+- ✅ **配置切换**：通过 `DEEP_ANALYSIS_ENGINE`、`base_url`、`api_key` 区分不同 provider
+- ✅ **易扩展**：新增 OpenAI 兼容 provider 只需配置，无需新代码
+
+#### 3.4.3 配置示例
+
+**千问3 Max配置**（优先实现）：
+```bash
+# 深度分析引擎选择
+DEEP_ANALYSIS_ENGINE=qwen
+
+# 千问深度分析配置
+DASHSCOPE_API_KEY=sk-xxx
+QWEN_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
+QWEN_DEEP_MODEL=qwen-plus              # 或 qwen-max、qwen-turbo
+QWEN_DEEP_TIMEOUT_SECONDS=30.0
+QWEN_DEEP_RETRY_ATTEMPTS=1
+QWEN_DEEP_MAX_FUNCTION_TURNS=6
+QWEN_ENABLE_SEARCH=true                # 千问特色：启用内置联网搜索
+```
+
+**OpenAI配置**（预留，未来实现）：
+```bash
+# 深度分析引擎选择
+DEEP_ANALYSIS_ENGINE=openai
+
+# OpenAI深度分析配置
+OPENAI_API_KEY=sk-xxx
+OPENAI_BASE_URL=https://api.openai.com/v1
+OPENAI_DEEP_MODEL=gpt-4-turbo
+OPENAI_DEEP_TIMEOUT_SECONDS=30.0
+OPENAI_DEEP_MAX_FUNCTION_TURNS=6
+```
+
+#### 3.4.4 执行流程
+
+```
+Context Gather (收集历史)
+→ Tool Planning (OpenAI Compatible Function Calling 决策)
+→ Tool Executor (搜索/价格/链上数据，或千问的 enable_search)
+→ 循环直到完成
+→ Synthesis (综合生成 JSON)
+(总耗时: 千问 5-12s, OpenAI 5-10s 预估)
+```
+
+#### 3.4.5 千问3 Max 测试结果 ✅
+
+**测试日期**: 2025-10-24
+**测试模型**: `qwen-plus`
+**测试状态**: ✅ 所有测试通过 (4/4)
+
+| 测试项 | 结果 | 延迟 | 详情 |
+|--------|------|------|------|
+| **基础 JSON 输出** | ✅ PASS | 5.20s | 直接输出完美 JSON，无 markdown 包裹 |
+| **Function Calling** | ✅ PASS | 11.50s | 3 回合完成工具调用 + 综合分析 |
+| **内置联网搜索** | ✅ PASS | 9.13s | 成功验证 PENGU 历史事件，搜索质量高 |
+| **批量价格查询** | ✅ PASS | 5.05s | 2 回合完成，检测到所有币种 (BTC/ETH/SOL) |
+
+**测试用例 1: 基础 JSON 输出**
+```json
+{
+  "summary": "币安宣布上线ABC代币，预计明日开盘交易，可能引发市场关注和买盘增加。",
+  "event_type": "listing",
+  "asset": "ABC",
+  "action": "buy",
+  "confidence": 0.75,
+  "notes": "主流交易所上线通常带来流动性提升和短期价格上行压力..."
+}
+```
+- 耗时: 5.20s
+- ✅ 所有必需字段齐全
+- ✅ JSON 格式完美，无需清理
+
+**测试用例 2: Function Calling 工具调用**
+- 回合 1: 调用 `search_news` 验证消息真实性
+- 回合 2: 调用 `get_price` 查询价格
+- 回合 3: 综合分析输出 JSON
+- 总耗时: 11.50s
+- ✅ 工具调用决策正确
+- ✅ 参数传递准确
+- ✅ 综合分析质量高
+
+**测试用例 3: 内置联网搜索 (enable_search=True)**
+```json
+{
+  "summary": "Binance并未在2024年10月宣布上线PENGU代币。根据现有信息，币安相关活动始于2024年12月...",
+  "confidence": 0.95,
+  "notes": "经搜索验证，没有证据显示Binance在2024年10月宣布上线PENGU代币。相反，可靠资料显示：1）Pudgy Penguins于2024年12月6日宣布其官方代币PENGU将于2024年上线Solana；2）Binance于2024年12月16日发布公告..."
+}
+```
+- 耗时: 9.13s
+- ✅ 自动联网搜索
+- ✅ 提供详细时间线和来源
+- ✅ 验证质量极高
+
+#### 3.4.6 千问3 Max 特点（已验证）
+
+**核心优势** ✨：
+- ✅ **JSON 输出质量极高**：100% 成功率，直接输出标准 JSON，无 markdown 包裹
+- ✅ **延迟表现优秀**：基础分析 5.2s，Function Calling 11.5s（**比 Codex CLI 快 2-3 倍**）
+- ✅ **内置联网搜索强大**：`enable_search=True` 可自动搜索验证，减少 Tavily API 费用
+- ✅ **Function Calling 稳定**：与 Gemini 相同的工具调用能力，自动决策和执行
+- ✅ **OpenAI 兼容接口**：使用 `from openai import OpenAI`，代码迁移简单
+- ✅ **国内 API 低延迟**：阿里云百炼，无需翻墙，响应速度快
+- ✅ **多模型选择**：qwen-plus、qwen-max、qwen-turbo 灵活切换
+- ✅ **代码复用**：未来接入 OpenAI 无需新代码，只改配置
+
+**成本**：
+- 💰 需要阿里云百炼 API 密钥（有 API 调用成本，但比国际 API 便宜）
+
+**适用场景**：
+- ✅ **延迟敏感场景**：5-11s 延迟，与 Gemini 相当，比 CLI Agent 快 2-3 倍
+- ✅ **需要联网搜索**：内置 `enable_search`，减少外部搜索 API 费用
+- ✅ **国内部署**：无需翻墙，延迟更低
+- ✅ **生产环境**：JSON 输出 100% 稳定，Function Calling 可靠
+- ✅ **未来计划接入 OpenAI GPT-4**：代码完全复用
+
+**选择理由**：
+- **延迟优先 + 国内 API** → **千问（实测 5-11s，比 Gemini 相当，比 CLI Agent 快）**
+- **费用优先 + 内置搜索** → **千问（相比 Gemini + Tavily 组合更经济）**
+- **OpenAI 兼容** → **千问/OpenAI（代码复用，SDK 熟悉度高）**
+- **稳定性优先** → **千问（JSON 100% 成功率，实测验证）**
+
+---
+
+### 3.5 Anthropic Compatible Engine（Claude / 智谱 GLM 方案）🔮
+
+**测试状态**: Claude已实现，智谱预留
+**使用场景**：有 Anthropic/智谱 API密钥，追求统一 Anthropic 接口、长上下文、工具调用能力。
+
+**核心理念**：Claude 和智谱 ChatGLM 都采用 **Anthropic 兼容 API**，通过统一的 `anthropic` SDK + 不同配置实现多provider支持。
+
+#### 3.5.1 支持的 Provider（当前 + 预留）
+
+| Provider | 状态 | SDK | API Key 配置 | 模型示例 | 特色功能 |
+|----------|------|-----|-------------|---------|---------|
+| **Claude** | ✅ **已实现** | `anthropic` | `CLAUDE_API_KEY` | `claude-sonnet-4-5` | ✅ Memory Tool, 长上下文 |
+| **智谱 ChatGLM** | 🔮 **预留** | `zhipuai` (兼容 Anthropic) | `ZHIPU_API_KEY` | `glm-4`, `glm-4-plus` | - |
+
+**关键设计**：
+- ✅ **复用 Claude 实现**：智谱未来可复用 `src/ai/deep_analysis/claude.py`
+- ✅ **统一接口**：都支持 Anthropic Messages API 和工具调用
+- ✅ **易扩展**：新增 Anthropic 兼容 provider 只需适配 SDK 初始化
+
+**配置示例**（智谱预留，未来实现）：
+```bash
+# 深度分析引擎选择
+DEEP_ANALYSIS_ENGINE=zhipu
+
+# 智谱深度分析配置
+ZHIPU_API_KEY=xxx
+ZHIPU_DEEP_MODEL=glm-4-plus
+ZHIPU_DEEP_TIMEOUT_SECONDS=30.0
+```
+
+---
+
 ## 4. 架构改造方案
 
 ### 4.1 引擎级别抽象（推荐）
 
-**核心思路**：将 Codex CLI 和 Gemini 视为两种**完全不同的深度分析引擎**，通过工厂模式切换。
+**核心思路**：将深度分析引擎按 **API 接口类型** 分类，通过工厂模式切换。
+
+#### 引擎分类（按API类型）
+
+**类型A：OpenAI Compatible API** (统一实现)
+- ✅ **千问3 Max** (Qwen-Plus) - 优先实现
+- 🔮 **OpenAI** (GPT-4) - 预留
+- 🔮 **DeepSeek** - 预留
+
+**实现文件**: `src/ai/deep_analysis/openai_compatible.py`
+
+---
+
+**类型B：Anthropic Compatible API** (统一实现)
+- ✅ **Claude** (Claude Sonnet 4.5) - 已实现
+- 🔮 **智谱 ChatGLM** (GLM-4) - 预留
+
+**实现文件**: 复用 `src/ai/deep_analysis/claude.py`
+
+---
+
+**类型C：Google Gemini API** (独立实现)
+- ✅ **Gemini** (Gemini 2.5 Pro) - 已实现
+
+**实现文件**: `src/ai/deep_analysis/gemini.py`
+
+---
+
+**类型D：CLI Agent** (独立实现)
+- ✅ **Codex CLI** - 已实现
+- ✅ **Claude CLI** - 已实现
+
+**实现文件**: `codex_cli.py`, `claude_cli.py`
+
+---
+
+#### 工厂方法更新
 
 ```python
 # src/ai/deep_analysis/factory.py
 def create_deep_analysis_engine(config) -> BaseDeepAnalysisEngine:
-    \"\"\"根据配置创建深度分析引擎\"\"\"
-    engine_type = config.DEEP_ANALYSIS_ENGINE  # "codex_cli" | "gemini"
+    \"\"\"根据配置创建深度分析引擎（支持多种API类型）\"\"\"
+    engine_type = config.DEEP_ANALYSIS_ENGINE  # "qwen" | "openai" | "claude" | "zhipu" | "gemini" | "codex_cli" | "claude_cli"
 
-    if engine_type == "codex_cli":
-        return CodexCliEngine(config)
+    # 类型A：OpenAI Compatible API（千问、OpenAI、DeepSeek等）
+    if engine_type in ["qwen", "openai", "deepseek"]:
+        if engine_type == "qwen":
+            api_key = config.DASHSCOPE_API_KEY
+            base_url = config.QWEN_BASE_URL or "https://dashscope.aliyuncs.com/compatible-mode/v1"
+            model = config.QWEN_DEEP_MODEL or "qwen-plus"
+            enable_search = getattr(config, "QWEN_ENABLE_SEARCH", False)
+            timeout = config.QWEN_DEEP_TIMEOUT_SECONDS or 30.0
+            max_turns = config.QWEN_DEEP_MAX_FUNCTION_TURNS or 6
+        elif engine_type == "openai":
+            api_key = config.OPENAI_API_KEY
+            base_url = config.OPENAI_BASE_URL or "https://api.openai.com/v1"
+            model = config.OPENAI_DEEP_MODEL or "gpt-4-turbo"
+            enable_search = False
+            timeout = config.OPENAI_DEEP_TIMEOUT_SECONDS or 30.0
+            max_turns = config.OPENAI_DEEP_MAX_FUNCTION_TURNS or 6
+        elif engine_type == "deepseek":
+            api_key = config.DEEPSEEK_API_KEY
+            base_url = config.DEEPSEEK_BASE_URL or "https://api.deepseek.com/v1"
+            model = config.DEEPSEEK_DEEP_MODEL or "deepseek-chat"
+            enable_search = False
+            timeout = config.DEEPSEEK_DEEP_TIMEOUT_SECONDS or 30.0
+            max_turns = config.DEEPSEEK_DEEP_MAX_FUNCTION_TURNS or 6
+
+        return OpenAICompatibleEngine(
+            provider=engine_type,
+            api_key=api_key,
+            base_url=base_url,
+            model=model,
+            enable_search=enable_search,
+            timeout=timeout,
+            max_function_turns=max_turns,
+            parse_json_callback=parse_callback,
+            memory_bundle=memory_bundle,
+            config=config,
+        )
+
+    # 类型B：Anthropic Compatible API（Claude、智谱）
+    elif engine_type in ["claude", "zhipu"]:
+        if engine_type == "claude":
+            return ClaudeEngine(config)  # 已实现
+        elif engine_type == "zhipu":
+            # TODO: 未来实现智谱，复用 Claude 代码结构
+            raise NotImplementedError("智谱 GLM 引擎尚未实现")
+
+    # 类型C：Google Gemini API
     elif engine_type == "gemini":
         return GeminiEngine(config)
+
+    # 类型D：CLI Agent
+    elif engine_type == "codex_cli":
+        return CodexCliEngine(config)
+    elif engine_type == "claude_cli":
+        return ClaudeCliEngine(config)
+
     else:
         raise ValueError(f"Unknown engine: {engine_type}")
 
@@ -443,16 +764,18 @@ class AiSignalEngine:
         self.deep_engine = create_deep_analysis_engine(config)
 
     async def analyze_with_deep_analysis(self, payload):
-        \"\"\"调用深度分析引擎\"\"\"
-        # 两种引擎的接口完全一致
+        \"\"\"调用深度分析引擎（统一接口，支持所有引擎类型）\"\"\"
         result = await self.deep_engine.analyze(payload)
         return result
 ```
 
 **优势**：
-- ✅ 接口统一，切换简单
-- ✅ Codex CLI 和 Gemini 完全解耦
-- ✅ 无需修改 LangGraph（LangGraph 只在 GeminiEngine 内部使用）
+- ✅ **接口统一**：所有引擎实现相同的 `BaseDeepAnalysisEngine.analyse()` 接口
+- ✅ **按API类型分类**：OpenAI兼容、Anthropic兼容、Gemini、CLI Agent 四大类
+- ✅ **代码复用**：同类API共享实现（千问/OpenAI 共享，Claude/智谱 共享）
+- ✅ **配置切换**：修改 `DEEP_ANALYSIS_ENGINE` 环境变量即可切换
+- ✅ **易扩展**：新增provider只需配置，无需新代码（同API类型内）
+- ✅ **完全解耦**：各引擎独立实现，互不影响
 
 ### 4.2 未来扩展选项
 
@@ -580,40 +903,102 @@ CLAUDE_CLI_TIMEOUT=120             # 超时时间（秒），建议 120s（比 C
 
 ## 5. 配置方案
 
-### 5.1 环境变量
+### 5.1 环境变量（完整版）
 
 ```bash
-# 深度分析引擎选择（三选一）
-DEEP_ANALYSIS_ENGINE=gemini  # gemini | codex_cli | claude_cli
+# ========== 深度分析引擎选择 ==========
+DEEP_ANALYSIS_ENGINE=qwen  # qwen | openai | claude | zhipu | gemini | codex_cli | claude_cli
 
-# Codex CLI Engine 配置
+# ========== 类型A：OpenAI Compatible API ==========
+
+# 千问3 Max配置（优先实现）✨
+DASHSCOPE_API_KEY=sk-xxx
+QWEN_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
+QWEN_DEEP_MODEL=qwen-plus              # 或 qwen-max、qwen-turbo
+QWEN_DEEP_TIMEOUT_SECONDS=30.0
+QWEN_DEEP_RETRY_ATTEMPTS=1
+QWEN_DEEP_MAX_FUNCTION_TURNS=6
+QWEN_ENABLE_SEARCH=true                # 千问特色：启用内置联网搜索
+
+# OpenAI配置（预留）🔮
+# OPENAI_API_KEY=sk-xxx
+# OPENAI_BASE_URL=https://api.openai.com/v1
+# OPENAI_DEEP_MODEL=gpt-4-turbo
+# OPENAI_DEEP_TIMEOUT_SECONDS=30.0
+# OPENAI_DEEP_MAX_FUNCTION_TURNS=6
+
+# DeepSeek配置（预留）🔮
+# DEEPSEEK_API_KEY=sk-xxx
+# DEEPSEEK_BASE_URL=https://api.deepseek.com/v1
+# DEEPSEEK_DEEP_MODEL=deepseek-chat
+# DEEPSEEK_DEEP_TIMEOUT_SECONDS=30.0
+# DEEPSEEK_DEEP_MAX_FUNCTION_TURNS=6
+
+# ========== 类型B：Anthropic Compatible API ==========
+
+# Claude配置（已实现）✅
+CLAUDE_API_KEY=sk-xxx
+CLAUDE_MODEL=claude-sonnet-4-5-20250929
+CLAUDE_TIMEOUT_SECONDS=30.0
+CLAUDE_MAX_TOOL_TURNS=5
+
+# 智谱配置（预留）🔮
+# ZHIPU_API_KEY=xxx
+# ZHIPU_DEEP_MODEL=glm-4-plus
+# ZHIPU_DEEP_TIMEOUT_SECONDS=30.0
+
+# ========== 类型C：Google Gemini API ==========
+
+# Gemini配置（已实现）✅
+GEMINI_API_KEY=xxx
+GEMINI_DEEP_MODEL=gemini-2.5-pro
+GEMINI_DEEP_TIMEOUT_SECONDS=25.0
+GEMINI_DEEP_RETRY_ATTEMPTS=1
+GEMINI_DEEP_MAX_FUNCTION_TURNS=6
+
+# ========== 类型D：CLI Agent ==========
+
+# Codex CLI配置（已实现）✅
 CODEX_CLI_PATH=/home/mako/.nvm/versions/node/v22.20.0/bin/codex
-CODEX_CLI_TIMEOUT=60           # 超时时间（秒），建议 60s
-CODEX_CLI_MODEL=gpt-5-codex    # 可选：指定模型
+CODEX_CLI_TIMEOUT=60
+CODEX_CLI_MODEL=gpt-5-codex
 
-# Claude CLI Engine 配置（新增）✅
-CLAUDE_CLI_PATH=claude         # 默认从 PATH 查找
-CLAUDE_CLI_TIMEOUT=120         # 超时时间（秒），建议 120s（比 Codex 长）
+# Claude CLI配置（已实现）✅
+CLAUDE_CLI_PATH=claude
+CLAUDE_CLI_TIMEOUT=120
 
-# Gemini Engine 配置
-GEMINI_API_KEY=...
-GEMINI_DEEP_MODEL=gemini-2.0-flash-exp
-
-# 注：未来可考虑降级方案（DEEP_ANALYSIS_FALLBACK_ENGINE），暂不实现
+# ========== 注：未来可考虑降级方案（DEEP_ANALYSIS_FALLBACK_ENGINE），暂不实现 ==========
 ```
 
-### 5.2 选择示例
+### 5.2 选择示例（按使用场景）
 
-**场景 1：已有 Codex 订阅（零 API 费用）**
+**场景 1：国内API + 内置搜索（推荐）**✨
+```bash
+DEEP_ANALYSIS_ENGINE=qwen
+DASHSCOPE_API_KEY=sk-xxx
+QWEN_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
+QWEN_DEEP_MODEL=qwen-plus
+QWEN_ENABLE_SEARCH=true
+# 特点：
+# - 国内API，无需翻墙，延迟低（预估 5-12s）
+# - 内置联网搜索，减少 Tavily API 费用
+# - OpenAI兼容接口，代码简单
+# - 适合：追求低延迟 + 低成本的生产环境
+```
+
+**场景 2：已有 Codex 订阅（零 API 费用）**✅
 ```bash
 DEEP_ANALYSIS_ENGINE=codex_cli
 CODEX_CLI_PATH=/home/mako/.nvm/versions/node/v22.20.0/bin/codex
 CODEX_CLI_TIMEOUT=60
-# 特点：完整 Agent，自主执行工具调用、GPT-5-Codex 推理能力强、无额外费用
-# 延迟：12-16秒，适合重大事件深度分析
+# 特点：
+# - 完整 Agent，自主执行工具调用
+# - GPT-5-Codex 推理能力强
+# - 零额外 API 费用（利用现有订阅）
+# - 延迟：12-16秒，适合重大事件深度分析
 ```
 
-**场景 2：已有 Claude 订阅（零 API 费用，推理质量高）**✅
+**场景 3：已有 Claude 订阅（零 API 费用，推理质量高）**✅
 ```bash
 DEEP_ANALYSIS_ENGINE=claude_cli
 CLAUDE_CLI_PATH=claude

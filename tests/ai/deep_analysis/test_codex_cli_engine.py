@@ -40,6 +40,8 @@ def _build_engine(parse_callback, **overrides) -> CodexCliDeepAnalysisEngine:
         extra_cli_args=["--sandbox", "workspace-write"],
         max_retries=overrides.get("max_retries", 0),
         working_directory=overrides.get("working_directory"),
+        disable_after_failures=overrides.get("disable_after_failures", 2),
+        failure_cooldown=overrides.get("failure_cooldown", 60.0),
     )
 
 
@@ -120,3 +122,38 @@ async def test_codex_cli_engine_missing_binary(payload: EventPayload, preliminar
     with patch("asyncio.create_subprocess_exec", side_effect=FileNotFoundError("codex")):
         with pytest.raises(DeepAnalysisError):
             await engine.analyse(payload, preliminary)
+
+
+@pytest.mark.asyncio
+async def test_codex_cli_engine_enters_cooldown(payload: EventPayload, preliminary: SignalResult):
+    def _parse(text: str) -> SignalResult:
+        return SignalResult(status="skip")
+
+    engine = _build_engine(
+        _parse,
+        max_retries=0,
+        disable_after_failures=1,
+        failure_cooldown=120.0,
+    )
+
+    with patch("asyncio.create_subprocess_exec") as mock_exec:
+        proc_mock = AsyncMock()
+        proc_mock.communicate = AsyncMock(return_value=(b"", b"fatal error"))
+        proc_mock.returncode = 2
+        mock_exec.return_value = proc_mock
+
+        with pytest.raises(DeepAnalysisError):
+            await engine.analyse(payload, preliminary)
+
+    with patch("asyncio.create_subprocess_exec") as mock_exec:
+        with pytest.raises(DeepAnalysisError):
+            await engine.analyse(payload, preliminary)
+        mock_exec.assert_not_called()
+
+    # Cooldown expired -> engine should attempt to invoke CLI again
+    engine._cooldown_until = 0.0  # type: ignore[attr-defined]
+
+    with patch("asyncio.create_subprocess_exec", side_effect=FileNotFoundError("codex")) as mock_exec:
+        with pytest.raises(DeepAnalysisError):
+            await engine.analyse(payload, preliminary)
+        mock_exec.assert_called_once()

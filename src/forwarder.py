@@ -21,8 +21,8 @@ class MessageForwarder:
     def __init__(
         self,
         client: TelegramClient,
-        target_chat_id: str,
-        backup_chat_id: Optional[str] = None,
+        target_chat_id: int | str,
+        backup_chat_id: Optional[int | str] = None,
         cooldown_seconds: float = 1.0,
         email_sender: Optional[EmailSender] = None,
         bot_sender: Optional[BotSender] = None,

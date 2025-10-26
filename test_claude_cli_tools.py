@@ -15,7 +15,7 @@ async def test_claude_cli_with_search_tool():
 
 任务：
 1. 使用以下命令搜索新闻验证这个消息：
-   uvx --with-requirements requirements.txt python scripts/codex_tools/search_news.py --query "Binance SOL listing" --max-results 3
+   python scripts/codex_tools/search_news.py --query "Binance SOL listing" --max-results 3
 
 2. 根据搜索结果返回分析
 
@@ -103,7 +103,11 @@ async def test_claude_cli_with_search_tool():
 
             # Check if tool was actually executed
             notes = data.get("notes", "")
-            if "搜索" in notes or "search" in notes.lower() or "uvx" in notes:
+            if (
+                "搜索" in notes
+                or "search" in notes.lower()
+                or "python scripts/codex_tools" in notes
+            ):
                 print(f"\n✅ 检测到工具执行证据")
                 print(f"✅ Claude CLI 支持工具调用！")
                 return True

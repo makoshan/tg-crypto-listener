@@ -22,6 +22,7 @@ from ..memory import (
 from ..memory.types import MemoryEntry
 from ..utils import (
     MessageDeduplicator,
+    SignalMessageDeduplicator,
     compute_canonical_hash,
     compute_embedding,
     compute_sha256,
@@ -46,6 +47,7 @@ class PipelineDependencies:
 
     config: Config
     deduplicator: MessageDeduplicator
+    signal_deduplicator: Optional[SignalMessageDeduplicator]
     translator: Optional[Translator]
     ai_engine: Optional[AiSignalEngine]
     forwarder: Optional[MessageForwarder]
@@ -729,6 +731,27 @@ class LangGraphMessagePipeline:
         else:
             if signal_result:
                 deps.update_ai_stats(signal_result)
+                # Detailed AI response logging
+                if deps.logger.isEnabledFor(10):  # DEBUG level
+                    deps.logger.debug(
+                        "🤖 AI 分析完成详情:\n"
+                        "   - Status: %s\n"
+                        "   - Confidence: %.2f\n"
+                        "   - Action: %s\n"
+                        "   - Asset: %s\n"
+                        "   - Event Type: %s\n"
+                        "   - Summary: %s\n"
+                        "   - Risk Flags: %s\n"
+                        "   - Raw Response: %s",
+                        signal_result.status,
+                        signal_result.confidence,
+                        signal_result.action,
+                        signal_result.asset,
+                        signal_result.event_type,
+                        signal_result.summary[:200] if signal_result.summary else "None",
+                        signal_result.risk_flags,
+                        signal_result.raw_response[:500] if signal_result.raw_response else "None",
+                    )
 
         return {
             "control": control,
@@ -816,12 +839,46 @@ class LangGraphMessagePipeline:
                 routing.ai_skipped = False
             else:
                 deps.stats["ai_skipped"] = deps.stats.get("ai_skipped", 0) + 1
+                # Detailed skip reason logging
+                threshold_info = ""
+                if skip_reason == "low_confidence":
+                    threshold = (
+                        deps.config.AI_MIN_CONFIDENCE_KOL if is_priority_kol
+                        else deps.config.AI_MIN_CONFIDENCE
+                    )
+                    threshold_info = f" (threshold={threshold:.2f})"
+                elif skip_reason == "low_value_observe":
+                    threshold = (
+                        deps.config.AI_OBSERVE_THRESHOLD_KOL if is_priority_kol
+                        else deps.config.AI_OBSERVE_THRESHOLD
+                    )
+                    threshold_info = f" (observe_threshold={threshold:.2f})"
+
                 deps.logger.info(
-                    "🤖 AI 评估跳过转发: source=%s reason=%s confidence=%.2f",
+                    "🤖 AI 评估跳过转发: source=%s reason=%s confidence=%.2f%s action=%s",
                     raw_event.source_name,
                     skip_reason,
                     effective_confidence,
+                    threshold_info,
+                    signal_result.action if signal_result else "unknown",
                 )
+
+                # Log full AI context for debugging
+                if deps.logger.isEnabledFor(10) and signal_result:  # DEBUG level
+                    deps.logger.debug(
+                        "🔍 Skip 详情:\n"
+                        "   - Summary: %s\n"
+                        "   - Asset: %s\n"
+                        "   - Event Type: %s\n"
+                        "   - Risk Flags: %s\n"
+                        "   - Notes: %s",
+                        signal_result.summary[:150] if signal_result.summary else "None",
+                        signal_result.asset,
+                        signal_result.event_type,
+                        signal_result.risk_flags,
+                        signal_result.notes[:100] if signal_result.notes else "None",
+                    )
+
                 routing.forwarded = False
                 routing.ai_skipped = True
                 return {
@@ -866,6 +923,30 @@ class LangGraphMessagePipeline:
 
         if is_priority_kol:
             ai_kwargs["ai_confidence"] = 1.0
+
+        # Signal-level deduplication check
+        if deps.signal_deduplicator and ai_kwargs.get("ai_summary"):
+            is_dup = deps.signal_deduplicator.is_duplicate(
+                summary=str(ai_kwargs.get("ai_summary") or ""),
+                action=str(ai_kwargs.get("ai_action") or ""),
+                direction=str(ai_kwargs.get("ai_direction") or ""),
+                event_type=str(ai_kwargs.get("ai_event_type") or ""),
+                asset=str(ai_kwargs.get("ai_asset") or ""),
+                asset_names=str(ai_kwargs.get("ai_asset_names") or ""),
+            )
+            if is_dup:
+                deps.stats["duplicates"] = deps.stats.get("duplicates", 0) + 1
+                deps.stats["dup_signal"] = deps.stats.get("dup_signal", 0) + 1
+                deps.logger.info(
+                    "🔄 信号内容与近期重复，跳过转发: source=%s",
+                    raw_event.source_name,
+                )
+                routing.forwarded = False
+                routing.drop_reason = "duplicate_signal"
+                return {
+                    "control": control,
+                    "routing": routing,
+                }
 
         price_snapshot: Optional[Dict[str, Any]] = None
         asset_for_price = (signal_result.asset if signal_result else "") or ""
@@ -976,17 +1057,37 @@ class LangGraphMessagePipeline:
         hashes = state.get("hashes") or HashState()
         price_snapshot = state.get("price_snapshot")
 
-        if control.drop or not routing.should_persist:
+        if control.drop:
+            deps.logger.debug("🗄️ 跳过持久化: control.drop=True reason=%s", routing.drop_reason)
+            return {
+                "control": control,
+                "routing": routing,
+            }
+
+        if not routing.should_persist:
+            deps.logger.debug(
+                "🗄️ 跳过持久化: should_persist=False forwarded=%s ai_skipped=%s",
+                routing.forwarded,
+                routing.ai_skipped,
+            )
             return {
                 "control": control,
                 "routing": routing,
             }
 
         if not deps.db_enabled or not deps.news_repository:
+            deps.logger.debug("🗄️ 跳过持久化: db_enabled=%s", deps.db_enabled)
             return {
                 "control": control,
                 "routing": routing,
             }
+
+        deps.logger.debug(
+            "🗄️ 开始持久化: source=%s forwarded=%s has_signal=%s",
+            raw_event.source_name,
+            routing.forwarded,
+            signal_result is not None,
+        )
 
         try:
             await deps.persist_event(

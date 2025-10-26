@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import shlex
 import unicodedata
 from pathlib import Path
@@ -25,6 +26,7 @@ def _as_bool(value: str, default: bool = False) -> bool:
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_KEYWORDS_FILE = PROJECT_ROOT / "keywords.txt"
+CHAT_ID_PATTERN = re.compile(r"-?\d+")
 
 
 def _normalize_keyword(value: str) -> str:
@@ -34,15 +36,27 @@ def _normalize_keyword(value: str) -> str:
     return normalized.lower()
 
 
-def _parse_source_channels(value: str) -> List[str]:
+def _parse_chat_identifier(value: str) -> int | str:
+    candidate = value.strip()
+    if not candidate:
+        return candidate
+    if CHAT_ID_PATTERN.fullmatch(candidate):
+        try:
+            return int(candidate)
+        except ValueError:
+            logger.warning("无法将聊天标识解析为整数: %s", value)
+    return candidate
+
+
+def _parse_source_channels(value: str) -> list[int | str]:
     """Parse comma/newline separated channel handles while tolerating line continuations."""
     if not value:
         return []
 
     cleaned = value.replace("\\\r\n", "\n").replace("\\\n", "\n").replace("\r\n", "\n")
-    tokens: List[str] = []
-    invalid: List[str] = []
-    seen: Set[str] = set()
+    tokens: list[int | str] = []
+    invalid: list[str] = []
+    seen: set[int | str] = set()
 
     def _add_token(raw: str) -> None:
         candidate = raw.strip()
@@ -63,9 +77,11 @@ def _parse_source_channels(value: str) -> List[str]:
             invalid.append(raw)
             return
 
-        if candidate not in seen:
-            tokens.append(candidate)
-            seen.add(candidate)
+        parsed_candidate = _parse_chat_identifier(candidate)
+
+        if parsed_candidate not in seen:
+            tokens.append(parsed_candidate)
+            seen.add(parsed_candidate)
 
     for segment in cleaned.split("\n"):
         if not segment:
@@ -150,11 +166,11 @@ class Config:
     TG_API_HASH: str = os.getenv("TG_API_HASH", "")
     TG_PHONE: str = os.getenv("TG_PHONE", "")
 
-    TARGET_CHAT_ID: str = os.getenv("TARGET_CHAT_ID", "")
-    TARGET_CHAT_ID_BACKUP: str = os.getenv("TARGET_CHAT_ID_BACKUP", "")
+    TARGET_CHAT_ID: int | str = _parse_chat_identifier(os.getenv("TARGET_CHAT_ID", ""))
+    TARGET_CHAT_ID_BACKUP: int | str = _parse_chat_identifier(os.getenv("TARGET_CHAT_ID_BACKUP", ""))
     FORWARD_TO_CHANNEL_ENABLED: bool = _as_bool(os.getenv("FORWARD_TO_CHANNEL_ENABLED", "true"))
 
-    SOURCE_CHANNELS: List[str] = _parse_source_channels(os.getenv("SOURCE_CHANNELS", ""))
+    SOURCE_CHANNELS: list[int | str] = _parse_source_channels(os.getenv("SOURCE_CHANNELS", ""))
 
     FILTER_KEYWORDS_FILE: str = os.getenv("FILTER_KEYWORDS_FILE", "").strip()
     _ENV_FILTER_KEYWORDS: Set[str] = _load_keywords_from_env()
@@ -166,6 +182,10 @@ class Config:
     )
 
     DEDUP_WINDOW_HOURS: int = int(os.getenv("DEDUP_WINDOW_HOURS", "24"))
+    SIGNAL_DEDUP_ENABLED: bool = _as_bool(os.getenv("SIGNAL_DEDUP_ENABLED", "true"))
+    SIGNAL_DEDUP_WINDOW_MINUTES: int = int(os.getenv("SIGNAL_DEDUP_WINDOW_MINUTES", "360"))
+    SIGNAL_DEDUP_SIMILARITY: float = float(os.getenv("SIGNAL_DEDUP_SIMILARITY", "0.68"))
+    SIGNAL_DEDUP_MIN_COMMON_CHARS: int = int(os.getenv("SIGNAL_DEDUP_MIN_COMMON_CHARS", "10"))
 
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
 
@@ -241,6 +261,10 @@ class Config:
         "@docs/codex_cli_integration_plan.md",
     ).strip()
     CODEX_CLI_RETRY_ATTEMPTS: int = int(os.getenv("CODEX_CLI_RETRY_ATTEMPTS", "1"))
+    CODEX_CLI_DISABLE_AFTER_FAILURES: int = int(os.getenv("CODEX_CLI_DISABLE_AFTER_FAILURES", "2"))
+    CODEX_CLI_FAILURE_COOLDOWN_SECONDS: float = float(
+        os.getenv("CODEX_CLI_FAILURE_COOLDOWN_SECONDS", "600")
+    )
     CODEX_CLI_EXTRA_ARGS: List[str] = _parse_cli_args(os.getenv("CODEX_CLI_EXTRA_ARGS", ""))
     CODEX_CLI_WORKDIR: str = os.getenv("CODEX_CLI_WORKDIR", "").strip()
 
@@ -251,6 +275,13 @@ class Config:
     CLAUDE_CLI_EXTRA_ARGS: List[str] = _parse_cli_args(os.getenv("CLAUDE_CLI_EXTRA_ARGS", ""))
     CLAUDE_CLI_WORKDIR: str = os.getenv("CLAUDE_CLI_WORKDIR", "").strip()
     CLAUDE_CLI_ALLOWED_TOOLS: List[str] = _parse_tool_list(os.getenv("CLAUDE_CLI_ALLOWED_TOOLS", "Bash,Read"))
+
+    # Claude CLI Deep Analysis Memory configuration
+    CLAUDE_DEEP_MEMORY_ENABLED: bool = _as_bool(os.getenv("CLAUDE_DEEP_MEMORY_ENABLED", "false"))
+    CLAUDE_DEEP_MEMORY_BASE_PATH: str = os.getenv("CLAUDE_DEEP_MEMORY_BASE_PATH", "./memories/claude_cli_deep_analysis").strip()
+    CLAUDE_DEEP_MEMORY_MAX_FILE_SIZE: int = int(os.getenv("CLAUDE_DEEP_MEMORY_MAX_FILE_SIZE", "51200"))  # 50KB
+    CLAUDE_DEEP_MEMORY_AUTO_CLEANUP: bool = _as_bool(os.getenv("CLAUDE_DEEP_MEMORY_AUTO_CLEANUP", "true"))
+    CLAUDE_DEEP_MEMORY_CLEANUP_DAYS: int = int(os.getenv("CLAUDE_DEEP_MEMORY_CLEANUP_DAYS", "30"))
     TEXT_PLANNER_PROVIDER: str = os.getenv("TEXT_PLANNER_PROVIDER", "").strip().lower()
     TEXT_PLANNER_API_KEY: str = os.getenv("TEXT_PLANNER_API_KEY", "")
     TEXT_PLANNER_MODEL: str = os.getenv("TEXT_PLANNER_MODEL", "")
@@ -267,6 +298,42 @@ class Config:
     GEMINI_DEEP_RETRY_BACKOFF_SECONDS: float = float(
         os.getenv("GEMINI_DEEP_RETRY_BACKOFF_SECONDS", "1.5")
     )
+    # Gemini Deep Analysis API Keys (for rotation)
+    GEMINI_DEEP_API_KEYS: List[str] = [
+        key.strip()
+        for key in os.getenv("GEMINI_DEEP_API_KEYS", "").split(",")
+        if key.strip()
+    ]
+
+    # ==============================================
+    # Qwen (千问) Deep Analysis Configuration
+    # ==============================================
+    DASHSCOPE_API_KEY: str = os.getenv("DASHSCOPE_API_KEY", "")
+    QWEN_BASE_URL: str = os.getenv(
+        "QWEN_BASE_URL",
+        "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    )
+    QWEN_DEEP_MODEL: str = os.getenv("QWEN_DEEP_MODEL", "qwen-plus")  # qwen-plus | qwen-max | qwen-turbo
+    QWEN_DEEP_TIMEOUT_SECONDS: float = float(os.getenv("QWEN_DEEP_TIMEOUT_SECONDS", "30"))
+    QWEN_DEEP_MAX_FUNCTION_TURNS: int = int(os.getenv("QWEN_DEEP_MAX_FUNCTION_TURNS", "6"))
+    QWEN_ENABLE_SEARCH: bool = os.getenv("QWEN_ENABLE_SEARCH", "false").lower() == "true"  # 千问特色：内置联网搜索
+
+    # ==============================================
+    # OpenAI Deep Analysis Configuration (预留)
+    # ==============================================
+    OPENAI_BASE_URL: str = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
+    OPENAI_DEEP_MODEL: str = os.getenv("OPENAI_DEEP_MODEL", "gpt-4-turbo")
+    OPENAI_DEEP_TIMEOUT_SECONDS: float = float(os.getenv("OPENAI_DEEP_TIMEOUT_SECONDS", "30"))
+    OPENAI_DEEP_MAX_FUNCTION_TURNS: int = int(os.getenv("OPENAI_DEEP_MAX_FUNCTION_TURNS", "6"))
+
+    # ==============================================
+    # DeepSeek Deep Analysis Configuration (预留)
+    # ==============================================
+    DEEPSEEK_API_KEY: str = os.getenv("DEEPSEEK_API_KEY", "")
+    DEEPSEEK_BASE_URL: str = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1")
+    DEEPSEEK_DEEP_MODEL: str = os.getenv("DEEPSEEK_DEEP_MODEL", "deepseek-chat")
+    DEEPSEEK_DEEP_TIMEOUT_SECONDS: float = float(os.getenv("DEEPSEEK_DEEP_TIMEOUT_SECONDS", "30"))
+    DEEPSEEK_DEEP_MAX_FUNCTION_TURNS: int = int(os.getenv("DEEPSEEK_DEEP_MAX_FUNCTION_TURNS", "6"))
 
     # Context Editing configuration (Claude Memory Tool)
     MEMORY_CONTEXT_TRIGGER_TOKENS: int = int(os.getenv("MEMORY_CONTEXT_TRIGGER_TOKENS", "6000"))
@@ -494,7 +561,7 @@ class Config:
             )
 
         enabled = cls.DEEP_ANALYSIS_ENABLED
-        allowed_providers = {"claude", "gemini", "codex_cli", "claude_cli"}
+        allowed_providers = {"claude", "gemini", "codex_cli", "claude_cli", "qwen", "openai", "deepseek"}
         if provider not in allowed_providers:
             if provider:
                 logger.warning("未知的 DEEP_ANALYSIS_PROVIDER=%s，自动回退为 claude", provider)
@@ -534,12 +601,14 @@ class Config:
                 "max_retries": cls.GEMINI_DEEP_RETRY_ATTEMPTS,
                 "retry_backoff": cls.GEMINI_DEEP_RETRY_BACKOFF_SECONDS,
                 "api_key": cls.GEMINI_API_KEY,
-                "api_keys": cls.GEMINI_API_KEYS,
+                "api_keys": cls.GEMINI_DEEP_API_KEYS if cls.GEMINI_DEEP_API_KEYS else cls.GEMINI_API_KEYS,
             },
             "codex_cli": {
                 "cli_path": cls.CODEX_CLI_PATH,
                 "timeout": cls.CODEX_CLI_TIMEOUT,
                 "max_retries": cls.CODEX_CLI_RETRY_ATTEMPTS,
+                "disable_after_failures": cls.CODEX_CLI_DISABLE_AFTER_FAILURES,
+                "failure_cooldown": cls.CODEX_CLI_FAILURE_COOLDOWN_SECONDS,
                 "context_refs": _parse_context_refs(cls.CODEX_CLI_CONTEXT),
                 "extra_args": list(cls.CODEX_CLI_EXTRA_ARGS),
                 "working_directory": cls.CODEX_CLI_WORKDIR,
@@ -551,6 +620,28 @@ class Config:
                 "extra_args": list(cls.CLAUDE_CLI_EXTRA_ARGS),
                 "working_directory": cls.CLAUDE_CLI_WORKDIR,
                 "allowed_tools": list(cls.CLAUDE_CLI_ALLOWED_TOOLS),
+            },
+            "qwen": {
+                "api_key": cls.DASHSCOPE_API_KEY,
+                "base_url": cls.QWEN_BASE_URL,
+                "model": cls.QWEN_DEEP_MODEL,
+                "timeout": cls.QWEN_DEEP_TIMEOUT_SECONDS,
+                "max_function_turns": cls.QWEN_DEEP_MAX_FUNCTION_TURNS,
+                "enable_search": cls.QWEN_ENABLE_SEARCH,
+            },
+            "openai": {
+                "api_key": cls.OPENAI_API_KEY,
+                "base_url": cls.OPENAI_BASE_URL,
+                "model": cls.OPENAI_DEEP_MODEL,
+                "timeout": cls.OPENAI_DEEP_TIMEOUT_SECONDS,
+                "max_function_turns": cls.OPENAI_DEEP_MAX_FUNCTION_TURNS,
+            },
+            "deepseek": {
+                "api_key": cls.DEEPSEEK_API_KEY,
+                "base_url": cls.DEEPSEEK_BASE_URL,
+                "model": cls.DEEPSEEK_DEEP_MODEL,
+                "timeout": cls.DEEPSEEK_DEEP_TIMEOUT_SECONDS,
+                "max_function_turns": cls.DEEPSEEK_DEEP_MAX_FUNCTION_TURNS,
             },
         }
         return config

@@ -26,6 +26,14 @@
 - 发现事件关键细节
 
 **使用方法**：
+优先使用本地 Python（无需下载依赖）：
+```bash
+python scripts/codex_tools/search_news.py \
+    --query "关键词" \
+    --max-results 6 \
+    [--domains domain1.com domain2.com]
+```
+如缺少依赖再使用 `uvx`（会尝试访问 PyPI 下载依赖）：
 ```bash
 uvx --with-requirements requirements.txt python scripts/codex_tools/search_news.py \
     --query "关键词" \
@@ -79,12 +87,12 @@ uvx --with-requirements requirements.txt python scripts/codex_tools/search_news.
 **示例**：
 ```bash
 # 搜索 Binance 上币公告
-uvx --with-requirements requirements.txt python scripts/codex_tools/search_news.py \
+python scripts/codex_tools/search_news.py \
     --query "Binance ABC token listing official announcement" \
     --max-results 6
 
 # 搜索监管新闻（限定特定域名）
-uvx --with-requirements requirements.txt python scripts/codex_tools/search_news.py \
+python scripts/codex_tools/search_news.py \
     --query "SEC Bitcoin ETF approval" \
     --max-results 5 \
     --domains sec.gov coindesk.com
@@ -102,6 +110,13 @@ uvx --with-requirements requirements.txt python scripts/codex_tools/search_news.
 - 评估市场反应
 
 **使用方法**：
+优先使用本地 Python（无需下载依赖）：
+```bash
+python scripts/codex_tools/fetch_price.py \
+    --assets 资产1 资产2 资产3 \
+    [--force-refresh]
+```
+如缺少依赖再使用 `uvx`（会尝试访问 PyPI 下载依赖）：
 ```bash
 uvx --with-requirements requirements.txt python scripts/codex_tools/fetch_price.py \
     --assets 资产1 资产2 资产3 \
@@ -160,15 +175,15 @@ uvx --with-requirements requirements.txt python scripts/codex_tools/fetch_price.
 **示例**：
 ```bash
 # 获取单个资产价格
-uvx --with-requirements requirements.txt python scripts/codex_tools/fetch_price.py \
+python scripts/codex_tools/fetch_price.py \
     --assets BTC
 
 # 获取多个资产价格（批量）
-uvx --with-requirements requirements.txt python scripts/codex_tools/fetch_price.py \
+python scripts/codex_tools/fetch_price.py \
     --assets BTC ETH SOL USDC
 
 # 强制刷新缓存
-uvx --with-requirements requirements.txt python scripts/codex_tools/fetch_price.py \
+python scripts/codex_tools/fetch_price.py \
     --assets BTC ETH \
     --force-refresh
 ```
@@ -185,6 +200,14 @@ uvx --with-requirements requirements.txt python scripts/codex_tools/fetch_price.
 - 评估事件独特性
 
 **使用方法**：
+优先使用本地 Python（无需下载依赖）：
+```bash
+python scripts/codex_tools/fetch_memory.py \
+    --query "主题描述" \
+    [--asset 资产代码] \
+    [--limit 数量]
+```
+如缺少依赖再使用 `uvx`（会尝试访问 PyPI 下载依赖）：
 ```bash
 uvx --with-requirements requirements.txt python scripts/codex_tools/fetch_memory.py \
     --query "主题描述" \
@@ -231,13 +254,13 @@ uvx --with-requirements requirements.txt python scripts/codex_tools/fetch_memory
 **示例**：
 ```bash
 # 检索 USDC 脱锚历史案例
-uvx --with-requirements requirements.txt python scripts/codex_tools/fetch_memory.py \
+python scripts/codex_tools/fetch_memory.py \
     --query "USDC depeg risk" \
     --asset USDC \
     --limit 3
 
 # 检索比特币价格相关历史
-uvx --with-requirements requirements.txt python scripts/codex_tools/fetch_memory.py \
+python scripts/codex_tools/fetch_memory.py \
     --query "Bitcoin price surge" \
     --asset BTC \
     --limit 5
@@ -286,12 +309,12 @@ bash scripts/test_codex_tools.sh
 
 ```bash
 # 测试搜索工具
-uvx --with-requirements requirements.txt python scripts/codex_tools/search_news.py \
+python scripts/codex_tools/search_news.py \
     --query "Bitcoin ETF approval" \
     --max-results 3
 
 # 测试记忆工具
-uvx --with-requirements requirements.txt python scripts/codex_tools/fetch_memory.py \
+python scripts/codex_tools/fetch_memory.py \
     --query "Bitcoin price" \
     --asset BTC \
     --limit 2

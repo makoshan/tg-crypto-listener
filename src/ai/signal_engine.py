@@ -409,6 +409,12 @@ class AiSignalEngine:
             if provider == "gemini":
                 # Get all Gemini API keys for rotation
                 api_keys = getattr(config, "GEMINI_API_KEYS", [])
+                logger.info(
+                    "🤖 初始化 Gemini 客户端: model=%s, api_keys=%d, timeout=%.1fs",
+                    getattr(config, "AI_MODEL_NAME", "gemini-2.0-flash-exp"),
+                    len(api_keys) if api_keys else 1,
+                    getattr(config, "AI_TIMEOUT_SECONDS", 8.0),
+                )
                 client = GeminiClient(
                     api_key=str(api_key),
                     model_name=getattr(config, "AI_MODEL_NAME", "gemini-2.0-flash-exp"),
@@ -417,6 +423,7 @@ class AiSignalEngine:
                     retry_backoff_seconds=getattr(config, "AI_RETRY_BACKOFF_SECONDS", 1.5),
                     api_keys=api_keys if api_keys else None,
                 )
+                logger.info("✅ Gemini 客户端初始化成功")
             else:
                 # Use OpenAI-compatible client for others
                 client = OpenAIChatClient(
@@ -593,16 +600,36 @@ class AiSignalEngine:
             try:
                 logger.debug("正在调用 %s 引擎执行深度分析...", deep_label)
                 deep_result = await deep_engine.analyse(payload, gemini_result)
+
+                # 计算置信度调整
+                confidence_delta = deep_result.confidence - gemini_result.confidence
+                confidence_change = "↑" if confidence_delta > 0 else ("↓" if confidence_delta < 0 else "→")
+
                 logger.info(
-                    "✅ %s 深度分析完成: action=%s confidence=%.2f (%s 初判: %.2f) asset=%s summary=%s",
+                    "✅ %s 深度分析完成: action=%s confidence=%.2f %s (初判: %.2f, 调整: %+.2f) asset=%s summary=%s",
                     deep_label,
                     deep_result.action,
                     deep_result.confidence,
-                    self._provider_label,
+                    confidence_change,
                     gemini_result.confidence,
+                    confidence_delta,
                     deep_result.asset,
                     deep_result.summary[:100] if deep_result.summary else "",
                 )
+
+                # 如果有历史记忆上下文，记录其影响
+                if payload.historical_reference and payload.historical_reference.get("entries"):
+                    mem_count = len(payload.historical_reference.get("entries", []))
+                    logger.info(
+                        "📚 历史记忆影响: %d 条参考 → 置信度 %.2f %s %.2f (%s%.2f)",
+                        mem_count,
+                        gemini_result.confidence,
+                        confidence_change,
+                        deep_result.confidence,
+                        "+" if confidence_delta >= 0 else "",
+                        confidence_delta
+                    )
+
                 return deep_result
             except DeepAnalysisError as exc:
                 logger.warning(

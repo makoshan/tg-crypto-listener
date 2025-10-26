@@ -8,14 +8,58 @@ import os
 import re
 import sys
 import unicodedata
-from datetime import datetime, timedelta
+from collections import deque
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
+from difflib import SequenceMatcher
 from pathlib import Path
-from typing import Any, Dict, Set
+from typing import Any, Callable, Deque, Dict, Optional, Set, Tuple
 
 try:
     import colorlog
 except ImportError:  # pragma: no cover - optional dependency
     colorlog = None  # type: ignore[assignment]
+
+
+# 北京时区 UTC+8
+BEIJING_TZ = timezone(timedelta(hours=8))
+
+
+class BeijingTimeFormatter(logging.Formatter):
+    """Formatter that uses Beijing time (UTC+8) instead of local time."""
+
+    def converter(self, timestamp):
+        """Convert timestamp to Beijing time."""
+        dt = datetime.fromtimestamp(timestamp, tz=timezone.utc)
+        return dt.astimezone(BEIJING_TZ).timetuple()
+
+    def formatTime(self, record, datefmt=None):
+        """Format time in Beijing timezone with milliseconds."""
+        dt = datetime.fromtimestamp(record.created, tz=timezone.utc)
+        beijing_time = dt.astimezone(BEIJING_TZ)
+        if datefmt:
+            s = beijing_time.strftime(datefmt)
+        else:
+            s = beijing_time.strftime("%Y-%m-%d %H:%M:%S")
+        # Add milliseconds to match the format: 2025-10-24 10:10:24,047
+        s = f"{s},{int(record.msecs):03d}"
+        return s
+
+
+class BeijingColoredFormatter(colorlog.ColoredFormatter if colorlog else logging.Formatter):
+    """Colored formatter with Beijing time."""
+
+    def formatTime(self, record, datefmt=None):
+        """Format time in Beijing timezone."""
+        dt = datetime.fromtimestamp(record.created, tz=timezone.utc)
+        beijing_time = dt.astimezone(BEIJING_TZ)
+        if datefmt:
+            s = beijing_time.strftime(datefmt)
+        else:
+            s = beijing_time.strftime("%Y-%m-%d %H:%M:%S")
+        # Add milliseconds
+        s = f"{s},{int(record.msecs):03d}"
+        return s
 
 
 class _MaxLevelFilter(logging.Filter):
@@ -30,7 +74,7 @@ class _MaxLevelFilter(logging.Filter):
 
 
 def setup_logger(name: str, level: str = None) -> logging.Logger:
-    """Configure a color logger that also writes to file."""
+    """Configure a color logger that also writes to file with Beijing time."""
     # 从环境变量读取日志级别，默认为 INFO
     if level is None:
         level = os.getenv("LOG_LEVEL", "INFO")
@@ -42,7 +86,7 @@ def setup_logger(name: str, level: str = None) -> logging.Logger:
         return logger
 
     if colorlog is not None:
-        color_formatter = colorlog.ColoredFormatter(
+        color_formatter = BeijingColoredFormatter(
             "%(log_color)s%(asctime)s - %(name)s - %(levelname)s - %(message)s",
             datefmt="%Y-%m-%d %H:%M:%S",
             log_colors={
@@ -59,26 +103,32 @@ def setup_logger(name: str, level: str = None) -> logging.Logger:
         console_handler.addFilter(_MaxLevelFilter(logging.INFO))
         console_handler.setFormatter(color_formatter)
     else:
+        plain_formatter = BeijingTimeFormatter(
+            "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+            datefmt="%Y-%m-%d %H:%M:%S"
+        )
         console_handler = logging.StreamHandler(stream=sys.stdout)
         console_handler.setLevel(logging.DEBUG)
         console_handler.addFilter(_MaxLevelFilter(logging.INFO))
-        console_handler.setFormatter(
-            logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
-        )
+        console_handler.setFormatter(plain_formatter)
     logger.addHandler(console_handler)
 
     stderr_handler = logging.StreamHandler(stream=sys.stderr)
     stderr_handler.setLevel(logging.WARNING)
-    stderr_handler.setFormatter(
-        logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+    stderr_formatter = BeijingTimeFormatter(
+        "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S"
     )
+    stderr_handler.setFormatter(stderr_formatter)
     logger.addHandler(stderr_handler)
 
     Path("./logs").mkdir(exist_ok=True)
     file_handler = logging.FileHandler("./logs/app.log", encoding="utf-8")
-    file_handler.setFormatter(
-        logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+    file_formatter = BeijingTimeFormatter(
+        "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S"
     )
+    file_handler.setFormatter(file_formatter)
     logger.addHandler(file_handler)
 
     return logger
@@ -87,15 +137,19 @@ def setup_logger(name: str, level: str = None) -> logging.Logger:
 class MessageDeduplicator:
     """Deduplicate messages by hash within a time window."""
 
-    def __init__(self, window_hours: int = 24):
+    def __init__(self, window_hours: int = 24, normalizer: Callable[[str], str] | None = None):
         self.seen_hashes: Dict[str, datetime] = {}
         self.window_hours = window_hours
+        self._normalizer = normalizer
 
     def is_duplicate(self, text: str) -> bool:
         """Return True if the message text appeared recently."""
         self._cleanup_expired()
 
-        message_hash = hashlib.md5(text.encode("utf-8")).hexdigest()
+        processed_text = text
+        if self._normalizer:
+            processed_text = self._normalizer(text)
+        message_hash = hashlib.md5(processed_text.encode("utf-8")).hexdigest()
         if message_hash in self.seen_hashes:
             return True
 
@@ -107,6 +161,120 @@ class MessageDeduplicator:
         expired = [key for key, timestamp in self.seen_hashes.items() if timestamp < cutoff]
         for key in expired:
             del self.seen_hashes[key]
+
+
+@dataclass
+class SignalDedupEntry:
+    """Record of a recently forwarded AI signal."""
+
+    normalized_summary: str
+    char_set: Set[str]
+    metadata: Tuple[str, str, str, str, str]
+    timestamp: datetime
+
+
+class SignalMessageDeduplicator:
+    """Detect near-duplicate AI signals within a sliding time window."""
+
+    def __init__(
+        self,
+        *,
+        window_minutes: int = 240,
+        similarity_threshold: float = 0.68,
+        min_common_chars: int = 10,
+    ) -> None:
+        self.window = timedelta(minutes=max(window_minutes, 1))
+        self.similarity_threshold = max(0.0, min(similarity_threshold, 1.0))
+        self.min_common_chars = max(0, min_common_chars)
+        self.entries: Deque[SignalDedupEntry] = deque()
+
+    def is_duplicate(
+        self,
+        *,
+        summary: str,
+        action: str = "",
+        direction: str = "",
+        event_type: str = "",
+        asset: str = "",
+        asset_names: str = "",
+    ) -> bool:
+        """Return True if the signal is similar to a recent one."""
+        normalized_summary = self._normalize_text(summary)
+        if not normalized_summary:
+            return False
+
+        metadata = self._normalize_metadata(
+            action=action,
+            direction=direction,
+            event_type=event_type,
+            asset=asset,
+            asset_names=asset_names,
+        )
+        char_set = set(normalized_summary)
+        now = datetime.now()
+        self._cleanup(now)
+
+        for entry in self.entries:
+            if entry.metadata != metadata:
+                continue
+
+            ratio = SequenceMatcher(None, normalized_summary, entry.normalized_summary).ratio()
+            if ratio < self.similarity_threshold:
+                continue
+
+            common_chars = len(char_set & entry.char_set)
+            if common_chars < self.min_common_chars:
+                continue
+
+            # Update timestamp to extend lifetime of matched entry
+            entry.timestamp = now
+            return True
+
+        self.entries.append(
+            SignalDedupEntry(
+                normalized_summary=normalized_summary,
+                char_set=char_set,
+                metadata=metadata,
+                timestamp=now,
+            )
+        )
+        return False
+
+    def _cleanup(self, now: datetime) -> None:
+        cutoff = now - self.window
+        while self.entries and self.entries[0].timestamp < cutoff:
+            self.entries.popleft()
+
+    @staticmethod
+    def _normalize_text(text: str) -> str:
+        normalized = unicodedata.normalize("NFKC", text or "")
+        normalized = normalized.lower()
+        normalized = re.sub(r"https?://\S+", "", normalized)
+        normalized = re.sub(r"[0-9]+(?:\.[0-9]+)?", "", normalized)
+        normalized = re.sub(r"[，,。.!？?：:；;\"'""''()（）\[\]{}<>《》•—\-·…~`_]+", "", normalized)
+        normalized = re.sub(r"\s+", "", normalized)
+        return normalized
+
+    @staticmethod
+    def _normalize_metadata(
+        *,
+        action: str,
+        direction: str,
+        event_type: str,
+        asset: str,
+        asset_names: str,
+    ) -> Tuple[str, str, str, str, str]:
+        def _norm(value: str) -> str:
+            normalized = unicodedata.normalize("NFKC", (value or "").strip())
+            return normalized.lower()
+
+        return (
+            _norm(action),
+            _norm(direction),
+            _norm(event_type),
+            _norm(asset),
+            _norm(asset_names),
+        )
 
 
 def _normalize_text(text: str) -> str:

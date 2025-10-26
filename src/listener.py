@@ -23,6 +23,7 @@ from .email_sender import EmailSender
 from .bot_sender import BotSender
 from .utils import (
     MessageDeduplicator,
+    SignalMessageDeduplicator,
     analyze_event_intensity,
     contains_keywords,
     format_forwarded_message,
@@ -55,6 +56,7 @@ class TelegramListener:
         self.client: TelegramClient | None = None
         self.forwarder: MessageForwarder | None = None
         self.deduplicator = MessageDeduplicator(self.config.DEDUP_WINDOW_HOURS)
+        self.signal_deduplicator: SignalMessageDeduplicator | None = None
         self.translator: Translator | None = None
         self.ai_engine = AiSignalEngine.from_config(self.config)
         self.running = False
@@ -67,6 +69,7 @@ class TelegramListener:
             "dup_memory": 0,
             "dup_hash": 0,
             "dup_semantic": 0,
+             "dup_signal": 0,
             "forwarded": 0,
             "errors": 0,
             "ai_processed": 0,
@@ -88,6 +91,12 @@ class TelegramListener:
         self.memory_repository: SupabaseMemoryRepository | LocalMemoryStore | HybridMemoryRepository | None = None
         self.price_tool: Any | None = None
         self.price_enabled = bool(getattr(self.config, "PRICE_ENABLED", False))
+        if self.config.SIGNAL_DEDUP_ENABLED:
+            self.signal_deduplicator = SignalMessageDeduplicator(
+                window_minutes=self.config.SIGNAL_DEDUP_WINDOW_MINUTES,
+                similarity_threshold=self.config.SIGNAL_DEDUP_SIMILARITY,
+                min_common_chars=self.config.SIGNAL_DEDUP_MIN_COMMON_CHARS,
+            )
 
     async def initialize(self) -> None:
         """Prepare Telethon client and verify configuration."""
@@ -249,6 +258,7 @@ class TelegramListener:
         dependencies = PipelineDependencies(
             config=self.config,
             deduplicator=self.deduplicator,
+            signal_deduplicator=self.signal_deduplicator,
             translator=self.translator,
             ai_engine=self.ai_engine,
             forwarder=self.forwarder,
@@ -552,13 +562,29 @@ class TelegramListener:
                                 f"similarity={entry.similarity:.2f} time={entry.created_at.strftime('%Y-%m-%d %H:%M:%S')}"
                             )
                             logger.debug(f"      摘要: {entry.summary}")
+                            logger.debug(f"      event_type: {entry.event_type}")
                     else:
-                        # INFO level: 只显示简短统计
+                        # INFO level: 显示结构化的记忆摘要
+                        logger.info("📚 历史记忆上下文:")
                         for i, entry in enumerate(memory_context.entries, 1):
                             logger.info(
-                                f"  [{i}] {entry.assets} {entry.action} "
-                                f"(conf={entry.confidence:.2f}, sim={entry.similarity:.2f})"
+                                f"  [{i}] {entry.assets} conf={entry.confidence:.2f} sim={entry.similarity:.2f} summary={entry.summary[:80]}"
                             )
+
+                        # 统计分析：资产分布和操作建议模式
+                        asset_counts = {}
+                        action_counts = {}
+                        for entry in memory_context.entries:
+                            for asset in (entry.assets or "").split(","):
+                                asset = asset.strip()
+                                if asset:
+                                    asset_counts[asset] = asset_counts.get(asset, 0) + 1
+                            if entry.action:
+                                action_counts[entry.action] = action_counts.get(entry.action, 0) + 1
+
+                        logger.info("📊 记忆统计: 资产=%s, 操作=%s",
+                                   dict(sorted(asset_counts.items(), key=lambda x: x[1], reverse=True)[:3]),
+                                   action_counts)
                 else:
                     historical_reference_entries = []
                     logger.debug("🧠 无历史记忆，使用空上下文")
@@ -759,6 +785,23 @@ class TelegramListener:
 
             if is_priority_kol:
                 ai_kwargs["ai_confidence"] = 1.0
+
+            if self.signal_deduplicator and ai_kwargs.get("ai_summary"):
+                if self.signal_deduplicator.is_duplicate(
+                    summary=str(ai_kwargs.get("ai_summary") or ""),
+                    action=str(ai_kwargs.get("ai_action") or ""),
+                    direction=str(ai_kwargs.get("ai_direction") or ""),
+                    event_type=str(ai_kwargs.get("ai_event_type") or ""),
+                    asset=str(ai_kwargs.get("ai_asset") or ""),
+                    asset_names=str(ai_kwargs.get("ai_asset_names") or ""),
+                ):
+                    self.stats["duplicates"] += 1
+                    self.stats["dup_signal"] += 1
+                    logger.info(
+                        "🔄 信号内容与近期重复，跳过转发: source=%s",
+                        source_name,
+                    )
+                    return
 
             show_original = self._should_include_original(
                 original_text=message_text,
@@ -1030,6 +1073,18 @@ class TelegramListener:
         if not original_text.strip():
             return
 
+        # Log persistence attempt with context
+        status_label = "已转发" if forwarded else "已跳过"
+        ai_info = ""
+        if signal_result:
+            ai_info = f" ai_confidence={signal_result.confidence:.2f} action={signal_result.action}"
+        logger.debug(
+            "🗄️ 持久化尝试: source=%s status=%s%s",
+            source_name,
+            status_label,
+            ai_info,
+        )
+
         try:
             hash_raw = hash_raw or compute_sha256(original_text)
             hash_canonical = hash_canonical or compute_canonical_hash(original_text)
@@ -1067,13 +1122,13 @@ class TelegramListener:
                 if signal_result.error:
                     metadata["ai_error"] = signal_result.error
 
-            # Level 1: Exact hash dedup
+            # Level 1: Exact hash dedup (persistence phase)
             news_event_id = await self.news_repository.check_duplicate(hash_raw)
             if news_event_id:
-                logger.debug("精确去重命中: event_id=%s", news_event_id)
+                logger.debug("🗄️ 持久化阶段 - 精确去重命中: event_id=%s", news_event_id)
                 return
 
-            # Level 2: Semantic embedding dedup
+            # Level 2: Semantic embedding dedup (persistence phase)
             if embedding_vector and not is_priority_kol:
                 intensity = analyze_event_intensity(
                     original_text,
@@ -1098,7 +1153,7 @@ class TelegramListener:
                 )
                 if similar:
                     logger.info(
-                        "语义去重命中: event_id=%s similarity=%.3f content_preview=%s",
+                        "🗄️ 持久化阶段 - 语义去重命中: event_id=%s similarity=%.3f content_preview=%s (消息已在前面因 AI 评估被跳过)",
                         similar["id"],
                         similar["similarity"],
                         similar.get("content_text", "")[:50],
@@ -1181,10 +1236,16 @@ class TelegramListener:
                 price_snapshot=price_snapshot,
             )
             await self.signal_repository.insert_signal(signal_payload)
+            logger.debug(
+                "🗄️ 持久化成功: news_event_id=%s forwarded=%s ai_confidence=%.2f",
+                news_event_id,
+                forwarded,
+                confidence_value,
+            )
         except SupabaseError as exc:
-            logger.warning("Supabase 写入失败: %s", exc)
+            logger.warning("🗄️ Supabase 写入失败: %s", exc)
         except Exception as exc:  # pylint: disable=broad-except
-            logger.warning("持久化流程异常: %s", exc)
+            logger.warning("🗄️ 持久化流程异常: %s", exc)
 
     def _collect_keywords(self, *texts: str) -> list[str]:
         hits: list[str] = []
@@ -1278,7 +1339,7 @@ class TelegramListener:
                 "   • 总接收: %s\n"
                 "   • 已转发: %s\n"
                 "   • 关键词过滤: %s\n"
-                "   • 重复消息: %s (内存: %s / 哈希: %s / 语义: %s)\n"
+                "   • 重复消息: %s (内存: %s / 哈希: %s / 语义: %s / 信号: %s)\n"
                 "   • 错误次数: %s\n"
                 "   • 翻译成功: %s\n"
                 "   • 翻译错误: %s\n"
@@ -1294,6 +1355,7 @@ class TelegramListener:
                 self.stats["dup_memory"],
                 self.stats["dup_hash"],
                 self.stats["dup_semantic"],
+                self.stats["dup_signal"],
                 self.stats["errors"],
                 self.stats["translations"],
                 self.stats["translation_errors"],

@@ -10,10 +10,10 @@ echo ""
 
 # Test 1: Search News Tool
 echo "Test 1: Search News Tool"
-echo "Command: uvx --with-requirements requirements.txt python scripts/codex_tools/search_news.py --query 'Bitcoin ETF approval' --max-results 3"
+echo "Command: python scripts/codex_tools/search_news.py --query 'Bitcoin ETF approval' --max-results 3"
 echo ""
 
-uvx --with-requirements requirements.txt python scripts/codex_tools/search_news.py \
+python scripts/codex_tools/search_news.py \
     --query "Bitcoin ETF approval" \
     --max-results 3 2>&1 | head -30
 
@@ -24,10 +24,10 @@ echo ""
 # Test 2: Fetch Price Tool (Single Asset)
 echo "=========================================="
 echo "Test 2: Fetch Price Tool (Single Asset)"
-echo "Command: uvx --with-requirements requirements.txt python scripts/codex_tools/fetch_price.py --assets BTC"
+echo "Command: python scripts/codex_tools/fetch_price.py --assets BTC"
 echo ""
 
-uvx --with-requirements requirements.txt python scripts/codex_tools/fetch_price.py \
+python scripts/codex_tools/fetch_price.py \
     --assets BTC 2>&1 | head -30
 
 echo ""
@@ -37,10 +37,10 @@ echo ""
 # Test 3: Fetch Price Tool (Multiple Assets)
 echo "=========================================="
 echo "Test 3: Fetch Price Tool (Multiple Assets)"
-echo "Command: uvx --with-requirements requirements.txt python scripts/codex_tools/fetch_price.py --assets BTC ETH SOL"
+echo "Command: python scripts/codex_tools/fetch_price.py --assets BTC ETH SOL"
 echo ""
 
-uvx --with-requirements requirements.txt python scripts/codex_tools/fetch_price.py \
+python scripts/codex_tools/fetch_price.py \
     --assets BTC ETH SOL 2>&1 | head -50
 
 echo ""
@@ -50,10 +50,10 @@ echo ""
 # Test 4: Fetch Memory Tool
 echo "=========================================="
 echo "Test 4: Fetch Memory Tool"
-echo "Command: uvx --with-requirements requirements.txt python scripts/codex_tools/fetch_memory.py --query 'Bitcoin price' --asset BTC --limit 2"
+echo "Command: python scripts/codex_tools/fetch_memory.py --query 'Bitcoin price' --asset BTC --limit 2"
 echo ""
 
-uvx --with-requirements requirements.txt python scripts/codex_tools/fetch_memory.py \
+python scripts/codex_tools/fetch_memory.py \
     --query "Bitcoin price" \
     --asset BTC \
     --limit 2 2>&1 | head -30

@@ -57,7 +57,7 @@ python diagnose_memory.py
 
 1. **Message Ingestion** (`src/listener.py`): Telethon monitors `SOURCE_CHANNELS`, receives new messages
 2. **Keyword Filtering**: Messages filtered by keywords from `keywords.txt` (gitignored) or `FILTER_KEYWORDS` env var
-3. **Deduplication**:
+3. **Deduplication** (4-tier system):
    - In-memory window dedup (`MessageDeduplicator`)
    - Database hash dedup (`hash_raw`)
    - Semantic vector dedup (`embedding` + PostgreSQL RPC `find_similar_events`)
@@ -65,9 +65,10 @@ python diagnose_memory.py
 5. **AI Signal Analysis** (`src/ai/signal_engine.py`):
    - Fast analysis with Gemini/OpenAI-compatible models (90% of messages)
    - Optional deep analysis with Claude/Gemini Function Calling (high-value signals, confidence >= 0.75)
-6. **Memory Context** (`src/memory/`): Retrieves historical similar events to inject into AI prompts
-7. **Message Forwarding** (`src/forwarder.py`): Sends formatted messages to `TARGET_CHAT_ID`
-8. **Persistence** (`src/db/repositories.py`): Stores events and signals in Supabase
+6. **Signal Deduplication** ✨ (`SignalMessageDeduplicator`): Detects similar AI-generated signals to prevent duplicate forwarding when different sources report the same event
+7. **Memory Context** (`src/memory/`): Retrieves historical similar events to inject into AI prompts
+8. **Message Forwarding** (`src/forwarder.py`): Sends formatted messages to `TARGET_CHAT_ID`
+9. **Persistence** (`src/db/repositories.py`): Stores events and signals in Supabase
 
 ### Dual-Engine AI Analysis
 
@@ -126,6 +127,12 @@ All configuration is in `.env` (see README.md for comprehensive list). Key varia
 - `MEMORY_BACKEND`: Backend type (local/supabase/hybrid)
 - `MEMORY_MAX_NOTES`: Max historical entries per query
 
+### Signal Deduplication ✨
+- `SIGNAL_DEDUP_ENABLED`: Enable signal-level deduplication (default: true)
+- `SIGNAL_DEDUP_WINDOW_MINUTES`: Time window in minutes (default: 360 = 6 hours)
+- `SIGNAL_DEDUP_SIMILARITY`: Text similarity threshold 0.0-1.0 (default: 0.68)
+- `SIGNAL_DEDUP_MIN_COMMON_CHARS`: Minimum common characters (default: 10)
+
 ### Database
 - `ENABLE_DB_PERSISTENCE`: Enable Supabase persistence
 - `SUPABASE_URL`, `SUPABASE_SERVICE_KEY`: Supabase credentials
@@ -133,13 +140,22 @@ All configuration is in `.env` (see README.md for comprehensive list). Key varia
 
 ## Important Implementation Details
 
-### Deduplication Strategy (3-tier)
+### Deduplication Strategy (4-tier) ✨
 
 1. **In-memory window**: `MessageDeduplicator` checks last N hours of messages (`DEDUP_WINDOW_HOURS`)
 2. **Hash-based**: `compute_sha256(text)` → check `news_events.hash_raw`
 3. **Semantic vector**: `compute_embedding()` → PostgreSQL RPC `find_similar_events()` with cosine similarity threshold
+4. **Signal-level** ✨: `SignalMessageDeduplicator` detects similar AI-generated signals based on:
+   - Normalized summary text (removes URLs, numbers, punctuation)
+   - Metadata matching (action, direction, event_type, asset)
+   - Text similarity threshold (default 0.68) using SequenceMatcher
+   - Character set overlap (minimum 10 common characters)
+   - Time window (default 6 hours)
 
-**Critical**: Embedding dedup happens at both pre-processing (before AI) and persistence stages to prevent duplicates. See `src/listener.py:337-379` and `src/listener.py:836-856`.
+**Critical**:
+- Embedding dedup happens at both pre-processing (before AI) and persistence stages to prevent duplicates. See `src/listener.py:337-379` and `src/listener.py:836-856`.
+- Signal dedup happens after AI analysis but before message formatting to prevent duplicate forwarding when different sources report the same event. See `src/listener.py:773-788` and `src/pipeline/langgraph_pipeline.py:872-894`.
+- Full documentation: `docs/signal_deduplication.md`
 
 ### AI Response Parsing
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from typing import Sequence
 
 from .base import DeepAnalysisEngine, DeepAnalysisError, build_deep_analysis_messages
@@ -24,6 +25,8 @@ class CodexCliDeepAnalysisEngine(DeepAnalysisEngine):
         extra_cli_args: Sequence[str] | None = None,
         max_retries: int = 1,
         working_directory: str | None = None,
+        disable_after_failures: int = 2,
+        failure_cooldown: float = 300.0,
     ) -> None:
         super().__init__(provider_name="codex_cli", parse_json_callback=parse_json_callback)
         self._cli_path = cli_path or "codex"
@@ -32,12 +35,26 @@ class CodexCliDeepAnalysisEngine(DeepAnalysisEngine):
         self._extra_args = tuple(str(arg) for arg in (extra_cli_args or ()))
         self._max_retries = max(0, int(max_retries))
         self._working_directory = working_directory
+        self._disable_after_failures = max(1, int(disable_after_failures))
+        self._failure_cooldown = max(0.0, float(failure_cooldown))
+        self._consecutive_failures: int = 0
+        self._cooldown_until: float = 0.0
 
     async def analyse(  # pragma: no cover - exercised via dedicated tests
         self,
         payload: "EventPayload",
         preliminary: "SignalResult",
     ) -> "SignalResult":
+        if self._is_in_cooldown():
+            remaining = max(0.0, self._cooldown_until - time.time())
+            logger.warning(
+                "⏭️  Codex CLI 深度分析处于冷却期 (剩余 %.1fs)，跳过调用",
+                remaining,
+            )
+            raise DeepAnalysisError(
+                f"Codex CLI 暂停中，冷却剩余 {remaining:.0f}s"
+            )
+
         logger.info(
             "🤖 开始 Codex CLI 深度分析: source=%s event_type=%s asset=%s confidence=%.2f",
             payload.source,
@@ -48,6 +65,34 @@ class CodexCliDeepAnalysisEngine(DeepAnalysisEngine):
 
         prompt = self._build_cli_prompt(payload, preliminary)
         logger.debug("Codex CLI prompt 长度: %d 字符", len(prompt))
+
+        # 记录 prompt 的关键部分（历史记忆上下文）
+        if payload.historical_reference and payload.historical_reference.get("entries"):
+            entries = payload.historical_reference.get("entries", [])
+            logger.info(
+                "📚 Claude CLI 接收历史记忆上下文: %d 条记录",
+                len(entries)
+            )
+            for i, entry in enumerate(entries[:5], 1):  # 最多显示前5条
+                logger.info(
+                    "  记忆[%d]: asset=%s action=%s conf=%.2f sim=%.2f summary=%s",
+                    i,
+                    getattr(entry, 'assets', 'N/A'),
+                    getattr(entry, 'action', 'N/A'),
+                    getattr(entry, 'confidence', 0.0),
+                    getattr(entry, 'similarity', 0.0),
+                    getattr(entry, 'summary', '')[:80]
+                )
+        else:
+            logger.info("📚 Claude CLI 无历史记忆上下文")
+
+        # 在 DEBUG 级别记录完整的 prompt（仅用于深度调试）
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug("=" * 80)
+            logger.debug("完整 Codex CLI Prompt:")
+            logger.debug("-" * 80)
+            logger.debug(prompt)
+            logger.debug("=" * 80)
 
         last_error: Exception | None = None
 
@@ -77,6 +122,24 @@ class CodexCliDeepAnalysisEngine(DeepAnalysisEngine):
                     result.confidence,
                     result.asset,
                 )
+
+                # 显示 Claude 的推理过程（notes 字段）
+                if result.notes:
+                    logger.info("🧠 Claude 推理细节:")
+                    # 将 notes 按行分割，每行单独记录
+                    notes_lines = result.notes.strip().split('\n')
+                    for line in notes_lines[:10]:  # 最多显示前10行
+                        if line.strip():
+                            logger.info("   %s", line.strip())
+                    if len(notes_lines) > 10:
+                        logger.info("   ... (共 %d 行，已省略 %d 行)", len(notes_lines), len(notes_lines) - 10)
+
+                # 显示风险标记和链接
+                if result.risk_flags:
+                    logger.info("⚠️  风险标记: %s", ", ".join(result.risk_flags))
+                if result.links:
+                    logger.info("🔗 验证链接: %d 个", len(result.links))
+                self._reset_failure_state()
                 return result
             except (DeepAnalysisError, asyncio.TimeoutError) as exc:
                 last_error = exc
@@ -99,6 +162,7 @@ class CodexCliDeepAnalysisEngine(DeepAnalysisEngine):
                     )
                     break
 
+        self._register_failure(last_error)
         message = str(last_error) if last_error else "Codex CLI 未返回结果"
         raise DeepAnalysisError(message)
 
@@ -135,7 +199,10 @@ class CodexCliDeepAnalysisEngine(DeepAnalysisEngine):
 
 1. **新闻搜索工具** (search_news.py)
    - 用途：验证事件真实性、获取多源确认、发现关键细节
-   - 命令格式：
+   - 优先命令：
+     python scripts/codex_tools/search_news.py \\
+         --query "关键词" --max-results 6
+   - 备用命令（仅当本地 Python 缺少依赖时再使用，会触发网络下载）：
      uvx --with-requirements requirements.txt python scripts/codex_tools/search_news.py \\
          --query "关键词" --max-results 6
    - 输出：JSON 格式，包含 success、data、confidence、triggered、error 字段
@@ -146,28 +213,34 @@ class CodexCliDeepAnalysisEngine(DeepAnalysisEngine):
 
 2. **价格数据工具** (fetch_price.py)
    - 用途：获取资产实时价格、涨跌幅、市值、交易量数据
-   - 命令格式：
+   - 优先命令：
+     python scripts/codex_tools/fetch_price.py \\
+        --assets 资产1 资产2 资产3
+   - 备用命令（仅当本地 Python 缺少依赖时再使用，会触发网络下载）：
      uvx --with-requirements requirements.txt python scripts/codex_tools/fetch_price.py \\
          --assets 资产1 资产2 资产3
    - 输出：JSON 格式，包含 success、count、assets 字段（每个资产包含 price、price_change_24h、price_change_1h、price_change_7d、market_cap、volume_24h）
    - 何时使用：需要验证价格异常、评估市场反应、量化涨跌幅
    - 示例（单个资产）：
-     uvx --with-requirements requirements.txt python scripts/codex_tools/fetch_price.py \\
-         --assets BTC
+     python scripts/codex_tools/fetch_price.py \\
+        --assets BTC
    - 示例（多个资产）：
-     uvx --with-requirements requirements.txt python scripts/codex_tools/fetch_price.py \\
-         --assets BTC ETH SOL
+     python scripts/codex_tools/fetch_price.py \\
+        --assets BTC ETH SOL
 
 3. **历史记忆检索工具** (fetch_memory.py)
    - 用途：查找历史相似事件、参考过去案例的处理方式
-   - 命令格式：
+   - 优先命令：
+     python scripts/codex_tools/fetch_memory.py \\
+        --query "主题描述" --asset 资产代码 --limit 3
+   - 备用命令（仅当本地 Python 缺少依赖时再使用，会触发网络下载）：
      uvx --with-requirements requirements.txt python scripts/codex_tools/fetch_memory.py \\
          --query "主题描述" --asset 资产代码 --limit 3
    - 输出：JSON 格式，包含 success、entries、similarity_floor 字段
    - 何时使用：需要历史案例参考、判断事件独特性、评估风险
    - 示例：
-     uvx --with-requirements requirements.txt python scripts/codex_tools/fetch_memory.py \\
-         --query "USDC depeg risk" --asset USDC --limit 3
+     python scripts/codex_tools/fetch_memory.py \\
+        --query "USDC depeg risk" --asset USDC --limit 3
 
 **工具调用规则**：
 - ✅ 必须：将执行的命令、关键数据、证据来源写入 notes 字段
@@ -189,9 +262,9 @@ class CodexCliDeepAnalysisEngine(DeepAnalysisEngine):
 **证据引用示例**（在 notes 中）：
 - "通过搜索工具验证：找到 5 条来源，多源确认=true，官方确认=true，confidence=0.85"
 - "价格数据：BTC $107,817 (-0.68% 24h), ETH $3,245 (+1.2% 24h), SOL $185 (+0.5% 24h)"
-- "价格命令：uvx ... fetch_price.py --assets BTC ETH SOL"
+- "价格命令：python scripts/codex_tools/fetch_price.py --assets BTC ETH SOL"
 - "历史记忆检索到 2 条相似案例（similarity > 0.8），过去处理方式为 observe"
-- "搜索命令：uvx ... search_news.py --query 'Binance ABC listing official'"
+- "搜索命令：python scripts/codex_tools/search_news.py --query 'Binance ABC listing official'"
 - "链接：[source1_url, source2_url]（来自搜索结果）"
 """
         sections.append(tool_guidelines)
@@ -204,6 +277,39 @@ class CodexCliDeepAnalysisEngine(DeepAnalysisEngine):
         logger.debug("Codex CLI prompt 构建完成: %d 个 section, 总长度 %d", len(sections), len(prompt))
 
         return prompt
+
+    def _is_in_cooldown(self) -> bool:
+        if self._cooldown_until <= 0.0:
+            return False
+        if time.time() >= self._cooldown_until:
+            self._cooldown_until = 0.0
+            self._consecutive_failures = 0
+            return False
+        return True
+
+    def _reset_failure_state(self) -> None:
+        self._consecutive_failures = 0
+        self._cooldown_until = 0.0
+
+    def _register_failure(self, error: Exception | None) -> None:
+        self._consecutive_failures += 1
+        logger.debug(
+            "Codex CLI 失败计数: %d/%d",
+            self._consecutive_failures,
+            self._disable_after_failures,
+        )
+        if (
+            self._failure_cooldown > 0.0
+            and self._consecutive_failures >= self._disable_after_failures
+        ):
+            self._cooldown_until = time.time() + self._failure_cooldown
+            logger.warning(
+                "🚫 Codex CLI 连续失败达到上限 (%d/%d)，暂停 %.0f 秒: %s",
+                self._consecutive_failures,
+                self._disable_after_failures,
+                self._failure_cooldown,
+                error,
+            )
 
     async def _invoke_cli(self, prompt: str) -> str:
         """Execute Codex CLI and return stdout."""
