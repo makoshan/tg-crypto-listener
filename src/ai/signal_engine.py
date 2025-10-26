@@ -82,6 +82,7 @@ ALLOWED_RISK_FLAGS = {
     "vague_timeline",      # 时间线模糊（"即将"、"近期"、"不久"等）
     "speculative",         # 投机性/无实质内容（"大事件"、"重要更新"等）
     "unverifiable",        # 无法验证的声明或预期
+    "stale_event",         # 过期事件（>72小时）或事后回顾
 }
 
 
@@ -966,9 +967,16 @@ class AiSignalEngine:
 
 
 def build_signal_prompt(payload: EventPayload) -> list[dict[str, str]]:
+    # Calculate message age for freshness check
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc)
+    timestamp_aware = payload.timestamp if payload.timestamp.tzinfo else payload.timestamp.replace(tzinfo=timezone.utc)
+    message_age_hours = (now - timestamp_aware).total_seconds() / 3600
+
     context = {
         "source": payload.source,
         "timestamp": payload.timestamp.isoformat(),
+        "message_age_hours": round(message_age_hours, 1),  # 新增：消息年龄（小时）
         "language": payload.language,
         "translation_confidence": payload.translation_confidence,
         "original_text": payload.text,
@@ -1012,6 +1020,27 @@ def build_signal_prompt(payload: EventPayload) -> list[dict[str, str]]:
         "- ⚠️ 部分可执行（confidence 0.4-0.6）：有交易方向但缺少时间节点，或有数据但缺少明确标的\n"
         "- ❌ 不可执行（confidence ≤0.4）：纯统计数字、笼统趋势、情绪观察、无具体标的或时间\n"
         "**特别注意**：涉及主流币（BTC/ETH/SOL）价格变化的消息，默认具有更高执行价值，confidence 应适当提升（+0.15 到 +0.25）。\n"
+        "\n## 时效性判断 ⚠️ 核心优先级\n"
+        "**message_age_hours 字段表示消息发布至今的小时数，必须严格检查时效性**：\n"
+        "1. **实时新闻（≤24小时）**：\n"
+        "   - 消息描述正在发生的事件、刚刚宣布的公告、实时价格波动 → 保持或提升 confidence\n"
+        "   - 关键词：\"刚刚\"、\"今日\"、\"现在\"、\"just announced\"、\"breaking\" → 时效性高\n"
+        "2. **近期新闻（24-72小时）**：\n"
+        "   - 事件发生不久，市场可能仍在消化 → confidence 降低 -0.10 to -0.20\n"
+        "   - 如果是重大事件（监管、黑客攻击、交易所上币）且市场未充分反应 → 可适度保留 confidence\n"
+        "3. **过期新闻（>72小时，即 message_age_hours > 72）**：\n"
+        "   - **强制降低 confidence -0.30 to -0.50**，市场大概率已消化\n"
+        "   - action 强制改为 \"observe\"（除非是长期趋势分析）\n"
+        "   - 在 notes 中明确标注：\"消息已过期（X小时前），市场可能已反应\"\n"
+        "4. **事后回顾/历史总结（识别语义特征）**：\n"
+        "   - 关键词：\"回顾\"、\"总结\"、\"...之后\"、\"事件后\"、\"历史上...\" → 这不是实时交易机会\n"
+        "   - **强制降低 confidence -0.40 to -0.60**，action=observe\n"
+        "   - 在 notes 中标注：\"事后回顾类内容，非实时交易信号\"\n"
+        "5. **特殊情况例外**：\n"
+        "   - 长期趋势分析（如机构采用、监管政策）即使消息较旧，但如果仍具备长期影响 → timeframe=long，confidence 适度降低但不强制 ≤0.4\n"
+        "   - 历史数据对比（如\"与2024年X月类似\"）用于增强判断可信度 → 不视为过期，但需结合当前市场状态\n"
+        "**时效性检查优先级最高**：在所有其他规则之前，先检查 message_age_hours 和语义特征，判断是否为过期/事后回顾内容。\n"
+
         "\n## 时间范围（timeframe）\n"
         "timeframe 表示建议持仓时间或影响周期：\n"
         "- short（短期，<1周）：链上数据突变、巨鲸短期操作、短期事件催化（如空投、IDO）、技术面信号等需快速反应的机会\n"
@@ -1019,8 +1048,10 @@ def build_signal_prompt(payload: EventPayload) -> list[dict[str, str]]:
         "- long（长期，>1月）：监管政策、宏观采用率提升、基础设施建设、长期叙事（如机构入场、ETF 净流入持续）\n"
         "根据事件性质判断影响持续时间，例如：机构采用率提升→long；交易所上线→medium；巨鲸 24h 内买入→short。\n"
         "\n## 风险标志（risk_flags）\n"
-        "risk_flags 数组仅允许 price_volatility、liquidity_risk、regulation_risk、confidence_low、data_incomplete、vague_timeline、speculative、unverifiable。\n"
+        "risk_flags 数组仅允许 price_volatility、liquidity_risk、regulation_risk、confidence_low、data_incomplete、vague_timeline、speculative、unverifiable、stale_event。\n"
         "仅在实际触发时添加标志，避免堆砌；当 confidence <0.4 或缺少关键数据，可加入 confidence_low 或 data_incomplete。\n"
+        "**时效性相关标志**：当 message_age_hours > 72 或识别出事后回顾特征时，必须添加 stale_event 标志。\n"
+
         "当稳定币或包裹资产（如 USDE、WBETH、WBTC、WBSOL 等）出现脱锚、暴跌、折价、清算或强制平仓风险时，必须返回 action=sell、direction=short，confidence ≥0.8，并在 notes 说明触发原因与核心数据。\n"
         "若文本包含“脱锚、depeg、暴跌、大幅下跌、跌至、低于、清算、强制平仓”等词汇且伴随百分比或价格变动，请视为极端行情，重点描述跌幅、价格区间，并相应提升 confidence。\n"
         "对于极端行情，请在 risk_flags 中至少加入 price_volatility；如数据来源或链上细节缺失，额外标记 data_incomplete。\n"
@@ -1046,7 +1077,16 @@ def build_signal_prompt(payload: EventPayload) -> list[dict[str, str]]:
         "   - Binance Alpha 平台上线的代币通常市值较小、投机性强 → 自动降低 confidence 0.2-0.3\n"
         "   - Binance Alpha 空投活动，除非有明确的交易机会和时间节点 → action=observe，confidence ≤0.5\n"
         "   - 对于 Binance Alpha 消息，必须在 summary 中明确标注 '市值较小' 或 '投机性强' 等风险提示\n"
-        "11. **稳定币不可交易原则**：\n"
+        "11. **Hyperliquid 鲸鱼操作 - 聪明钱信号增强 ⚠️**：\n"
+        "   - Hyperliquid 是去中心化衍生品交易所，大户操作往往代表有内幕信息的聪明钱\n"
+        "   - 鲸鱼在 Hyperliquid 开仓（开多/开空）应视为高价值跟单机会 → confidence 自动 +0.15 到 +0.25\n"
+        "   - 巨额开仓（>100万美元）显示强烈方向性判断 → strength=high, timeframe 根据杠杆倍数判断（高杠杆=short，低杠杆=medium）\n"
+        "   - 多头仓位（开多） → action=buy, direction=long\n"
+        "   - 空头仓位（开空） → action=sell, direction=short\n"
+        "   - 必须在 summary 中明确标注开仓价、强平价、仓位规模、杠杆倍数等关键信息\n"
+        "   - 风险标志：仅在极端杠杆（>10x）时添加 price_volatility，但不应降低 confidence\n"
+        "   - **禁止将 Hyperliquid 鲸鱼操作判断为'投机行为'并降低置信度**，这是聪明钱信号而非散户投机\n"
+        "12. **稳定币不可交易原则**：\n"
         "   - USDC、USDT、DAI、BUSD、TUSD、USDP、GUSD、FRAX、LUSD、USDD 等稳定币设计目标为保持 1 美元价格，不存在价格波动交易机会\n"
         "   - 涉及稳定币的基础设施、供应量、市值等消息 → asset=NONE，action=observe，confidence ≤0.4\n"
         "   - **示例**：\"Circle 获得美联储支付通道，USDC 市场地位提升\" → asset=NONE，notes 说明 \"USDC 是稳定币不可交易，若想受益应关注使用 USDC 的 DeFi 协议或支付类代币\"\n"
@@ -1069,9 +1109,17 @@ def build_signal_prompt(payload: EventPayload) -> list[dict[str, str]]:
             "4. 对于宏观或情绪类观点，需判断其对主流资产或赛道的可操作影响，并在 notes 中给出简洁的执行建议或观察重点。"
         )
 
+    # Add freshness warning if message is old
+    freshness_warning = ""
+    if message_age_hours > 72:
+        freshness_warning = f"\n\n⚠️ **时效性警告**：该消息发布于 {message_age_hours:.1f} 小时前（约 {message_age_hours/24:.1f} 天），已超过72小时时效窗口。请严格按照时效性判断规则降低置信度并标注过期提示。"
+    elif message_age_hours > 24:
+        freshness_warning = f"\n\n⚠️ **时效性提示**：该消息发布于 {message_age_hours:.1f} 小时前，请适度降低置信度（-0.10 to -0.20）。"
+
     user_prompt = (
         "请结合以下事件上下文给出最具操作性的建议，若包含多条信息需综合判断：\n"
-        f"```json\n{context_json}\n```\n"
+        f"```json\n{context_json}\n```"
+        f"{freshness_warning}\n"
         "返回仅包含上述字段的 JSON 字符串，禁止出现额外文本；多资产请使用 asset 数组，notes 简洁说明关键要点或风险。"
     )
 
