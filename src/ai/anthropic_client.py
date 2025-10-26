@@ -85,7 +85,8 @@ class AnthropicClient:
                 max_output_tokens=self._max_output_tokens,
                 tools=tools or None,
                 context_management=self._context_management_config or None,
-                betas=self._betas if self._context_management_config else None,
+                # Send beta header when using tools (Memory Tool) or context management
+                betas=self._betas if (tools or self._context_management_config) else None,
             )
 
         conversation = list(convo)
@@ -174,38 +175,28 @@ class AnthropicClient:
         return system_prompt, conversation
 
     def _build_tool_definitions(self) -> Optional[List[Dict[str, Any]]]:
+        """Build tool definitions for Claude API.
+
+        Uses the standard Memory Tool API (memory_20250818) as specified in:
+        https://docs.claude.com/en/docs/agents-and-tools/tool-use/memory-tool
+
+        The tool definition is client-side only - the actual file operations
+        are handled by MemoryToolHandler.
+        """
         if self._memory_handler is None:
             return None
         return [
             {
-                "name": "memory_tool",
-                "description": (
-                    "Read and write persistent knowledge via structured commands. "
-                    "Supported commands: view, create, str_replace, insert, delete, rename."
-                ),
-                "input_schema": {
-                    "type": "object",
-                    "properties": {
-                        "command": {
-                            "type": "string",
-                            "enum": ["view", "create", "str_replace", "insert", "delete", "rename"],
-                        },
-                        "path": {"type": "string"},
-                        "file_text": {"type": "string"},
-                        "old_str": {"type": "string"},
-                        "new_str": {"type": "string"},
-                        "insert_line": {"type": "integer"},
-                        "insert_text": {"type": "string"},
-                        "old_path": {"type": "string"},
-                        "new_path": {"type": "string"},
-                    },
-                    "required": ["command"],
-                    "additionalProperties": True,
-                },
+                "type": "memory_20250818",
+                "name": "memory"
             }
         ]
 
     def _execute_tool(self, tool_block: Dict[str, Any]) -> Dict[str, Any]:
+        """Execute Memory Tool command via MemoryToolHandler.
+
+        The tool_name should be "memory" as per the memory_20250818 spec.
+        """
         if self._memory_handler is None:
             return {"success": False, "error": "memory handler not configured"}
 
@@ -213,7 +204,7 @@ class AnthropicClient:
         tool_input = tool_block.get("input", {})
         logger.debug("Claude Tool 调用: %s input=%s", tool_name, tool_input)
 
-        if tool_name != "memory_tool":
+        if tool_name != "memory":
             return {
                 "success": False,
                 "error": f"Unsupported tool: {tool_name}",

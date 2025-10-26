@@ -2,7 +2,17 @@
 Claude CLI Deep Analysis Memory Handler
 
 专门为 Claude CLI 深度分析设计的记忆管理系统
-基于 Anthropic Memory Tool API (context-management-2025-06-27)
+
+重要说明:
+这个实现不使用 Anthropic Memory Tool API (memory_20250818)，因为
+Claude CLI 是命令行工具，不支持 API 的多轮工具调用机制。
+
+本实现采用预检索策略：在 prompt 构建时主动注入历史记忆，而非让
+Claude 通过工具调用动态访问。这是 CLI 环境下的合理替代方案。
+
+如需使用标准 Memory Tool API，请参考:
+- src/ai/anthropic_client.py (API 实现)
+- src/memory/memory_tool_handler.py (工具处理器)
 """
 
 from __future__ import annotations
