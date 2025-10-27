@@ -1119,11 +1119,16 @@ def build_signal_prompt(payload: EventPayload) -> list[dict[str, str]]:
         "你是加密交易台的资深分析师，需要从多语种快讯中快速提炼可交易信号。\n"
         "务必仅输出一个 JSON 对象，禁止生成多段 JSON、列表外层或 Markdown 代码块，输出前后不得附加 ```、#、说明文字或额外段落。\n"
         "JSON 字段固定为 summary、event_type、asset、asset_name、action、direction、confidence、strength、timeframe、risk_flags、notes。\n"
-        "**summary 字段必须使用简体中文撰写，简明扼要（1-2 句话），直接说明核心事件和影响。**\n"
+        "**summary 字段必须使用简体中文撰写，简明扼要（1-2 句话），直接说明核心事件与新增情报或市场影响。**\n"
         "event_type 仅能取 listing、delisting、hack、regulation、funding、whale、liquidation、partnership、product_launch、governance、macro、celebrity、airdrop、scam_alert、other。\n"
         "action 为 buy、sell、observe；direction 为 long、short、neutral；strength 仅取 high、medium、low；timeframe 仅取 short、medium、long。\n"
         "如事件涉及多个币种，asset 可为数组（如 [\"BTC\",\"ETH\"]），asset_name 用简体中文名以顿号或逗号分隔；若无法确认币种则 asset=NONE、asset_name=无，并在 notes 解释原因。\n"
         "**黄金映射规则**：当消息涉及黄金（Gold/XAU/黄金期货）时，使用 asset=XAUT（Tether Gold 代币）来查询价格和分析。\n"
+        "notes 必须遵循 \"补充: ... | 风险: ... | 关注: ...\" 结构，分别概述新增信息、关键风险、后续需要搜索或跟踪的要点；如信息缺失，请在 \"关注\" 中列出待补充的数据或关键词。\n"
+        "\n## 信息扩展提示\n"
+        "1. 聚焦提炼文本中的定量数据、时间节点与参与方，确保 summary 与 notes 呈现最新事实；\n"
+        "2. 若缺乏价格、仓位、监管或宏观背景，请在 \"关注\" 段落中写明 \"需搜索: ...\" 并指出具体问题；\n"
+        "3. 无需强调 \"真伪待查\"，重点说明需要进一步扩充的信息维度和搜索方向。\n"
         "\n## 主流币市场指标重要性 ⚠️ 核心优先级\n"
         "**BTC（比特币）是整个加密市场的风向标和宏观指标**：\n"
         "1. **宏观关联性**：比特币价格与全球宏观环境（美联储政策、美元指数、地缘政治）高度相关，是加密市场风险偏好的核心指标。\n"
@@ -1287,7 +1292,7 @@ def build_signal_prompt(payload: EventPayload) -> list[dict[str, str]]:
         "请结合以下事件上下文给出最具操作性的建议，若包含多条信息需综合判断：\n"
         f"```json\n{context_json}\n```"
         f"{freshness_warning}\n"
-        "返回仅包含上述字段的 JSON 字符串，禁止出现额外文本；多资产请使用 asset 数组，notes 简洁说明关键要点或风险。"
+        "返回仅包含上述字段的 JSON 字符串，禁止出现额外文本；多资产请使用 asset 数组；notes 必须采用 \"补充: ... | 风险: ... | 关注: ...\" 格式，准确呈现新增信息、风险要点与待跟踪事项。"
     )
 
     return [
