@@ -28,7 +28,22 @@ class ClaudeDeepAnalysisEngine(DeepAnalysisEngine):
         payload: "EventPayload",
         preliminary: "SignalResult",
     ) -> "SignalResult":
-        messages = build_deep_analysis_messages(payload, preliminary)
+        messages = build_deep_analysis_messages(
+            payload,
+            preliminary,
+            additional_context={
+                "analysis_capabilities": {
+                    "provider": "claude",
+                    "tool_enabled": False,
+                    "search_enabled": False,
+                    "price_enabled": False,
+                    "macro_enabled": False,
+                    "onchain_enabled": False,
+                    "protocol_enabled": False,
+                    "notes": "Claude API 深度分析（纯文本复核，无工具调用能力）",
+                }
+            },
+        )
         try:
             response: AnthropicResponse = await self._client.generate_signal(messages)
         except AiServiceError as exc:

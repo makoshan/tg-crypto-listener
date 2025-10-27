@@ -209,7 +209,7 @@ class Config:
     AI_BASE_URL: str = os.getenv("AI_BASE_URL", "")
     AI_EXTRA_HEADERS: str = os.getenv("AI_EXTRA_HEADERS", "")
     AI_MODEL_NAME: str = os.getenv("AI_MODEL_NAME", "gemini-2.5-flash-lite")
-    AI_SIGNAL_THRESHOLD: float = float(os.getenv("AI_SIGNAL_THRESHOLD", "0.6"))
+    AI_SIGNAL_THRESHOLD: float = float(os.getenv("AI_SIGNAL_THRESHOLD", "0.65"))
     AI_TIMEOUT_SECONDS: float = float(os.getenv("AI_TIMEOUT_SECONDS", "8"))
     AI_MAX_CONCURRENCY: int = int(os.getenv("AI_MAX_CONCURRENCY", "2"))
     AI_RETRY_ATTEMPTS: int = int(os.getenv("AI_RETRY_ATTEMPTS", "1"))
@@ -236,6 +236,11 @@ class Config:
     MEMORY_SIMILARITY_THRESHOLD: float = float(
         os.getenv("MEMORY_SIMILARITY_THRESHOLD", "0.55")
     )
+    MEMORY_DUPLICATE_ENABLED: bool = _as_bool(os.getenv("MEMORY_DUPLICATE_ENABLED", "true"))
+    MEMORY_DUPLICATE_SIMILARITY: float = float(os.getenv("MEMORY_DUPLICATE_SIMILARITY", "0.6"))
+    MEMORY_DUPLICATE_SUMMARY_RATIO: float = float(os.getenv("MEMORY_DUPLICATE_SUMMARY_RATIO", "0.82"))
+    MEMORY_DUPLICATE_LOOKBACK_HOURS: int = int(os.getenv("MEMORY_DUPLICATE_LOOKBACK_HOURS", str(max(1, MEMORY_LOOKBACK_HOURS))))
+    MEMORY_DUPLICATE_MIN_ASSET_OVERLAP: int = int(os.getenv("MEMORY_DUPLICATE_MIN_ASSET_OVERLAP", "1"))
 
     # Claude configuration (for deep analysis)
     CLAUDE_ENABLED: bool = _as_bool(os.getenv("CLAUDE_ENABLED", "false"))

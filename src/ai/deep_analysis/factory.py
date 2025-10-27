@@ -18,6 +18,35 @@ from src.memory.factory import MemoryBackendBundle
 logger = logging.getLogger(__name__)
 
 
+def _normalise_openai_compatible_model(provider: str, model: str) -> str:
+    """Normalise provider-specific model identifiers."""
+
+    if not model:
+        return model
+
+    if provider != "qwen":
+        return model
+
+    trimmed = model.strip()
+    lowered = trimmed.lower()
+
+    alias_map = {
+        "qwen/qwen3-max-instruct": "qwen3-max",
+        "qwen/qwen-max": "qwen-max",
+        "qwen/qwen-plus": "qwen-plus",
+        "qwen/qwen-turbo": "qwen-turbo",
+    }
+
+    normalised = alias_map.get(lowered, trimmed)
+    if normalised != trimmed:
+        logger.info(
+            "ℹ️ 标准化 Qwen 模型名称: %s -> %s",
+            trimmed,
+            normalised,
+        )
+    return normalised
+
+
 def create_deep_analysis_engine(
     *,
     provider: str,
@@ -252,6 +281,7 @@ def create_deep_analysis_engine(
         enable_search = False
         if provider == "qwen":
             enable_search = provider_cfg.get("enable_search") or getattr(config, "QWEN_ENABLE_SEARCH", False)
+            model = _normalise_openai_compatible_model(provider, model)
 
         # Timeout
         timeout_attr = f"{provider.upper()}_DEEP_TIMEOUT_SECONDS"

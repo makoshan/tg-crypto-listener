@@ -1,0 +1,17 @@
+{
+  "patterns": [
+    {
+      "id": "eth_20251026_macro_trade_easing",
+      "timestamp": "2025-10-26T13:07:55+00:00",
+      "assets": ["ETH"],
+      "action": "buy",
+      "confidence": 0.85,
+      "similarity": 0.99,
+      "summary": "ETH 在 2025-10-26 的上涨主因是中美贸易缓和带来的风险偏好修复，资金重新配置至风险资产，导致以太坊价格延续上行。",
+      "notes": "参考 2025-10-25 18:07 的历史记忆：公司与机构合计增持逾 235.6 亿美元 ETH。今日富达基金规模突破 2.3 亿美元属于增持趋势的延续，体量远低于此前动作，对价格贡献次要。",
+      "source": "internal_memory",
+      "event_type": "macro_trade_easing",
+      "keywords": ["中美贸易缓和", "宏观情绪", "ETH上涨原因"]
+    }
+  ]
+}

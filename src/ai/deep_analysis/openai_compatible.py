@@ -146,11 +146,25 @@ class OpenAICompatibleEngine(DeepAnalysisEngine):
         3. 解析最终 JSON 信号
         """
 
+        capabilities = {
+            "provider": self.provider,
+            "tool_enabled": self._has_tools(),
+            "search_enabled": bool(self._search_tool),
+            "price_enabled": bool(self._price_tool),
+            "macro_enabled": bool(self._macro_tool),
+            "onchain_enabled": bool(self._onchain_tool),
+            "protocol_enabled": bool(self._protocol_tool),
+            "notes": "OpenAI 兼容引擎，可使用 Function Calling 工具" if self._has_tools() else "OpenAI 兼容引擎，当前未启用任何工具",
+        }
+
         # 1. 构建分析消息（复用 Gemini 的提示词逻辑）
         messages = build_deep_analysis_messages(
             payload=payload,
             preliminary=preliminary,
             history_limit=2,
+            additional_context={
+                "analysis_capabilities": capabilities,
+            },
         )
 
         # 2. 构建工具定义（如果工具已启用）

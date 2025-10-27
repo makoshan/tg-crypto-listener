@@ -174,7 +174,22 @@ class CodexCliDeepAnalysisEngine(DeepAnalysisEngine):
         """Flatten chat-style prompts into a single CLI-friendly prompt."""
         logger.debug("构建 Codex CLI prompt: source=%s", payload.source)
 
-        messages = build_deep_analysis_messages(payload, preliminary)
+        capabilities = {
+            "provider": "codex_cli",
+            "tool_enabled": True,
+            "search_enabled": True,
+            "price_enabled": True,
+            "macro_enabled": True,
+            "onchain_enabled": True,
+            "protocol_enabled": True,
+            "notes": "Codex CLI 模式，可直接运行脚本/搜索工具",
+        }
+
+        messages = build_deep_analysis_messages(
+            payload,
+            preliminary,
+            additional_context={"analysis_capabilities": capabilities},
+        )
         logger.debug("基础消息数量: %d 条", len(messages))
 
         sections: list[str] = []
@@ -243,7 +258,7 @@ class CodexCliDeepAnalysisEngine(DeepAnalysisEngine):
         --query "USDC depeg risk" --asset USDC --limit 3
 
 **工具调用规则**：
-- ✅ 必须：将执行的命令、关键数据、证据来源写入 notes 字段
+- ✅ 必须：将关键数据、证据来源、分析逻辑写入 notes 字段
 - ✅ 必须：使用 JSON 输出中的数据来支持你的分析（引用 source、confidence、links 等）
 - ✅ 建议：优先使用搜索工具验证高优先级事件（hack、regulation、partnership、listing）
 - ✅ 建议：如果消息是传闻或缺乏来源，使用搜索工具验证
@@ -251,6 +266,7 @@ class CodexCliDeepAnalysisEngine(DeepAnalysisEngine):
 - ✅ 建议：如果消息声称价格异常或涨跌，使用价格工具验证实际数据
 - ⚠️ 禁止：不要直接调用 Tavily HTTP API 或其他外部 API
 - ⚠️ 禁止：不要伪造数据或在没有执行命令的情况下声称已验证
+- ⚠️ 禁止：不要在 notes 中包含完整的命令行指令（如 python scripts/...），仅说明验证方法和结果
 - ⚠️ 注意：如果工具返回 success=false，说明失败原因，必要时调整查询后重试
 
 **失败处理**：
@@ -261,11 +277,10 @@ class CodexCliDeepAnalysisEngine(DeepAnalysisEngine):
 
 **证据引用示例**（在 notes 中）：
 - "通过搜索工具验证：找到 5 条来源，多源确认=true，官方确认=true，confidence=0.85"
-- "价格数据：BTC $107,817 (-0.68% 24h), ETH $3,245 (+1.2% 24h), SOL $185 (+0.5% 24h)"
-- "价格命令：python scripts/codex_tools/fetch_price.py --assets BTC ETH SOL"
+- "价格数据验证：BTC $107,817 (-0.68% 24h), ETH $3,245 (+1.2% 24h), SOL $185 (+0.5% 24h)"
 - "历史记忆检索到 2 条相似案例（similarity > 0.8），过去处理方式为 observe"
-- "搜索命令：python scripts/codex_tools/search_news.py --query 'Binance ABC listing official'"
-- "链接：[source1_url, source2_url]（来自搜索结果）"
+- "新闻搜索发现多篇报道验证事件真实性，包括官方公告"
+- "参考链接：[source1_url, source2_url]"
 """
         sections.append(tool_guidelines)
 

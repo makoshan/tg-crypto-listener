@@ -622,6 +622,7 @@ class LangGraphMessagePipeline:
         control = state.get("control") or ControlState()
         content = state.get("content") or ContentState()
         embedding = state.get("embedding")
+        raw_event = state.get("raw_event")
 
         if control.drop or not deps.config.MEMORY_ENABLED or not deps.memory_repository:
             return {
@@ -656,8 +657,13 @@ class LangGraphMessagePipeline:
             memory_context = None
 
         historical_reference: List[Dict[str, Any]] = []
+        current_msg_time = (
+            raw_event.processed_at
+            if raw_event and raw_event.processed_at
+            else datetime.now(timezone.utc)
+        )
         if memory_context and not memory_context.is_empty():
-            historical_reference = memory_context.to_prompt_payload()
+            historical_reference = memory_context.to_prompt_payload(current_time=current_msg_time)
             deps.logger.info("🧠 Memory 检索完成: %d 条记录", len(historical_reference))
             if deps.logger.isEnabledFor(10):  # DEBUG
                 for i, entry in enumerate(memory_context.entries, 1):

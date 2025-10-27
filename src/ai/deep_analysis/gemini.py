@@ -258,7 +258,30 @@ class GeminiDeepAnalysisEngine(DeepAnalysisEngine):
         preliminary: "SignalResult",
     ) -> "SignalResult":
         """Traditional Function Calling implementation (backward compatible)."""
-        conversation = build_deep_analysis_messages(payload, preliminary)
+        tool_enabled = any([
+            self._search_tool,
+            self._price_tool,
+            self._macro_tool,
+            self._onchain_tool,
+            self._protocol_tool,
+        ])
+
+        conversation = build_deep_analysis_messages(
+            payload,
+            preliminary,
+            additional_context={
+                "analysis_capabilities": {
+                    "provider": "gemini",
+                    "tool_enabled": bool(tool_enabled),
+                    "search_enabled": bool(self._search_tool),
+                    "price_enabled": bool(self._price_tool),
+                    "macro_enabled": bool(self._macro_tool),
+                    "onchain_enabled": bool(self._onchain_tool),
+                    "protocol_enabled": bool(self._protocol_tool),
+                    "notes": "Gemini Function Calling 深度分析" + ("，可触发外部工具" if tool_enabled else "，当前仅文本复核"),
+                }
+            },
+        )
         try:
             response = await self._run_tool_loop(conversation, payload, preliminary)
         except AiServiceError as exc:

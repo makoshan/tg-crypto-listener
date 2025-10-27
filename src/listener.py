@@ -8,8 +8,9 @@ import signal
 import sys
 import re
 from datetime import datetime, timezone
+from difflib import SequenceMatcher
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 from telethon import TelegramClient, events
 from telethon.errors import PhoneCodeInvalidError, SessionPasswordNeededError
@@ -35,6 +36,7 @@ from .utils import (
 from .db import AiSignalRepository, NewsEventRepository, SupabaseError, get_supabase_client
 from .memory import (
     MemoryContext,
+    MemoryEntry,
     MemoryRepositoryConfig,
     SupabaseMemoryRepository,
     LocalMemoryStore,
@@ -547,7 +549,7 @@ class TelegramListener:
                         logger.warning("记忆检索失败，跳过历史参考: %s", exc)
                         memory_context = None
                 if memory_context and not memory_context.is_empty():
-                    historical_reference_entries = memory_context.to_prompt_payload()
+                    historical_reference_entries = memory_context.to_prompt_payload(current_time=event_time)
                     logger.info(
                         "🧠 记忆注入 Prompt: %d 条历史参考",
                         len(historical_reference_entries),
@@ -614,6 +616,53 @@ class TelegramListener:
             if signal_result and is_priority_kol:
                 # Priority KOL: normalize confidence to 1.0 for downstream gating and persistence
                 signal_result.confidence = 1.0
+
+            duplicate_match: Optional[tuple[MemoryEntry, float, float, int]] = None
+            if (
+                signal_result
+                and signal_result.status == "success"
+                and memory_context
+            ):
+                duplicate_match = self._detect_memory_duplicate(
+                    signal_result=signal_result,
+                    memory_context=memory_context,
+                    event_time=event_time,
+                )
+
+            if duplicate_match:
+                matched_entry, similarity_score, summary_ratio, asset_overlap = duplicate_match
+                self.stats["duplicates"] += 1
+                self.stats["dup_memory"] += 1
+                logger.info(
+                    "🧠 历史记忆判定重复，跳过转发: source=%s matched_id=%s similarity=%.2f summary_ratio=%.2f asset_overlap=%d",
+                    source_name,
+                    matched_entry.id or "unknown",
+                    similarity_score,
+                    summary_ratio,
+                    asset_overlap,
+                )
+                logger.debug("🧠 匹配记忆摘要: %s", matched_entry.summary)
+                await self._persist_event(
+                    source_name,
+                    message_text,
+                    translated_text,
+                    signal_result,
+                    False,
+                    source_message_id=source_message_id,
+                    source_url=source_url,
+                    published_at=published_at,
+                    processed_at=event_time,
+                    language=language,
+                    keywords_hit=keywords_hit,
+                    translation_confidence=translation_confidence,
+                    media_refs=media_payload,
+                    hash_raw=hash_raw,
+                    hash_canonical=hash_canonical,
+                    embedding=embedding_vector,
+                    is_priority_kol=is_priority_kol,
+                    price_snapshot=None,
+                )
+                return
 
             # Fetch price if enabled and asset is detected
             price_snapshot: dict[str, Any] | None = None
@@ -1246,6 +1295,65 @@ class TelegramListener:
             logger.warning("🗄️ Supabase 写入失败: %s", exc)
         except Exception as exc:  # pylint: disable=broad-except
             logger.warning("🗄️ 持久化流程异常: %s", exc)
+
+    def _detect_memory_duplicate(
+        self,
+        *,
+        signal_result: SignalResult,
+        memory_context: MemoryContext,
+        event_time: datetime,
+    ) -> Optional[tuple[MemoryEntry, float, float, int]]:
+        """Return matching historical memory entry when the signal is considered duplicate."""
+        if (
+            not self.config.MEMORY_ENABLED
+            or not self.config.MEMORY_DUPLICATE_ENABLED
+            or not memory_context
+            or memory_context.is_empty()
+        ):
+            return None
+
+        normalized_current = SignalMessageDeduplicator._normalize_text(signal_result.summary or "")
+        if not normalized_current or len(normalized_current) < 10:
+            return None
+
+        similarity_threshold = max(0.0, min(1.0, float(self.config.MEMORY_DUPLICATE_SIMILARITY)))
+        summary_ratio_threshold = max(0.0, min(1.0, float(self.config.MEMORY_DUPLICATE_SUMMARY_RATIO)))
+        lookback_hours = max(1, int(self.config.MEMORY_DUPLICATE_LOOKBACK_HOURS))
+        min_overlap = max(0, int(self.config.MEMORY_DUPLICATE_MIN_ASSET_OVERLAP))
+
+        asset_tokens = {
+            token.strip().upper()
+            for token in (signal_result.asset or "").split(",")
+            if token.strip()
+        }
+
+        event_time_aware = event_time if event_time.tzinfo else event_time.replace(tzinfo=timezone.utc)
+
+        for entry in memory_context.entries:
+            entry_summary = entry.summary or ""
+            normalized_entry = SignalMessageDeduplicator._normalize_text(entry_summary)
+            if not normalized_entry:
+                continue
+
+            summary_ratio = SequenceMatcher(None, normalized_current, normalized_entry).ratio()
+            if entry.similarity < similarity_threshold and summary_ratio < summary_ratio_threshold:
+                continue
+
+            entry_time = entry.created_at
+            if entry_time.tzinfo is None:
+                entry_time = entry_time.replace(tzinfo=timezone.utc)
+            age_hours = abs((event_time_aware - entry_time).total_seconds()) / 3600.0
+            if age_hours > lookback_hours:
+                continue
+
+            entry_assets = {asset.strip().upper() for asset in entry.assets if asset}
+            asset_overlap = len(asset_tokens & entry_assets) if asset_tokens else len(entry_assets)
+            if asset_tokens and asset_overlap < min_overlap:
+                continue
+
+            return entry, entry.similarity, summary_ratio, asset_overlap
+
+        return None
 
     def _collect_keywords(self, *texts: str) -> list[str]:
         hits: list[str] = []

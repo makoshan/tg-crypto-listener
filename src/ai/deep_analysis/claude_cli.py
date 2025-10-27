@@ -151,7 +151,22 @@ class ClaudeCliDeepAnalysisEngine(DeepAnalysisEngine):
         """
         logger.debug("构建 Claude CLI prompt: source=%s", payload.source)
 
-        messages = build_deep_analysis_messages(payload, preliminary)
+        capabilities = {
+            "provider": "claude_cli",
+            "tool_enabled": True,
+            "search_enabled": True,
+            "price_enabled": True,
+            "macro_enabled": True,
+            "onchain_enabled": True,
+            "protocol_enabled": True,
+            "notes": "Claude CLI 模式，可通过 bash 命令调用本地验证工具",
+        }
+
+        messages = build_deep_analysis_messages(
+            payload,
+            preliminary,
+            additional_context={"analysis_capabilities": capabilities},
+        )
         logger.debug("基础消息数量: %d 条", len(messages))
 
         sections: list[str] = []
