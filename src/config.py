@@ -465,6 +465,7 @@ class Config:
     TOOL_SEARCH_ENABLED: bool = _as_bool(os.getenv("TOOL_SEARCH_ENABLED", "true"))
     DEEP_ANALYSIS_SEARCH_PROVIDER: str = os.getenv("DEEP_ANALYSIS_SEARCH_PROVIDER", "tavily")
     TAVILY_API_KEY: str = os.getenv("TAVILY_API_KEY", "")
+    BRAVE_API_KEY: str = os.getenv("BRAVE_API_KEY", "")
     SEARCH_MAX_RESULTS: int = int(os.getenv("SEARCH_MAX_RESULTS", "5"))
     SEARCH_MULTI_SOURCE_THRESHOLD: int = int(os.getenv("SEARCH_MULTI_SOURCE_THRESHOLD", "3"))
     SEARCH_CACHE_TTL_SECONDS: int = int(os.getenv("SEARCH_CACHE_TTL_SECONDS", "600"))

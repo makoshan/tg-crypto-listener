@@ -6,10 +6,12 @@ from typing import Type
 
 from .providers.base import ProviderRegistry, SearchProvider
 from .providers.tavily import TavilySearchProvider
+from .providers.brave import BraveSearchProvider
 
 # Registry for search providers (extensible for future providers)
 REGISTRY: ProviderRegistry = {
     "tavily": TavilySearchProvider,
+    "brave": BraveSearchProvider,
 }
 
 

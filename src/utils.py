@@ -210,31 +210,16 @@ class SignalMessageDeduplicator:
             asset=asset,
             asset_names=asset_names,
         )
-        
-        # Core metadata (excluding event_type for more flexible matching)
-        core_metadata = self._get_core_metadata(metadata)
-        
         char_set = set(normalized_summary)
         now = datetime.now()
         self._cleanup(now)
 
         for entry in self.entries:
-            # Check if core metadata (action, direction, asset) matches
-            entry_core = self._get_core_metadata(entry.metadata)
-            if core_metadata != entry_core:
+            if entry.metadata != metadata:
                 continue
 
-            # Check text similarity
             ratio = SequenceMatcher(None, normalized_summary, entry.normalized_summary).ratio()
-            
-            # For signals with matching core metadata, use a more lenient threshold
-            # This handles cases where different news sources report the same event
-            # but with different wording and media names
-            # Use 0.35 as effective threshold when core metadata matches
-            # (vs 0.68 default when core metadata doesn't match)
-            effective_threshold = 0.35
-            
-            if ratio < effective_threshold:
+            if ratio < self.similarity_threshold:
                 continue
 
             common_chars = len(char_set & entry.char_set)
@@ -261,18 +246,12 @@ class SignalMessageDeduplicator:
             self.entries.popleft()
 
     @staticmethod
-    def _get_core_metadata(metadata: Tuple[str, str, str, str, str]) -> Tuple[str, str, str, str]:
-        """Extract core metadata (action, direction, asset, asset_names) excluding event_type."""
-        return (metadata[0], metadata[1], metadata[3], metadata[4])  # action, direction, asset, asset_names
-
-    @staticmethod
     def _normalize_text(text: str) -> str:
         normalized = unicodedata.normalize("NFKC", text or "")
         normalized = normalized.lower()
         normalized = re.sub(r"https?://\S+", "", normalized)
         normalized = re.sub(r"[0-9]+(?:\.[0-9]+)?", "", normalized)
-        # Remove punctuation and brackets (连字符放在开头或结尾不需要转义)
-        normalized = re.sub(r"[-，,。.!？?：:；;\"'""''()（）【】{}<>《》•—・…~`_]+", "", normalized)
+        normalized = re.sub(r"[，,。.!？?：:；;\"'""''()（）\[\]{}<>《》•—\-·…~`_]+", "", normalized)
         normalized = re.sub(r"\s+", "", normalized)
         return normalized
 
