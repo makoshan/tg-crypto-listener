@@ -88,16 +88,35 @@ class AnthropicClient:
         tools = self._build_tool_definitions()
 
         async def _call_claude(payload_messages: List[Dict[str, Any]]):
-            return await self._client.messages.create(
-                model=self._model,
-                system=system_prompt,
-                messages=payload_messages,
-                max_output_tokens=self._max_output_tokens,
-                tools=tools or None,
-                context_management=self._context_management_config or None,
-                # Send beta header when using tools (Memory Tool) or context management
-                betas=self._betas if (tools or self._context_management_config) else None,
-            )
+            # Check if we're using a custom base_url (e.g., minimax) that may not support context_management
+            is_custom_api = self._base_url and "api.anthropic.com" not in self._base_url
+            
+            # Build kwargs, conditionally include context_management for official API only
+            create_kwargs: Dict[str, Any] = {
+                "model": self._model,
+                "system": system_prompt,
+                "messages": payload_messages,
+                # Some Anthropic SDK versions expect 'max_tokens' (older), others 'max_output_tokens' (newer).
+                # Use the backward-compatible key that satisfies SDK validation.
+                "max_tokens": self._max_output_tokens,
+                "tools": tools or None,
+            }
+            
+            # Only include context_management for official Anthropic API
+            # Custom APIs like minimax may not support this parameter
+            if not is_custom_api and self._context_management_config:
+                create_kwargs["context_management"] = self._context_management_config
+            
+            # Send beta header when using tools (Memory Tool) or context management
+            # In newer Anthropic SDK versions, betas are passed via extra_headers
+            # Only send beta header for official Anthropic API, not for custom APIs like minimax
+            if not is_custom_api and (tools or self._context_management_config):
+                extra_headers = create_kwargs.get("extra_headers", {})
+                # Multiple betas should be comma-separated in the header value
+                extra_headers["anthropic-beta"] = ",".join(self._betas)
+                create_kwargs["extra_headers"] = extra_headers
+            
+            return await self._client.messages.create(**create_kwargs)
 
         conversation = list(convo)
         usage: Dict[str, Any] = {}
