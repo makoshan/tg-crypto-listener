@@ -57,6 +57,7 @@
 - 推荐组合：
   - 成本优先：`DEEP_ANALYSIS_PROVIDER=gemini`，`GEMINI_DEEP_MODEL=gemini-2.5-pro`。
   - 质量优先：`DEEP_ANALYSIS_PROVIDER=claude`，`CLAUDE_MODEL=claude-sonnet-4.5`。
+  - 国内合规：`DEEP_ANALYSIS_PROVIDER=minimax`，`MINIMAX_BASE_URL=https://api.minimax.chat/v1`，并设置 `MINIMAX_API_KEY`/`MINIMAX_MODEL`。
   - 混合：配置备用引擎 `DEEP_ANALYSIS_FALLBACK_PROVIDER`。
 - 工具阈值：
   - 价格：`PRICE_TRIGGER_PCT`、`PRICE_LIQUIDATION_MULTIPLIER`。

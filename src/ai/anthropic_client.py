@@ -43,6 +43,7 @@ class AnthropicClient:
         self,
         *,
         api_key: str,
+        base_url: str | None = None,
         model_name: str,
         timeout: float = 30.0,
         max_tool_turns: int = 3,
@@ -57,7 +58,12 @@ class AnthropicClient:
         if AsyncAnthropic is None:
             raise AiServiceError("anthropic SDK 未安装，请先在环境中安装该依赖")
 
-        self._client = AsyncAnthropic(api_key=api_key)
+        client_kwargs: Dict[str, Any] = {"api_key": api_key}
+        self._base_url = (base_url or "").strip()
+        if self._base_url:
+            client_kwargs["base_url"] = self._base_url
+
+        self._client = AsyncAnthropic(**client_kwargs)
         self._model = model_name or "claude-3-5-sonnet-20240620"
         self._timeout = float(timeout)
         self._memory_handler = memory_handler
@@ -69,7 +75,11 @@ class AnthropicClient:
         self._betas: List[str] = ["context-management-2025-06-27"]
         self._context_management_config = self._build_context_management_config()
 
-        logger.info("AnthropicClient 初始化完成 (model=%s)", self._model)
+        logger.info(
+            "AnthropicClient 初始化完成 (model=%s base_url=%s)",
+            self._model,
+            self._base_url or "default",
+        )
 
     async def generate_signal(self, messages: Sequence[Dict[str, Any]]) -> AnthropicResponse:
         """Execute prompt against Claude with optional Memory Tool loop."""

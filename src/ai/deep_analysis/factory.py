@@ -184,11 +184,17 @@ def create_deep_analysis_engine(
             failure_cooldown=failure_cooldown,
         )
 
-    if provider == "claude":
-        claude_cfg = deep_config.get("claude", {})
-        api_key = claude_cfg.get("api_key") or getattr(config, "CLAUDE_API_KEY", "")
+    if provider in ("claude", "minimax"):
+        cfg_key = "claude" if provider == "claude" else "minimax"
+        provider_cfg = deep_config.get(cfg_key, {})
+
+        api_key_attr = "CLAUDE_API_KEY" if provider == "claude" else "MINIMAX_API_KEY"
+        api_key = provider_cfg.get("api_key") or getattr(config, api_key_attr, "")
         if not api_key:
-            raise DeepAnalysisError("Claude API key 未配置，无法启用深度分析")
+            raise DeepAnalysisError(f"{provider.capitalize()} API key 未配置，无法启用深度分析")
+
+        base_url_attr = "CLAUDE_BASE_URL" if provider == "claude" else "MINIMAX_BASE_URL"
+        base_url = (provider_cfg.get("base_url") or getattr(config, base_url_attr, "")).strip()
 
         memory_handler = memory_bundle.handler if memory_bundle else None
         if memory_handler is None:
@@ -200,15 +206,31 @@ def create_deep_analysis_engine(
 
         client = AnthropicClient(
             api_key=api_key,
-            model_name=claude_cfg.get("model") or getattr(config, "CLAUDE_MODEL", "claude-sonnet-4-5-20250929"),
-            timeout=float(claude_cfg.get("timeout") or getattr(config, "CLAUDE_TIMEOUT_SECONDS", 30.0)),
-            max_tool_turns=int(claude_cfg.get("max_tool_turns") or getattr(config, "CLAUDE_MAX_TOOL_TURNS", 5)),
+            base_url=base_url or None,
+            model_name=provider_cfg.get("model")
+            or getattr(
+                config,
+                "CLAUDE_MODEL" if provider == "claude" else "MINIMAX_MODEL",
+                "claude-sonnet-4-5-20250929",
+            ),
+            timeout=float(
+                provider_cfg.get("timeout")
+                or getattr(config, "CLAUDE_TIMEOUT_SECONDS" if provider == "claude" else "MINIMAX_TIMEOUT_SECONDS", 30.0)
+            ),
+            max_tool_turns=int(
+                provider_cfg.get("max_tool_turns")
+                or getattr(config, "CLAUDE_MAX_TOOL_TURNS" if provider == "claude" else "MINIMAX_MAX_TOOL_TURNS", 5)
+            ),
             memory_handler=memory_handler,
             context_trigger_tokens=getattr(config, "MEMORY_CONTEXT_TRIGGER_TOKENS", 10000),
             context_keep_tools=getattr(config, "MEMORY_CONTEXT_KEEP_TOOLS", 2),
             context_clear_at_least=getattr(config, "MEMORY_CONTEXT_CLEAR_AT_LEAST", 500),
         )
-        logger.info("🧠 Claude 深度分析引擎已初始化")
+        logger.info(
+            "🧠 %s 深度分析引擎已初始化 (base_url=%s)",
+            "Claude" if provider == "claude" else "MiniMax",
+            base_url or "default",
+        )
         return ClaudeDeepAnalysisEngine(client=client, parse_json_callback=parse_callback)
 
     if provider == "gemini":

@@ -244,10 +244,24 @@ class Config:
 
     # Claude configuration (for deep analysis)
     CLAUDE_ENABLED: bool = _as_bool(os.getenv("CLAUDE_ENABLED", "false"))
-    CLAUDE_API_KEY: str = os.getenv("CLAUDE_API_KEY", "")
+    ANTHROPIC_API_KEY: str = os.getenv("ANTHROPIC_API_KEY", "").strip()
+    ANTHROPIC_BASE_URL: str = os.getenv("ANTHROPIC_BASE_URL", "").strip()
+    CLAUDE_API_KEY: str = os.getenv("CLAUDE_API_KEY", "").strip() or ANTHROPIC_API_KEY
+    CLAUDE_BASE_URL: str = os.getenv("CLAUDE_BASE_URL", "").strip() or ANTHROPIC_BASE_URL
     CLAUDE_MODEL: str = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-5-20250929")
     CLAUDE_TIMEOUT_SECONDS: float = float(os.getenv("CLAUDE_TIMEOUT_SECONDS", "30"))
     CLAUDE_MAX_TOOL_TURNS: int = int(os.getenv("CLAUDE_MAX_TOOL_TURNS", "3"))
+
+    # MiniMax configuration (Claude-compatible)
+    MINIMAX_API_KEY: str = os.getenv("MINIMAX_API_KEY", "").strip()
+    MINIMAX_BASE_URL: str = os.getenv("MINIMAX_BASE_URL", "https://api.minimax.chat/v1").strip()
+    MINIMAX_MODEL: str = os.getenv("MINIMAX_MODEL", CLAUDE_MODEL).strip()
+    MINIMAX_TIMEOUT_SECONDS: float = float(
+        os.getenv("MINIMAX_TIMEOUT_SECONDS", str(CLAUDE_TIMEOUT_SECONDS))
+    )
+    MINIMAX_MAX_TOOL_TURNS: int = int(
+        os.getenv("MINIMAX_MAX_TOOL_TURNS", str(CLAUDE_MAX_TOOL_TURNS))
+    )
 
     # Deep analysis unified configuration
     DEEP_ANALYSIS_ENABLED: bool = _as_bool(
@@ -566,7 +580,16 @@ class Config:
             )
 
         enabled = cls.DEEP_ANALYSIS_ENABLED
-        allowed_providers = {"claude", "gemini", "codex_cli", "claude_cli", "qwen", "openai", "deepseek"}
+        allowed_providers = {
+            "claude",
+            "gemini",
+            "minimax",
+            "codex_cli",
+            "claude_cli",
+            "qwen",
+            "openai",
+            "deepseek",
+        }
         if provider not in allowed_providers:
             if provider:
                 logger.warning("未知的 DEEP_ANALYSIS_PROVIDER=%s，自动回退为 claude", provider)
@@ -595,9 +618,17 @@ class Config:
             "fallback_provider": fallback,
             "claude": {
                 "api_key": cls.CLAUDE_API_KEY,
+                "base_url": cls.CLAUDE_BASE_URL,
                 "model": cls.CLAUDE_MODEL,
                 "timeout": cls.CLAUDE_TIMEOUT_SECONDS,
                 "max_tool_turns": cls.CLAUDE_MAX_TOOL_TURNS,
+            },
+            "minimax": {
+                "api_key": cls.MINIMAX_API_KEY,
+                "base_url": cls.MINIMAX_BASE_URL,
+                "model": cls.MINIMAX_MODEL,
+                "timeout": cls.MINIMAX_TIMEOUT_SECONDS,
+                "max_tool_turns": cls.MINIMAX_MAX_TOOL_TURNS,
             },
             "gemini": {
                 "model": cls.GEMINI_DEEP_MODEL,
