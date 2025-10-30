@@ -723,6 +723,16 @@ class TelegramListener:
 
             should_skip_forward = False
             if signal_result and signal_result.status != "error":
+                # 忽略下架/退市类型的事件
+                if signal_result.event_type == "delisting":
+                    should_skip_forward = True
+                    self.stats["ai_skipped"] += 1
+                    logger.info(
+                        "⏭️  忽略下架/退市新闻，跳过转发: source=%s event_type=%s asset=%s",
+                        source_name,
+                        signal_result.event_type,
+                        signal_result.asset,
+                    )
                 # Use configurable thresholds (from .env)
                 confidence_threshold = (
                     self.config.AI_MIN_CONFIDENCE_KOL if is_priority_kol

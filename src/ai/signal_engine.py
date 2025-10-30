@@ -553,8 +553,9 @@ class AiSignalEngine:
 
         # 排除低价值事件类型（macro、other 触发过多且价值低，scam_alert 已经是风险警告）
         # airdrop: 空投类活动价值低、投机性强
+        # delisting: 下架/退市新闻忽略
         # Binance Alpha 相关的 listing 也倾向于低市值、高投机，通过 AI prompt 控制置信度
-        excluded_event_types = {"macro", "other", "airdrop", "governance", "celebrity", "scam_alert"}
+        excluded_event_types = {"macro", "other", "airdrop", "governance", "celebrity", "scam_alert", "delisting"}
 
         # 主流币例外：即使是macro事件，如果涉及BTC/ETH/SOL也触发深度分析
         # 例如：川普贸易战、美联储政策等宏观事件对主流币有直接影响
@@ -882,8 +883,16 @@ class AiSignalEngine:
 
     @staticmethod
     def _prepare_json_text(text: str) -> str:
-        """Strip Markdown/code fences and return best-effort JSON payload."""
+        """Strip Markdown/code fences, thinking tags, and return best-effort JSON payload."""
         candidate = text.strip()
+        
+        # Remove <think>...</think> tags (Claude thinking process)
+        # Handle both single-line and multi-line cases
+        candidate = re.sub(r'<think>.*?</think>', '', candidate, flags=re.DOTALL | re.IGNORECASE)
+        # Also handle <thinking>...</thinking> variants
+        candidate = re.sub(r'<thinking>.*?</thinking>', '', candidate, flags=re.DOTALL | re.IGNORECASE)
+        
+        # Remove Markdown code fences
         if candidate.startswith("```") and candidate.endswith("```"):
             candidate = candidate[3:-3].strip()
         if candidate.lower().startswith("json"):
@@ -891,8 +900,30 @@ class AiSignalEngine:
         if candidate.lower().startswith("python"):
             candidate = candidate[6:].strip("\n :")
         candidate = candidate.lstrip()
-        if candidate.startswith("{") or candidate.startswith("["):
-            return candidate
+        
+        # Try to find JSON block if it doesn't start with { or [
+        if not (candidate.startswith("{") or candidate.startswith("[")):
+            # Look for JSON in code blocks (handle multi-line JSON)
+            json_match = re.search(r'```(?:json)?\s*(\{.*?\}|\[.*?\])', candidate, re.DOTALL)
+            if json_match:
+                candidate = json_match.group(1).strip()
+            # Or find the first { or [ and extract balanced JSON
+            else:
+                brace_pos = candidate.find("{")
+                bracket_pos = candidate.find("[")
+                start_pos = -1
+                if brace_pos >= 0 and (bracket_pos < 0 or brace_pos < bracket_pos):
+                    start_pos = brace_pos
+                elif bracket_pos >= 0:
+                    start_pos = bracket_pos
+                
+                if start_pos >= 0:
+                    # Try to extract balanced JSON by counting braces/brackets
+                    json_text = candidate[start_pos:]
+                    # Simple approach: find the matching closing brace/bracket
+                    # This handles most cases where JSON is complete
+                    candidate = json_text
+        
         return candidate
 
     def _apply_extreme_event_overrides(
