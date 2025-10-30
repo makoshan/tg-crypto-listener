@@ -2,27 +2,25 @@
 
 from __future__ import annotations
 
-from typing import Dict, Type
+from typing import Dict, Optional, Type
 
 from .providers.base import ProtocolProvider
-from .providers.defillama import DeFiLlamaProtocolProvider
+# ProtocolTool disabled - all providers removed
+# from .providers.defillama import DeFiLlamaProtocolProvider
 
 REGISTRY: Dict[str, Type[ProtocolProvider]] = {
-    "defillama": DeFiLlamaProtocolProvider,
+    # ProtocolTool disabled - no providers available
+    # "defillama": DeFiLlamaProtocolProvider,  # Disabled
 }
 
 
-def create_protocol_provider(config) -> ProtocolProvider:
-    """Create a protocol provider instance from configuration."""
-    provider_key = getattr(
-        config,
-        "DEEP_ANALYSIS_PROTOCOL_PROVIDER",
-        "defillama",
-    ).lower()
-    provider_cls = REGISTRY.get(provider_key)
-    if provider_cls is None:
-        raise ValueError(f"未知协议 Provider: {provider_key}")
-    return provider_cls(config)
+def create_protocol_provider(config) -> Optional[ProtocolProvider]:
+    """Create a protocol provider instance from configuration.
+    
+    ProtocolTool is currently disabled - always returns None.
+    """
+    # ProtocolTool disabled - always return None
+    return None
 
 
 __all__ = [

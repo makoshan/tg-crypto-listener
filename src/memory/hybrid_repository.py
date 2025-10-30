@@ -96,43 +96,48 @@ class HybridMemoryRepository:
             else:
                 context = await self.supabase.fetch_memories(
                     embedding=embedding,
-                    asset_codes=asset_codes
+                    asset_codes=asset_codes,
+                    keywords=keywords,
                 )
 
             if not context.is_empty():
-                logger.info(f"✅ Hybrid: 从 Supabase 检索到 {len(context.entries)} 条记忆")
+                logger.info(
+                    f"✅ HybridMemoryRepository: 从 Supabase 检索到 {len(context.entries)} 条记忆"
+                )
                 self._supabase_failures = 0  # 重置失败计数
 
-                # DEBUG 模式下显示详细信息
-                if logger.isEnabledFor(10):
-                    logger.debug("📦 Supabase 记忆详情:")
-                    for i, entry in enumerate(context.entries, 1):
-                        logger.debug(
-                            f"  [{i}] {entry.id[:8]}... {entry.assets} {entry.action} "
-                            f"conf={entry.confidence:.2f} sim={entry.similarity:.2f}"
-                        )
+                # 展示 Supabase 检索结果详情
+                logger.info("📝 Supabase 检索返回的记忆条目:")
+                for i, entry in enumerate(context.entries, 1):
+                    summary_preview = entry.summary[:80].replace("\n", " ") if entry.summary else ""
+                    logger.info(
+                        f"  [{i}] id={entry.id[:8]}..., assets={entry.assets}, "
+                        f"action={entry.action}, confidence={entry.confidence:.3f}, "
+                        f"similarity={entry.similarity:.3f}\n"
+                        f"      summary: {summary_preview}{'...' if len(entry.summary) > 80 else ''}"
+                    )
                 return context
 
             # Supabase 返回空结果，降级本地
             logger.warning(
-                "⚠️  Hybrid: Supabase 返回空结果，降级到本地检索 "
-                "(embedding维度=%d, asset_codes=%s, keywords=%s)",
-                len(embedding) if embedding else 0,
-                list(asset_codes) if asset_codes else [],
-                keywords or [],
+                f"⚠️  HybridMemoryRepository: Supabase fetch_memories 返回空 MemoryContext "
+                f"(entries={len(context.entries)}), 降级到本地检索 - "
+                f"embedding_dim={len(embedding) if embedding else 0}, "
+                f"asset_codes={list(asset_codes) if asset_codes else []}, "
+                f"keywords={keywords or []}"
             )
 
         except (SupabaseError, Exception) as e:
             self._supabase_failures += 1
             logger.warning(
-                f"❌ Hybrid: Supabase 检索失败（{self._supabase_failures}/{self._max_failures}），"
-                f"降级到本地: {e}"
+                f"❌ HybridMemoryRepository: Supabase 检索失败 "
+                f"({self._supabase_failures}/{self._max_failures})，降级到本地 - {e}"
             )
 
             # 触发告警
             if self._supabase_failures >= self._max_failures:
                 logger.error(
-                    f"🚨 Hybrid: Supabase 连续失败 {self._supabase_failures} 次，"
+                    f"🚨 HybridMemoryRepository: Supabase 连续失败 {self._supabase_failures} 次，"
                     "请检查网络连接或 Supabase 服务状态"
                 )
 
@@ -140,10 +145,14 @@ class HybridMemoryRepository:
 
     def _fallback_local(self, keywords: list[str] | None) -> MemoryContext:
         if not keywords:
-            logger.warning("⚠️  Hybrid: 无关键词，跳过本地降级检索")
+            logger.warning("⚠️  HybridMemoryRepository: 无关键词，跳过本地降级检索")
             return MemoryContext()
 
-        logger.info(f"🔄 Hybrid: 开始本地降级检索 (keywords={keywords})")
+        logger.info(
+            f"🔄 HybridMemoryRepository: 开始本地降级检索 - "
+            f"keywords={keywords}, limit={self._config.max_notes}, "
+            f"min_confidence={self._config.min_confidence:.2f}"
+        )
         local_entries = self.local.load_entries(
             keywords=keywords,
             limit=self._config.max_notes,
@@ -151,19 +160,24 @@ class HybridMemoryRepository:
         )
 
         if local_entries:
-            logger.info(f"✅ Hybrid: 从本地检索到 {len(local_entries)} 条记忆（灾备模式）")
-
-            # DEBUG 模式下显示详细信息
-            if logger.isEnabledFor(10):
-                logger.debug("📦 本地降级记忆详情:")
-                for i, entry in enumerate(local_entries, 1):
-                    logger.debug(
-                        f"  [{i}] {entry.id[:8]}... {entry.assets} "
-                        f"{entry.action} conf={entry.confidence:.2f} sim={entry.similarity:.2f}"
-                    )
-                    logger.debug(f"      {entry.summary[:80]}..." if len(entry.summary) > 80 else f"      {entry.summary}")
+            logger.info(
+                f"✅ HybridMemoryRepository: 从本地检索到 {len(local_entries)} 条记忆（灾备模式）"
+            )
+            
+            # 展示本地检索结果详情
+            logger.info("📝 本地检索返回的记忆条目:")
+            for i, entry in enumerate(local_entries, 1):
+                summary_preview = entry.summary[:80].replace("\n", " ") if entry.summary else ""
+                logger.info(
+                    f"  [{i}] id={entry.id[:8]}..., assets={entry.assets}, "
+                    f"action={entry.action}, confidence={entry.confidence:.3f}, "
+                    f"similarity={entry.similarity:.3f}\n"
+                    f"      summary: {summary_preview}{'...' if len(entry.summary) > 80 else ''}"
+                )
         else:
-            logger.warning(f"⚠️  Hybrid: 本地检索无结果 (keywords={keywords})")
+            logger.warning(
+                f"⚠️  HybridMemoryRepository: 本地检索无结果 - keywords={keywords}"
+            )
 
         context = MemoryContext()
         context.extend(local_entries)

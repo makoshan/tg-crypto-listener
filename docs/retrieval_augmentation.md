@@ -5,6 +5,7 @@
 ### 结论（唯一方案）
 - 采用“单函数 RPC + 视图标准化 + 轻量路由”。
 - 主链路：一次调用 `search_memory`（向量优先，命中不足自动降级 TSV 关键词）→ 若结果为空或异常，再执行本地关键词兜底。
+- **统一去重**：`find_similar_events` 已统一到 `search_memory`，去重场景使用 `match_count=1, min_confidence=0`。
 
 ### 目标
 - 不改现有输出 schema，仅通过 `additional_context.memory_evidence` 注入证据。
@@ -49,6 +50,7 @@ async def fetch_memory_evidence(
 ### Supabase 统一检索 RPC（向量 + TSV 一体化）
 - 函数语义：`search_memory(query_embedding?, query_keywords?, match_threshold, match_count, min_confidence, time_window_hours, asset_filter?)`
 - 建议结合视图 `v_news_events` / `v_ai_signals` 以标准化列名。
+- **去重模式**：设置 `match_count=1, min_confidence=0` 可用于语义去重（替代原 `find_similar_events`），只返回最相似的 1 个向量匹配结果。
 
 ```sql
 -- 需要先启用 pgvector 扩展：
@@ -167,3 +169,4 @@ $$;
 - Supabase 可用：`search_memory` 完成向量优先+关键词降级；空结果才触发本地关键词。
 - Supabase 不可用/异常：自动降级本地；不阻断主流程。
 - 仅在 `additional_context.memory_evidence` 注入结果（`supabase_hits`/`local_keyword`），日志清晰可读。
+- **去重统一**：`check_duplicate_by_embedding()` 使用 `search_memory` RPC，不再依赖 `find_similar_events`。

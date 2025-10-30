@@ -36,6 +36,12 @@ async def fetch_memory_evidence(
     # 尝试 Supabase
     if supabase_url and supabase_key:
         try:
+            logger.info(
+                "🔍 fetch_memory_evidence: 开始统一检索协调 - "
+                f"embedding={'有' if embedding_1536 else '无'}, "
+                f"keywords={len(keywords or [])}, "
+                f"assets={len(asset_codes or [])}"
+            )
             client = get_supabase_client(url=supabase_url, service_key=supabase_key)
             repo = MemoryRepository(client)
             search_res = await repo.search_memory(
@@ -49,19 +55,30 @@ async def fetch_memory_evidence(
             )
 
             hits = search_res.get("hits", [])
+            stats = search_res.get("stats", {})
             if hits:
                 result["supabase_hits"] = hits
                 # 附带统计信息到 notes，避免上层再拼
-                stats = search_res.get("stats", {})
                 result["notes"] = (
                     f"supabase hits: total={stats.get('total', 0)}, "
                     f"vector={stats.get('vector', 0)}, keyword={stats.get('keyword', 0)}"
                 )
+                logger.info(
+                    f"✅ fetch_memory_evidence: Supabase 统一检索成功 - "
+                    f"total={stats.get('total', 0)}, "
+                    f"vector={stats.get('vector', 0)}, "
+                    f"keyword={stats.get('keyword', 0)}"
+                )
                 return result
             else:
-                logger.info("memory.coordinator: supabase empty, degrade to local keyword")
+                logger.info(
+                    f"⚠️  fetch_memory_evidence: Supabase 返回空结果，降级到本地关键词 - "
+                    f"stats={stats}"
+                )
         except (SupabaseError, Exception) as exc:  # pragma: no cover - 网络/服务异常
-            logger.info("memory.coordinator: supabase failed, degrade to local keyword: %s", exc)
+            logger.warning(
+                f"⚠️  fetch_memory_evidence: Supabase 统一检索失败，降级到本地关键词 - error={exc}"
+            )
             result["notes"] = f"supabase error: {exc}"
 
     # 本地关键词兜底（轻量策略：仅回传有效关键词列表）

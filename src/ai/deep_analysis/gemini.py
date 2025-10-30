@@ -175,8 +175,13 @@ class GeminiDeepAnalysisEngine(DeepAnalysisEngine):
                 from src.ai.tools import ProtocolTool
 
                 self._protocol_tool = ProtocolTool(config)
-                provider = getattr(config, "DEEP_ANALYSIS_PROTOCOL_PROVIDER", "defillama")
-                logger.info("🏛️ 协议工具已初始化，Provider=%s", provider)
+                # Check if provider is actually available (may be disabled)
+                if self._protocol_tool._provider is None:
+                    logger.warning("⚠️ 协议工具 provider 未启用（已禁用 defillama）")
+                    self._protocol_tool = None
+                else:
+                    provider = getattr(config, "DEEP_ANALYSIS_PROTOCOL_PROVIDER", "defillama")
+                    logger.info("🏛️ 协议工具已初始化，Provider=%s", provider)
             except ValueError as exc:
                 logger.warning("⚠️ 协议工具初始化失败: %s", exc)
                 self._protocol_tool = None

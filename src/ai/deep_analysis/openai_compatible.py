@@ -129,9 +129,15 @@ class OpenAICompatibleEngine(DeepAnalysisEngine):
             try:
                 from src.ai.tools import ProtocolTool
                 self._protocol_tool = ProtocolTool(config)
-                logger.info("🏛️ 协议工具已初始化")
+                # Check if provider is actually available (may be disabled)
+                if self._protocol_tool._provider is None:
+                    logger.warning("⚠️ 协议工具 provider 未启用（已禁用 defillama）")
+                    self._protocol_tool = None
+                else:
+                    logger.info("🏛️ 协议工具已初始化")
             except Exception as exc:
                 logger.warning(f"⚠️ 协议工具初始化失败: {exc}")
+                self._protocol_tool = None
 
     async def analyse(
         self,

@@ -38,18 +38,26 @@ class NewsEventRepository:
         threshold: float = 0.92,
         time_window_hours: int = 72,
     ) -> Optional[Dict[str, Any]]:
-        """Check for semantically similar events using vector similarity."""
+        """Check for semantically similar events using vector similarity.
+        
+        Uses unified search_memory RPC with match_count=1, min_confidence=0 for deduplication.
+        Only returns vector matches (not keyword matches) with similarity >= threshold.
+        """
         if not embedding:
             return None
 
         try:
+            # 使用统一的 search_memory RPC，match_count=1 用于去重，min_confidence=0 不过滤 AI 信号
             response = await self._client.rpc(
-                "find_similar_events",
+                "search_memory",
                 {
                     "query_embedding": embedding,
-                    "similarity_threshold": threshold,
+                    "query_keywords": None,  # 去重场景只需要向量相似度
+                    "match_threshold": threshold,
+                    "match_count": 1,  # 去重只需要最相似的 1 个结果
+                    "min_confidence": 0.0,  # 不过滤 AI 信号置信度
                     "time_window_hours": time_window_hours,
-                    "max_results": 1,
+                    "asset_filter": None,  # 去重不过滤资产
                 },
             )
         except SupabaseError:
@@ -58,12 +66,19 @@ class NewsEventRepository:
             return None
 
         if isinstance(response, list) and response:
-            result = response[0]
-            return {
-                "id": int(result["id"]),
-                "content_text": result.get("content_text", ""),
-                "similarity": float(result.get("similarity", 0.0)),
-            }
+            # 只处理 vector 类型的匹配结果（keyword 匹配不用于去重）
+            vector_hits = [r for r in response if (r.get("match_type") or "").lower() == "vector"]
+            if vector_hits:
+                result = vector_hits[0]
+                similarity = result.get("similarity")
+                # search_memory 的 vector hits 应该总是有 similarity，但为了安全处理 None
+                if similarity is None:
+                    return None
+                return {
+                    "id": int(result.get("news_event_id", 0)),
+                    "content_text": result.get("content_text", ""),
+                    "similarity": float(similarity),
+                }
         return None
 
     async def insert_event(self, payload: NewsEventPayload) -> Optional[int]:
@@ -188,17 +203,35 @@ class MemoryRepository:
             "asset_filter": asset_codes or None,
         }
 
+        # ????? search_memory RPC??? search_memory_events?
+        self._logger.info(
+            f"?? MemoryRepository: ?? RPC 'search_memory' - "
+            f"embedding={'?' if embedding_1536 else '?'}, "
+            f"keywords={len(keywords or [])}, "
+            f"assets={len(asset_codes or [])}, "
+            f"threshold={match_threshold:.2f}, "
+            f"time_window={time_window_hours}h, "
+            f"min_confidence={min_confidence:.2f}, "
+            f"match_count={match_count}"
+        )
+
         try:
             response = await self._client.rpc("search_memory", params)
         except SupabaseError as exc:
-            self._logger.info("memory.search: RPC failed, will degrade to local. error=%s", exc)
+            self._logger.warning(
+                f"??  MemoryRepository.search_memory: RPC ????????????? - error={exc}"
+            )
             return {"hits": [], "stats": {"total": 0, "vector": 0, "keyword": 0}, "notes": str(exc)}
         except Exception as exc:  # pragma: no cover - safety net
-            self._logger.info("memory.search: unexpected error, will degrade to local. error=%s", exc)
+            self._logger.warning(
+                f"??  MemoryRepository.search_memory: ????????????? - error={exc}"
+            )
             return {"hits": [], "stats": {"total": 0, "vector": 0, "keyword": 0}, "notes": str(exc)}
 
         if not isinstance(response, list):
-            self._logger.info("memory.search: empty/non-list response, degrade to local. type=%s", type(response))
+            self._logger.warning(
+                f"??  MemoryRepository.search_memory: ???????????????????? - type={type(response)}"
+            )
             return {"hits": [], "stats": {"total": 0, "vector": 0, "keyword": 0}, "notes": "empty response"}
 
         hits: List[Dict[str, Any]] = []
@@ -226,11 +259,28 @@ class MemoryRepository:
 
         total = len(hits)
         self._logger.info(
-            "memory.search: supabase hits → total=%s, vector=%s, keyword=%s",
-            total,
-            num_vector,
-            num_keyword,
+            f"?? MemoryRepository.search_memory: Supabase ???? - "
+            f"total={total}, vector={num_vector}, keyword={num_keyword}"
         )
+        
+        # ????? hits ?????????????????
+        if hits and keywords:
+            keyword_matches = [h for h in hits if h.get("match_type", "").lower() == "keyword"]
+            if keyword_matches:
+                self._logger.info(
+                    f"?? ??????? ({len(keyword_matches)} ?): "
+                    f"keywords={keywords}"
+                )
+                for idx, hit in enumerate(keyword_matches[:3], 1):  # ?????3??????
+                    similarity = hit.get("similarity") or hit.get("combined_score") or 0.0
+                    event_id = hit.get("news_event_id", "N/A")
+                    content_preview = (
+                        (hit.get("translated_text") or hit.get("content_text") or "")[:50]
+                    ).replace("\n", " ")
+                    self._logger.info(
+                        f"  [{idx}] event_id={event_id}, similarity={similarity:.3f}, "
+                        f"preview={content_preview}..."
+                    )
 
         return {
             "hits": hits,

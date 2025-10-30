@@ -24,6 +24,18 @@ class ProtocolTool:
 
     async def snapshot(self, *, slug: str, force_refresh: bool = False) -> ToolResult:
         """Fetch protocol snapshot, reusing cached results when valid."""
+        if self._provider is None:
+            logger.warning("协议工具 provider 未启用，无法获取协议数据")
+            return ToolResult(
+                source="ProtocolTool",
+                timestamp=ToolResult._format_timestamp(),
+                success=False,
+                data={},
+                triggered=False,
+                confidence=0.0,
+                error="provider_disabled",
+            )
+        
         normalized = (slug or "").strip().lower()
         if not normalized:
             return ToolResult(
@@ -67,4 +79,7 @@ class ProtocolTool:
         """Reload provider and clear cache."""
         self._provider = create_protocol_provider(self._config)
         self._cache.clear()
-        logger.info("协议工具 provider 已刷新并清空缓存")
+        if self._provider is None:
+            logger.info("协议工具 provider 已刷新并清空缓存（provider 未启用）")
+        else:
+            logger.info("协议工具 provider 已刷新并清空缓存")
