@@ -59,9 +59,9 @@ PM2 会读取 `.env`，守护进程并在崩溃后自动拉起，也可配合 `p
 | `AI_TIMEOUT_SECONDS` / `AI_RETRY_ATTEMPTS` / `AI_RETRY_BACKOFF_SECONDS` | AI 调用超时与重试策略。|
 | `AI_MAX_CONCURRENCY` | 同时运行的 Gemini 请求数；遇到 503 可调低。|
 | `AI_SKIP_NEUTRAL_FORWARD` | 当 AI 判定为观望/低优先级时是否直接跳过转发。|
-| `ANTHROPIC_BASE_URL` / `ANTHROPIC_API_KEY` | 通过 Minimax 等 Claude 兼容服务调用深度分析时使用的 Base URL 与 API Key，若 `CLAUDE_API_KEY` 留空则自动回退到该凭证。|
-| `MINIMAX_BASE_URL` / `MINIMAX_API_KEY` | 使用 MiniMax Claude 兼容 API 时的专属域名与凭证（默认 `https://api.minimax.chat/v1`），设置后可配合 `DEEP_ANALYSIS_PROVIDER=minimax`。|
-| `MINIMAX_MODEL` | MiniMax Claude 兼容模型名，默认沿用 `CLAUDE_MODEL`，可根据套餐替换为 `abab6.5-chat`、`abab6.5s-chat` 等。|
+| `ANTHROPIC_BASE_URL` / `ANTHROPIC_API_KEY` | Claude 兼容服务所需的 Base URL 与 API Key。|
+| `MINIMAX_BASE_URL` / `MINIMAX_API_KEY` | 使用 MiniMax OpenAI 兼容 API 时的专属域名与凭证（默认 `https://api.minimax.io/v1`），优先使用 `MINIMAX_API_KEY`，未设置时可使用 `OPENAI_API_KEY`，设置后可配合 `DEEP_ANALYSIS_PROVIDER=minimax`。|
+| `MINIMAX_MODEL` | MiniMax OpenAI 兼容模型名（默认 `gpt-4-turbo`），可根据套餐替换为其他模型。|
 | `USE_LANGGRAPH_PIPELINE` | 启用 LangGraph 消息处理管线（实验特性，默认 `false`）。|
 | `TRANSLATION_ENABLED` | 是否启用翻译聚合模块。|
 | `TRANSLATION_PROVIDERS` | 翻译服务优先级列表，默认包含 `deepl,azure,google,amazon,baidu,alibaba,tencent,huawei,volcano,niutrans`。|

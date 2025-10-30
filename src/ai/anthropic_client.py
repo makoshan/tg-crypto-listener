@@ -88,10 +88,7 @@ class AnthropicClient:
         tools = self._build_tool_definitions()
 
         async def _call_claude(payload_messages: List[Dict[str, Any]]):
-            # Check if we're using a custom base_url (e.g., minimax) that may not support context_management
-            is_custom_api = self._base_url and "api.anthropic.com" not in self._base_url
-            
-            # Build kwargs, conditionally include context_management for official API only
+            # Build kwargs
             create_kwargs: Dict[str, Any] = {
                 "model": self._model,
                 "system": system_prompt,
@@ -102,15 +99,13 @@ class AnthropicClient:
                 "tools": tools or None,
             }
             
-            # Only include context_management for official Anthropic API
-            # Custom APIs like minimax may not support this parameter
-            if not is_custom_api and self._context_management_config:
+            # Include context_management if configured
+            if self._context_management_config:
                 create_kwargs["context_management"] = self._context_management_config
             
             # Send beta header when using tools (Memory Tool) or context management
             # In newer Anthropic SDK versions, betas are passed via extra_headers
-            # Only send beta header for official Anthropic API, not for custom APIs like minimax
-            if not is_custom_api and (tools or self._context_management_config):
+            if tools or self._context_management_config:
                 extra_headers = create_kwargs.get("extra_headers", {})
                 # Multiple betas should be comma-separated in the header value
                 extra_headers["anthropic-beta"] = ",".join(self._betas)

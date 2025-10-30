@@ -37,7 +37,7 @@ class OpenAICompatibleEngine(DeepAnalysisEngine):
     def __init__(
         self,
         *,
-        provider: str,  # "qwen" | "openai" | "deepseek"
+        provider: str,  # "qwen" | "openai" | "deepseek" | "minimax"
         api_key: str,
         base_url: str,
         model: str,

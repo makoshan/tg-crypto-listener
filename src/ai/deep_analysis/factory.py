@@ -184,17 +184,15 @@ def create_deep_analysis_engine(
             failure_cooldown=failure_cooldown,
         )
 
-    if provider in ("claude", "minimax"):
-        cfg_key = "claude" if provider == "claude" else "minimax"
+    if provider == "claude":
+        cfg_key = "claude"
         provider_cfg = deep_config.get(cfg_key, {})
 
-        api_key_attr = "CLAUDE_API_KEY" if provider == "claude" else "MINIMAX_API_KEY"
-        api_key = provider_cfg.get("api_key") or getattr(config, api_key_attr, "")
+        api_key = provider_cfg.get("api_key") or getattr(config, "CLAUDE_API_KEY", "")
         if not api_key:
-            raise DeepAnalysisError(f"{provider.capitalize()} API key 未配置，无法启用深度分析")
+            raise DeepAnalysisError("Claude API key 未配置，无法启用深度分析")
 
-        base_url_attr = "CLAUDE_BASE_URL" if provider == "claude" else "MINIMAX_BASE_URL"
-        base_url = (provider_cfg.get("base_url") or getattr(config, base_url_attr, "")).strip()
+        base_url = (provider_cfg.get("base_url") or getattr(config, "CLAUDE_BASE_URL", "")).strip()
 
         memory_handler = memory_bundle.handler if memory_bundle else None
         if memory_handler is None:
@@ -204,31 +202,18 @@ def create_deep_analysis_engine(
                 base_path=getattr(config, "MEMORY_DIR", "./memories")
             )
 
-        # MiniMax Claude-compatible API 通常不支持 Memory Tool。为避免
-        # “function name or parameters is empty (2013)” 错误，这里显式禁用。
-        if provider == "minimax":
-            memory_handler = None
-
         client = AnthropicClient(
             api_key=api_key,
             base_url=base_url or None,
             model_name=provider_cfg.get("model")
-            or getattr(
-                config,
-                "CLAUDE_MODEL" if provider == "claude" else "MINIMAX_MODEL",
-                "claude-sonnet-4-5-20250929",
-            ),
+            or getattr(config, "CLAUDE_MODEL", "claude-sonnet-4-5-20250929"),
             timeout=float(
                 provider_cfg.get("timeout")
-                or getattr(config, "CLAUDE_TIMEOUT_SECONDS" if provider == "claude" else "MINIMAX_TIMEOUT_SECONDS", 30.0)
+                or getattr(config, "CLAUDE_TIMEOUT_SECONDS", 30.0)
             ),
             max_tool_turns=int(
                 provider_cfg.get("max_tool_turns")
-                or getattr(
-                    config,
-                    "CLAUDE_MAX_TOOL_TURNS" if provider == "claude" else "MINIMAX_MAX_TOOL_TURNS",
-                    0 if provider == "minimax" else 5,
-                )
+                or getattr(config, "CLAUDE_MAX_TOOL_TURNS", 5)
             ),
             memory_handler=memory_handler,
             context_trigger_tokens=getattr(config, "MEMORY_CONTEXT_TRIGGER_TOKENS", 10000),
@@ -236,11 +221,73 @@ def create_deep_analysis_engine(
             context_clear_at_least=getattr(config, "MEMORY_CONTEXT_CLEAR_AT_LEAST", 500),
         )
         logger.info(
-            "🧠 %s 深度分析引擎已初始化 (base_url=%s)",
-            "Claude" if provider == "claude" else "MiniMax",
+            "🧠 Claude 深度分析引擎已初始化 (base_url=%s)",
             base_url or "default",
         )
         return ClaudeDeepAnalysisEngine(client=client, parse_json_callback=parse_callback)
+
+    if provider == "minimax":
+        # MiniMax 改为使用 OpenAI 兼容 API
+        logger.info("🔧 开始初始化 MiniMax OpenAI 兼容深度分析引擎...")
+
+        minimax_cfg = deep_config.get("minimax", {})
+
+        # API Key: 优先使用 MINIMAX_API_KEY，其次 OPENAI_API_KEY
+        api_key = (
+            minimax_cfg.get("api_key")
+            or getattr(config, "MINIMAX_API_KEY", "")
+            or getattr(config, "OPENAI_API_KEY", "")
+        )
+        if not api_key:
+            raise DeepAnalysisError("MiniMax API key 未配置（MINIMAX_API_KEY 或 OPENAI_API_KEY），无法启用深度分析")
+
+        # Base URL: 优先使用 MINIMAX_BASE_URL，其次 OPENAI_BASE_URL
+        base_url = (
+            minimax_cfg.get("base_url")
+            or getattr(config, "MINIMAX_BASE_URL", "")
+            or getattr(config, "OPENAI_BASE_URL", "https://api.minimax.io/v1")
+        ).strip()
+        if not base_url:
+            base_url = "https://api.minimax.io/v1"
+
+        # Model
+        model = (
+            minimax_cfg.get("model")
+            or getattr(config, "MINIMAX_MODEL", "")
+            or getattr(config, "OPENAI_DEEP_MODEL", "gpt-4-turbo")
+        )
+
+        # Timeout
+        timeout = float(
+            minimax_cfg.get("timeout")
+            or getattr(config, "MINIMAX_TIMEOUT_SECONDS", "")
+            or getattr(config, "OPENAI_DEEP_TIMEOUT_SECONDS", 30.0)
+        )
+
+        # Max function turns
+        max_turns = int(
+            minimax_cfg.get("max_function_turns")
+            or getattr(config, "MINIMAX_MAX_TOOL_TURNS", "")
+            or getattr(config, "OPENAI_DEEP_MAX_FUNCTION_TURNS", 6)
+        )
+
+        logger.info(
+            "🧠 MiniMax OpenAI 兼容深度分析引擎已初始化: "
+            f"model={model}, base_url={base_url}, max_turns={max_turns}"
+        )
+
+        return OpenAICompatibleEngine(
+            provider="minimax",
+            api_key=api_key,
+            base_url=base_url,
+            model=model,
+            enable_search=False,  # MiniMax 暂不支持搜索
+            timeout=timeout,
+            max_function_turns=max_turns,
+            parse_json_callback=parse_callback,
+            memory_bundle=memory_bundle,
+            config=config,
+        )
 
     if provider == "gemini":
         gemini_cfg = deep_config.get("gemini", {})

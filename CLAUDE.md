@@ -112,11 +112,11 @@ All configuration is in `.env` (see README.md for comprehensive list). Key varia
 
 ### Deep Analysis
 - `DEEP_ANALYSIS_ENABLED`: Enable deep analysis engine
-- `DEEP_ANALYSIS_PROVIDER`: Primary provider (`claude`/`minimax`/`gemini` 等)
+- `DEEP_ANALYSIS_PROVIDER`: Primary provider (`claude`/`minimax`/`gemini`/`qwen`/`openai`/`deepseek` 等)
 - `DEEP_ANALYSIS_FALLBACK_PROVIDER`: Fallback provider
 - `CLAUDE_API_KEY`, `CLAUDE_MODEL`: Claude configuration
-- `ANTHROPIC_BASE_URL`, `ANTHROPIC_API_KEY`: Minimax 等 Claude 兼容服务所需的 base URL 与凭证，`CLAUDE_API_KEY` 留空时会自动使用该信息
-- `MINIMAX_BASE_URL`, `MINIMAX_API_KEY`, `MINIMAX_MODEL`: MiniMax Claude 兼容配置，可选覆盖默认 `CLAUDE_*` 变量
+- `ANTHROPIC_BASE_URL`, `ANTHROPIC_API_KEY`: Claude 兼容服务所需的 base URL 与凭证
+- `MINIMAX_BASE_URL`, `MINIMAX_API_KEY`, `MINIMAX_MODEL`: MiniMax OpenAI 兼容配置（默认 `https://api.minimax.io/v1`），优先使用 `MINIMAX_API_KEY`，其次使用 `OPENAI_API_KEY`
 - `GEMINI_DEEP_MODEL`: Gemini Function Calling model for deep analysis
 
 ### Memory

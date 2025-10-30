@@ -252,15 +252,15 @@ class Config:
     CLAUDE_TIMEOUT_SECONDS: float = float(os.getenv("CLAUDE_TIMEOUT_SECONDS", "30"))
     CLAUDE_MAX_TOOL_TURNS: int = int(os.getenv("CLAUDE_MAX_TOOL_TURNS", "3"))
 
-    # MiniMax configuration (Claude-compatible)
+    # MiniMax configuration (OpenAI-compatible)
     MINIMAX_API_KEY: str = os.getenv("MINIMAX_API_KEY", "").strip()
-    MINIMAX_BASE_URL: str = os.getenv("MINIMAX_BASE_URL", "https://api.minimax.chat/v1").strip()
-    MINIMAX_MODEL: str = os.getenv("MINIMAX_MODEL", CLAUDE_MODEL).strip()
+    MINIMAX_BASE_URL: str = os.getenv("MINIMAX_BASE_URL", "https://api.minimax.io/v1").strip()
+    MINIMAX_MODEL: str = os.getenv("MINIMAX_MODEL", "gpt-4-turbo").strip()
     MINIMAX_TIMEOUT_SECONDS: float = float(
-        os.getenv("MINIMAX_TIMEOUT_SECONDS", str(CLAUDE_TIMEOUT_SECONDS))
+        os.getenv("MINIMAX_TIMEOUT_SECONDS", "30")
     )
     MINIMAX_MAX_TOOL_TURNS: int = int(
-        os.getenv("MINIMAX_MAX_TOOL_TURNS", str(CLAUDE_MAX_TOOL_TURNS))
+        os.getenv("MINIMAX_MAX_TOOL_TURNS", "6")
     )
 
     # Deep analysis unified configuration
@@ -629,7 +629,7 @@ class Config:
                 "base_url": cls.MINIMAX_BASE_URL,
                 "model": cls.MINIMAX_MODEL,
                 "timeout": cls.MINIMAX_TIMEOUT_SECONDS,
-                "max_tool_turns": cls.MINIMAX_MAX_TOOL_TURNS,
+                "max_function_turns": cls.MINIMAX_MAX_TOOL_TURNS,  # 兼容 OpenAI API
             },
             "gemini": {
                 "model": cls.GEMINI_DEEP_MODEL,
