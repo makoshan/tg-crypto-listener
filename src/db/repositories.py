@@ -78,7 +78,6 @@ class NewsEventRepository:
             "summary": payload.summary,
             "translated_text": payload.translated_text,
             "language": payload.language,
-            "media_refs": payload.media_refs or [],
             "hash_raw": payload.hash_raw,
             "hash_canonical": payload.hash_canonical,
             "embedding": embedding_str,
