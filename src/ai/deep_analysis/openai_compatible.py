@@ -5,13 +5,14 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any, Iterable, Optional
 
 from openai import AsyncOpenAI, AsyncStream
 from openai.types.chat import ChatCompletion, ChatCompletionChunk
 
 from .base import DeepAnalysisEngine, DeepAnalysisError, build_deep_analysis_messages
 from src.memory.coordinator import fetch_memory_evidence
+from src.utils import compute_embedding
 
 if TYPE_CHECKING:
     from src.ai.signal_engine import EventPayload, SignalResult
@@ -164,25 +165,55 @@ class OpenAICompatibleEngine(DeepAnalysisEngine):
             "notes": "OpenAI 兼容引擎，可使用 Function Calling 工具" if self._has_tools() else "OpenAI 兼容引擎，当前未启用任何工具",
         }
 
-        # 0. 获取记忆证据（Supabase 优先，空/异常走本地关键词）
+        # 0. 获取记忆证据（优先复用 pipeline 注入的历史上下文；必要时再查询）
+        memory_evidence = {}
         try:
-            # 仅使用初步资产与事件类型作为关键词线索，避免增加外部依赖
-            kw_list = []
-            if preliminary.asset:
-                kw_list.append(str(preliminary.asset).strip())
-            if preliminary.event_type:
-                kw_list.append(str(preliminary.event_type).strip())
+            # 若上游 pipeline 已提供历史记忆，则直接复用，避免重复检索
+            hist_ref = (payload.historical_reference or {}).get("entries") or []
+            if hist_ref:
+                memory_evidence = {"from_pipeline": True, "entries": hist_ref}
+            else:
+                # 条件化检索：仅在满足条件时请求外部存储
+                conf_gate = float(getattr(self._config, "DEEP_MEMORY_MIN_CONFIDENCE", 0.6))
+                allowed_types = set(getattr(self._config, "DEEP_MEMORY_EVENT_WHITELIST", [
+                    "listing", "hack", "regulation", "partnership", "product_launch", "whale", "funding"
+                ]))
+                has_asset = bool(preliminary.asset and preliminary.asset != "NONE")
+                if preliminary.confidence >= conf_gate and preliminary.event_type in allowed_types and has_asset:
+                    # 拆分资产字符串为独立关键词（如 "BTC,ETH,SOL" -> ["BTC", "ETH", "SOL"]）
+                    asset_codes = _normalise_asset_codes(preliminary.asset)
+                    kw_list = []
+                    kw_list.extend(asset_codes)
+                    if preliminary.event_type:
+                        kw_list.append(str(preliminary.event_type).strip())
 
-            memory_evidence = await fetch_memory_evidence(
-                config=self._config,
-                embedding_1536=None,  # 如需向量检索，可在此接入 embedding 生成
-                keywords=[k for k in kw_list if k],
-                asset_codes=[preliminary.asset] if preliminary.asset else None,
-                match_threshold=float(getattr(self._config, "MEMORY_MATCH_THRESHOLD", 0.85)),
-                min_confidence=float(getattr(self._config, "MEMORY_MIN_CONFIDENCE", 0.6)),
-                time_window_hours=int(getattr(self._config, "MEMORY_TIME_WINDOW_HOURS", 72)),
-                match_count=int(getattr(self._config, "MEMORY_MATCH_COUNT", 5)),
-            )
+                    # 生成 embedding（可选）
+                    embedding_1536 = None
+                    text_for_embedding = payload.translated_text or payload.text or ""
+                    if text_for_embedding:
+                        api_key = getattr(self._config, "OPENAI_API_KEY", None) or ""
+                        model = getattr(self._config, "OPENAI_EMBEDDING_MODEL", "text-embedding-3-small")
+                        if api_key:
+                            embedding_1536 = await compute_embedding(text_for_embedding, api_key, model)
+
+                    memory_evidence = await fetch_memory_evidence(
+                        config=self._config,
+                        embedding_1536=embedding_1536,
+                        keywords=[k for k in kw_list if k],
+                        asset_codes=asset_codes if asset_codes else None,
+                        match_threshold=float(getattr(self._config, "MEMORY_MATCH_THRESHOLD", 0.85)),
+                        min_confidence=float(getattr(self._config, "MEMORY_MIN_CONFIDENCE", 0.6)),
+                        time_window_hours=int(getattr(self._config, "MEMORY_TIME_WINDOW_HOURS", 72)),
+                        match_count=int(getattr(self._config, "MEMORY_MATCH_COUNT", 5)),
+                    )
+                else:
+                    logger.debug(
+                        "🧠 跳过深度记忆检索: conf=%.2f type=%s asset=%s gate=%.2f",
+                        preliminary.confidence,
+                        preliminary.event_type,
+                        preliminary.asset or "NONE",
+                        conf_gate,
+                    )
         except Exception:
             memory_evidence = {}
 
@@ -515,3 +546,16 @@ class OpenAICompatibleEngine(DeepAnalysisEngine):
                 "success": False,
                 "error": str(exc),
             }
+
+
+def _normalise_asset_codes(raw_value: Any) -> list[str]:
+    """标准化资产代码列表，将逗号分隔的字符串拆分为独立的关键词"""
+    if not raw_value:
+        return []
+    if isinstance(raw_value, str):
+        tokens = [token.strip().upper() for token in raw_value.split(",") if token.strip()]
+    elif isinstance(raw_value, Iterable):
+        tokens = [str(token).strip().upper() for token in raw_value if str(token).strip()]
+    else:
+        tokens = []
+    return [token for token in tokens if token]

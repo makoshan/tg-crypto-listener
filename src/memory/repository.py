@@ -126,7 +126,18 @@ class SupabaseMemoryRepository:
                 return MemoryContext()
 
         except SupabaseError as exc:
-            logger.warning(f"⚠️  SupabaseMemoryRepository: RPC search_memory 调用失败 - {exc}")
+            error_msg = str(exc)
+            # 检测数据库 statement timeout 错误（错误代码 57014）
+            is_timeout = "57014" in error_msg or "statement timeout" in error_msg.lower() or "canceling statement" in error_msg.lower()
+            
+            if is_timeout:
+                logger.warning(
+                    f"⏱️  SupabaseMemoryRepository: RPC search_memory 查询超时（数据库 statement timeout） - "
+                    f"查询参数: time_window={self._config.lookback_hours}h, match_count={self._config.max_notes}, "
+                    f"threshold={self._config.similarity_threshold:.2f} - error={exc}"
+                )
+            else:
+                logger.warning(f"⚠️  SupabaseMemoryRepository: RPC search_memory 调用失败 - {exc}")
             return MemoryContext()
         except Exception as exc:  # pylint: disable=broad-except
             logger.warning(f"⚠️  SupabaseMemoryRepository: 记忆检索出现未知异常 - {exc}")

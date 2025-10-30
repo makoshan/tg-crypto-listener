@@ -256,7 +256,9 @@ async def _fetch_memory_entries(
         return []
 
     limit = limit or self._memory_limit
-    keywords = list(payload.keywords_hit or [])
+    # 仅使用快速分析提供的结构化信息（keywords 字段），不使用 payload.keywords_hit
+    # 因为快速分析的结果经过 AI 识别，比直接文本匹配更准确
+    keywords = list(preliminary.keywords) if preliminary.keywords else []
     asset_codes = _normalise_asset_codes(preliminary.asset)
 
     repo = self._memory.repository

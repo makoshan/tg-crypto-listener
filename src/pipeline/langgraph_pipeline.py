@@ -145,6 +145,10 @@ class LangGraphMessagePipeline:
         self.state_graph = None
         self._graph = self._build_graph()
         self._log_filter_config()
+        # Lightweight in-memory cache for recent memory fetches (keywords-only)
+        # key: tuple(sorted_keywords[:6]) -> {"ts": unix_seconds, "entries": historical_reference}
+        self._memory_cache: dict[tuple[str, ...], dict[str, Any]] = {}
+        self._memory_cache_ttl_seconds: int = 90
 
     def _is_priority_kol(self, raw_event: Optional[RawEventState]) -> bool:
         """Return True if the message originates from a priority KOL source."""
@@ -624,11 +628,42 @@ class LangGraphMessagePipeline:
         embedding = state.get("embedding")
         raw_event = state.get("raw_event")
 
+        # Short-circuit when dropped or memory disabled/unavailable
         if control.drop or not deps.config.MEMORY_ENABLED or not deps.memory_repository:
             return {
                 "control": control,
                 "memory_context": None,
             }
+
+        # Preconditions tightening:
+        # - Skip for ultra-short or low-signal messages without any keywords
+        original_text = content.original_text or ""
+        if (len(original_text.strip()) < 20) and not content.keywords:
+            deps.logger.debug("🧠 跳过记忆检索：文本过短且无关键词")
+            return {"control": control, "memory_context": None, "historical_reference": []}
+
+        # - If backend is Supabase-only but we failed to compute embedding, skip costly vector search
+        from ..memory import SupabaseMemoryRepository, HybridMemoryRepository, LocalMemoryStore
+        repo = deps.memory_repository
+        if isinstance(repo, SupabaseMemoryRepository) and not embedding:
+            deps.logger.debug("🧠 跳过记忆检索：Supabase 需要 embedding 但当前无向量")
+            return {"control": control, "memory_context": None, "historical_reference": []}
+
+        # - Simple short-term cache by keywords to avoid duplicate queries in bursty channels
+        cache_key = tuple(sorted([kw for kw in (content.keywords or []) if kw])[:6])
+        if cache_key:
+            import time
+            now = int(time.time())
+            cached = self._memory_cache.get(cache_key)
+            if cached and (now - int(cached.get("ts", 0))) <= self._memory_cache_ttl_seconds:
+                historical_reference = cached.get("entries", []) or []
+                if historical_reference:
+                    deps.logger.debug("🧠 命中记忆检索缓存：%d 条", len(historical_reference))
+                    return {
+                        "control": control,
+                        "memory_context": None,
+                        "historical_reference": historical_reference,
+                    }
 
         memory_context: Optional[MemoryContext] = None
 
@@ -665,6 +700,10 @@ class LangGraphMessagePipeline:
         if memory_context and not memory_context.is_empty():
             historical_reference = memory_context.to_prompt_payload(current_time=current_msg_time)
             deps.logger.info("🧠 Memory 检索完成: %d 条记录", len(historical_reference))
+            # populate cache
+            if cache_key and historical_reference:
+                import time
+                self._memory_cache[cache_key] = {"ts": int(time.time()), "entries": historical_reference}
             if deps.logger.isEnabledFor(10):  # DEBUG
                 for i, entry in enumerate(memory_context.entries, 1):
                     if isinstance(entry, MemoryEntry):

@@ -11,6 +11,11 @@ from src.utils import setup_logger
 logger = setup_logger(__name__)
 
 
+# Simple in-process cache to avoid repeated Supabase RPC under burst traffic
+_CACHE: dict[str, dict[str, Any]] = {}
+_CACHE_TTL_SECONDS = 90
+
+
 async def fetch_memory_evidence(
     *,
     config: Any,
@@ -33,6 +38,25 @@ async def fetch_memory_evidence(
 
     result: Dict[str, Any] = {}
 
+    # 输入为空短路
+    if not (asset_codes or (keywords and len([k for k in (keywords or []) if k.strip()]) > 0)):
+        return {"notes": "empty inputs: no asset_codes or keywords"}
+
+    # 规范化 cache key（不包含 embedding 内容，降低碰撞成本）
+    norm_assets = tuple(sorted((asset_codes or [])[:6]))
+    norm_kws = tuple(sorted([k.strip().lower() for k in (keywords or []) if k and k.strip()][:6]))
+    cache_key = f"a:{','.join(norm_assets)}|k:{','.join(norm_kws)}|t:{time_window_hours}|m:{match_count}"
+
+    # 命中缓存
+    try:
+        import time
+        cached = _CACHE.get(cache_key)
+        if cached and (int(time.time()) - int(cached.get("ts", 0))) <= _CACHE_TTL_SECONDS:
+            logger.debug("🔍 fetch_memory_evidence: 命中缓存 key=%s", cache_key)
+            return dict(cached.get("value", {}))
+    except Exception:
+        pass
+
     # 尝试 Supabase
     if supabase_url and supabase_key:
         try:
@@ -40,7 +64,8 @@ async def fetch_memory_evidence(
                 "🔍 fetch_memory_evidence: 开始统一检索协调 - "
                 f"embedding={'有' if embedding_1536 else '无'}, "
                 f"keywords={len(keywords or [])}, "
-                f"assets={len(asset_codes or [])}"
+                f"keywords_list={keywords[:5] if keywords else []}{'...' if keywords and len(keywords) > 5 else ''}, "
+                f"assets={asset_codes or []}"
             )
             client = get_supabase_client(url=supabase_url, service_key=supabase_key)
             repo = MemoryRepository(client)
@@ -69,6 +94,11 @@ async def fetch_memory_evidence(
                     f"vector={stats.get('vector', 0)}, "
                     f"keyword={stats.get('keyword', 0)}"
                 )
+                # 写入缓存
+                try:
+                    _CACHE[cache_key] = {"ts": int(time.time()), "value": dict(result)}
+                except Exception:
+                    pass
                 return result
             else:
                 logger.info(
@@ -92,6 +122,12 @@ async def fetch_memory_evidence(
         result["local_keyword"] = normalized_kws[: match_count or 5]
     else:
         result.setdefault("notes", "no keywords provided for local fallback")
+
+    # 缓存本地降级结果，避免瞬时重复调用
+    try:
+        _CACHE[cache_key] = {"ts": int(time.time()), "value": dict(result)}
+    except Exception:
+        pass
 
     return result
 

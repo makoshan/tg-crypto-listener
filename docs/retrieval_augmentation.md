@@ -165,8 +165,27 @@ $$;
 
 提示：如主要语种为英文，可将 `simple` 替换为 `english`；需要前缀匹配时将 `plainto_tsquery` 改为 `to_tsquery` 并拼 `':*'`。
 
+### 深度分析检索调用路径说明
+深度分析有两种执行路径，但**不会重复调用**统一检索：
+
+1. **LangGraph 路径**（工具增强流程，`DEEP_ANALYSIS_TOOLS_ENABLED=true`）：
+   - `ContextGatherNode` → `fetch_memory_entries()` → `memory_repository.fetch_memories()` → `search_memory` RPC
+   - 仅调用一次统一检索
+
+2. **传统 Function Calling 路径**（未启用工具增强）：
+   - `_analyse_with_function_calling()` → `fetch_memory_evidence()` → `MemoryRepository.search_memory()` → `search_memory` RPC
+   - 仅调用一次统一检索
+
+**重要优化**：深度分析现在仅使用快速分析的结构化结果：
+- 使用 `preliminary.keywords`（快速分析生成的关键词列表，包含 `asset` 和 `event_type`）
+- **不再使用** `payload.keywords_hit`（避免噪音关键词干扰）
+- **不再单独使用** `preliminary.event_type`（已包含在 `keywords` 中）
+
+这样可以最大化利用快速分析的结果，提高检索精度。快速分析的结果经过 AI 识别和验证，比直接文本匹配更准确。
+
 ### 验收标准
 - Supabase 可用：`search_memory` 完成向量优先+关键词降级；空结果才触发本地关键词。
 - Supabase 不可用/异常：自动降级本地；不阻断主流程。
 - 仅在 `additional_context.memory_evidence` 注入结果（`supabase_hits`/`local_keyword`），日志清晰可读。
 - **去重统一**：`check_duplicate_by_embedding()` 使用 `search_memory` RPC，不再依赖 `find_similar_events`。
+- **关键词优化**：深度分析仅使用快速分析的结构化结果（`preliminary.keywords` 字段），该字段在快速分析时基于 `asset` 和 `event_type` 自动生成，不使用 `payload.keywords_hit` 或单独使用 `event_type`，确保检索准确性。

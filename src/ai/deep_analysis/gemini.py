@@ -21,6 +21,7 @@ from src.memory.types import MemoryContext, MemoryEntry
 
 from .base import DeepAnalysisEngine, DeepAnalysisError, build_deep_analysis_messages
 from src.memory.coordinator import fetch_memory_evidence
+from src.utils import compute_embedding
 
 logger = logging.getLogger(__name__)
 
@@ -272,24 +273,51 @@ class GeminiDeepAnalysisEngine(DeepAnalysisEngine):
             self._protocol_tool,
         ])
 
-        # Fetch memory evidence (Supabase priority; fallback to local keywords)
+        # Fetch memory evidence (prefer reusing pipeline context; otherwise conditional fetch)
+        memory_evidence = {}
         try:
-            kw_list: list[str] = []
-            if preliminary.asset:
-                kw_list.append(str(preliminary.asset).strip())
-            if preliminary.event_type:
-                kw_list.append(str(preliminary.event_type).strip())
+            hist_ref = (payload.historical_reference or {}).get("entries") or []
+            if hist_ref:
+                memory_evidence = {"from_pipeline": True, "entries": hist_ref}
+            else:
+                conf_gate = float(getattr(self._config, "DEEP_MEMORY_MIN_CONFIDENCE", 0.6))
+                allowed_types = set(getattr(self._config, "DEEP_MEMORY_EVENT_WHITELIST", [
+                    "listing", "hack", "regulation", "partnership", "product_launch", "whale", "funding"
+                ]))
+                has_asset = bool(preliminary.asset and preliminary.asset != "NONE")
+                if preliminary.confidence >= conf_gate and preliminary.event_type in allowed_types and has_asset:
+                    asset_codes = _normalise_asset_codes(preliminary.asset)
+                    kw_list: list[str] = []
+                    kw_list.extend(asset_codes)
+                    if preliminary.event_type:
+                        kw_list.append(str(preliminary.event_type).strip())
 
-            memory_evidence = await fetch_memory_evidence(
-                config=self._config,
-                embedding_1536=None,
-                keywords=[k for k in kw_list if k],
-                asset_codes=[preliminary.asset] if preliminary.asset else None,
-                match_threshold=float(getattr(self._config, "MEMORY_MATCH_THRESHOLD", 0.85)),
-                min_confidence=float(getattr(self._config, "MEMORY_MIN_CONFIDENCE", 0.6)),
-                time_window_hours=int(getattr(self._config, "MEMORY_TIME_WINDOW_HOURS", 72)),
-                match_count=int(getattr(self._config, "MEMORY_MATCH_COUNT", 5)),
-            )
+                    embedding_1536 = None
+                    text_for_embedding = payload.translated_text or payload.text or ""
+                    if text_for_embedding:
+                        api_key = getattr(self._config, "OPENAI_API_KEY", None) or ""
+                        model = getattr(self._config, "OPENAI_EMBEDDING_MODEL", "text-embedding-3-small")
+                        if api_key:
+                            embedding_1536 = await compute_embedding(text_for_embedding, api_key, model)
+
+                    memory_evidence = await fetch_memory_evidence(
+                        config=self._config,
+                        embedding_1536=embedding_1536,
+                        keywords=[k for k in kw_list if k],
+                        asset_codes=asset_codes if asset_codes else None,
+                        match_threshold=float(getattr(self._config, "MEMORY_MATCH_THRESHOLD", 0.85)),
+                        min_confidence=float(getattr(self._config, "MEMORY_MIN_CONFIDENCE", 0.6)),
+                        time_window_hours=int(getattr(self._config, "MEMORY_TIME_WINDOW_HOURS", 72)),
+                        match_count=int(getattr(self._config, "MEMORY_MATCH_COUNT", 5)),
+                    )
+                else:
+                    logger.debug(
+                        "🧠 跳过深度记忆检索: conf=%.2f type=%s asset=%s gate=%.2f",
+                        preliminary.confidence,
+                        preliminary.event_type,
+                        preliminary.asset or "NONE",
+                        conf_gate,
+                    )
         except Exception:
             memory_evidence = {}
 

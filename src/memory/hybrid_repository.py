@@ -129,16 +129,29 @@ class HybridMemoryRepository:
 
         except (SupabaseError, Exception) as e:
             self._supabase_failures += 1
-            logger.warning(
-                f"❌ HybridMemoryRepository: Supabase 检索失败 "
-                f"({self._supabase_failures}/{self._max_failures})，降级到本地 - {e}"
-            )
+            error_msg = str(e)
+            # 检测数据库 statement timeout 错误（错误代码 57014）
+            is_timeout = "57014" in error_msg or "statement timeout" in error_msg.lower() or "canceling statement" in error_msg.lower()
+            
+            if is_timeout:
+                logger.warning(
+                    f"⏱️  HybridMemoryRepository: Supabase 查询超时（数据库 statement timeout） "
+                    f"({self._supabase_failures}/{self._max_failures})，降级到本地 - "
+                    f"查询参数: time_window={self._config.lookback_hours}h, match_count={self._config.max_notes} - {e}"
+                )
+            else:
+                logger.warning(
+                    f"❌ HybridMemoryRepository: Supabase 检索失败 "
+                    f"({self._supabase_failures}/{self._max_failures})，降级到本地 - {e}"
+                )
 
             # 触发告警
             if self._supabase_failures >= self._max_failures:
+                error_type = "查询超时" if is_timeout else "连接失败"
                 logger.error(
-                    f"🚨 HybridMemoryRepository: Supabase 连续失败 {self._supabase_failures} 次，"
-                    "请检查网络连接或 Supabase 服务状态"
+                    f"🚨 HybridMemoryRepository: Supabase 连续失败 {self._supabase_failures} 次（{error_type}），"
+                    "已降级到本地模式 - "
+                    f"{'建议优化查询参数或增加数据库超时设置' if is_timeout else '请检查网络连接或 Supabase 服务状态'}"
                 )
 
         return self._fallback_local(keywords)
