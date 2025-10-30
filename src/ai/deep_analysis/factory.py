@@ -204,6 +204,11 @@ def create_deep_analysis_engine(
                 base_path=getattr(config, "MEMORY_DIR", "./memories")
             )
 
+        # MiniMax Claude-compatible API 通常不支持 Memory Tool。为避免
+        # “function name or parameters is empty (2013)” 错误，这里显式禁用。
+        if provider == "minimax":
+            memory_handler = None
+
         client = AnthropicClient(
             api_key=api_key,
             base_url=base_url or None,
@@ -219,7 +224,11 @@ def create_deep_analysis_engine(
             ),
             max_tool_turns=int(
                 provider_cfg.get("max_tool_turns")
-                or getattr(config, "CLAUDE_MAX_TOOL_TURNS" if provider == "claude" else "MINIMAX_MAX_TOOL_TURNS", 5)
+                or getattr(
+                    config,
+                    "CLAUDE_MAX_TOOL_TURNS" if provider == "claude" else "MINIMAX_MAX_TOOL_TURNS",
+                    0 if provider == "minimax" else 5,
+                )
             ),
             memory_handler=memory_handler,
             context_trigger_tokens=getattr(config, "MEMORY_CONTEXT_TRIGGER_TOKENS", 10000),
