@@ -110,6 +110,8 @@ trade war,贸易战
 CPI,consumer price index
 GOVERNMENT SHUTDOWN,U.S. Shutdown,政府停摆
 
+降息,rate cut,rate cuts,dovish,加息暂停,暂停,关税,tariff,tariffs,就业降温,job cooling,layoffs,政府关门,fomc,鲍威尔,powell,Пауэлл,снижение ставки,понижение ставки,смягчение политики,пауза,тариф,тарифы,охлаждение рынка труда,приостановка работы правительства
+
 # ========================================
 # 研究机构与其他资产
 # Research Institutions & Other Assets
