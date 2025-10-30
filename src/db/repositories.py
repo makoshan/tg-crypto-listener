@@ -192,6 +192,18 @@ class MemoryRepository:
           - stats: { total, vector, keyword }
           - notes: str (optional)
         """
+        
+        # 限制最大时间窗口为 168 小时（7天）以避免免费 Supabase 查询超时
+        # 免费计划通常有较短的 statement timeout（10-60秒），查询过长时间窗口的数据会导致超时
+        MAX_TIME_WINDOW_HOURS = 168  # 7 days
+        original_time_window = time_window_hours
+        if time_window_hours > MAX_TIME_WINDOW_HOURS:
+            self._logger.warning(
+                f"⚠️  MemoryRepository.search_memory: 时间窗口 {time_window_hours}h 超过最大限制 "
+                f"{MAX_TIME_WINDOW_HOURS}h（7天），已自动调整为 {MAX_TIME_WINDOW_HOURS}h 以避免查询超时。"
+                f"提示：免费 Supabase 计划建议使用较短的时间窗口（≤72h）。"
+            )
+            time_window_hours = MAX_TIME_WINDOW_HOURS
 
         params: Dict[str, Any] = {
             "query_embedding": embedding_1536,
@@ -218,9 +230,27 @@ class MemoryRepository:
         try:
             response = await self._client.rpc("search_memory", params)
         except SupabaseError as exc:
-            self._logger.warning(
-                f"??  MemoryRepository.search_memory: RPC ????????????? - error={exc}"
-            )
+            error_msg = str(exc)
+            # 检测数据库 statement timeout 错误（错误代码 57014）
+            is_timeout = "57014" in error_msg or "statement timeout" in error_msg.lower() or "canceling statement" in error_msg.lower()
+            
+            if is_timeout:
+                self._logger.warning(
+                    f"⏱️  MemoryRepository.search_memory: RPC 查询超时（数据库 statement timeout） - "
+                    f"查询参数: time_window_hours={time_window_hours}h, match_count={match_count}, "
+                    f"threshold={match_threshold:.2f}\n"
+                    f"💡 优化建议：\n"
+                    f"   1. 减少时间窗口（建议 ≤72h，已在代码中限制最大 168h）\n"
+                    f"   2. 减少 match_count（当前 {match_count}，建议 ≤5）\n"
+                    f"   3. 提高相似度阈值以过滤更多结果（当前 {match_threshold:.2f}）\n"
+                    f"   4. 免费 Supabase 计划 statement timeout 较短，考虑升级或使用付费计划\n"
+                    f"   5. 检查数据库索引是否已正确创建（news_events.created_at, ai_signals.created_at）\n"
+                    f"错误详情: {exc}"
+                )
+            else:
+                self._logger.warning(
+                    f"❌  MemoryRepository.search_memory: RPC 调用失败 - error={exc}"
+                )
             return {"hits": [], "stats": {"total": 0, "vector": 0, "keyword": 0}, "notes": str(exc)}
         except Exception as exc:  # pragma: no cover - safety net
             self._logger.warning(

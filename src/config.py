@@ -232,6 +232,12 @@ class Config:
     MEMORY_DIR: str = os.getenv("MEMORY_DIR", "./memories")
     MEMORY_MAX_NOTES: int = int(os.getenv("MEMORY_MAX_NOTES", "3"))
     MEMORY_LOOKBACK_HOURS: int = int(os.getenv("MEMORY_LOOKBACK_HOURS", "72"))
+    # MEMORY_TIME_WINDOW_HOURS: 用于深度分析的记忆检索时间窗口（小时）
+    # 如果未设置如下降使用 MEMORY_LOOKBACK_HOURS，最大限制为 168 小时（7天）以避免查询超时
+    MEMORY_TIME_WINDOW_HOURS: int = int(
+        os.getenv("MEMORY_TIME_WINDOW_HOURS", str(MEMORY_LOOKBACK_HOURS))
+    )
+    MEMORY_MATCH_COUNT: int = int(os.getenv("MEMORY_MATCH_COUNT", "5"))
     MEMORY_MIN_CONFIDENCE: float = float(os.getenv("MEMORY_MIN_CONFIDENCE", "0.6"))
     MEMORY_SIMILARITY_THRESHOLD: float = float(
         os.getenv("MEMORY_SIMILARITY_THRESHOLD", "0.55")
@@ -426,7 +432,7 @@ class Config:
 
     SUPABASE_URL: str = os.getenv("SUPABASE_URL", "")
     SUPABASE_SERVICE_KEY: str = os.getenv("SUPABASE_SERVICE_KEY", "")
-    SUPABASE_TIMEOUT_SECONDS: float = float(os.getenv("SUPABASE_TIMEOUT_SECONDS", "8.0"))
+    SUPABASE_TIMEOUT_SECONDS: float = float(os.getenv("SUPABASE_TIMEOUT_SECONDS", "30.0"))
     ENABLE_DB_PERSISTENCE: bool = _as_bool(os.getenv("ENABLE_DB_PERSISTENCE", "false"))
 
     # Secondary Supabase datasource (optional, disabled by default)
