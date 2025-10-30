@@ -170,12 +170,19 @@ class GeminiClient:
                 # 超时也是暂时性错误,轮换 API key
                 if self._key_rotator is not None:
                     old_key_preview = self._current_api_key[:8] if self._current_api_key else "unknown"
+                    old_key_index = self._key_rotator.get_key_index(self._current_api_key) if self._current_api_key else None
+                    
                     self._current_api_key = self._key_rotator.get_next_key()
                     new_key_preview = self._current_api_key[:8]
+                    new_key_index = self._key_rotator.get_key_index(self._current_api_key)
+                    
                     logger.info(
-                        "🔄 检测到超时错误，轮换 API key: %s... → %s...",
+                        "🔄 检测到超时错误，轮换 API key: %s[key[%s]] → %s[key[%d/%d]]",
                         old_key_preview,
+                        old_key_index if old_key_index else "?",
                         new_key_preview,
+                        new_key_index,
+                        self._key_rotator.key_count,
                     )
                     # 标记失败的 key
                     if self._client_api_key:
@@ -198,12 +205,19 @@ class GeminiClient:
                 # 如果是暂时性错误且配置了多个 key,立即轮换到下一个 key
                 if last_error_temporary and self._key_rotator is not None:
                     old_key_preview = self._current_api_key[:8] if self._current_api_key else "unknown"
+                    old_key_index = self._key_rotator.get_key_index(self._current_api_key) if self._current_api_key else None
+                    
                     self._current_api_key = self._key_rotator.get_next_key()
                     new_key_preview = self._current_api_key[:8]
+                    new_key_index = self._key_rotator.get_key_index(self._current_api_key)
+                    
                     logger.info(
-                        "🔄 检测到暂时性错误，轮换 API key: %s... → %s...",
+                        "🔄 检测到暂时性错误，轮换 API key: %s[key[%s]] → %s[key[%d/%d]]",
                         old_key_preview,
+                        old_key_index if old_key_index else "?",
                         new_key_preview,
+                        new_key_index,
+                        self._key_rotator.key_count,
                     )
                     # 标记失败的 key
                     if self._client_api_key:
@@ -214,6 +228,18 @@ class GeminiClient:
             else:
                 if not response.text and not response.parts:
                     raise AiServiceError("Gemini 返回空响应")
+                # 成功调用后记录使用的 key 信息
+                if self._key_rotator is not None and self._current_api_key:
+                    key_index = self._key_rotator.get_key_index(self._current_api_key)
+                    usage_stats = self._key_rotator.get_usage_stats()
+                    if key_index:
+                        logger.debug(
+                            "✅ Gemini 调用成功，使用 key[%d/%d] %s... (总计使用: %s)",
+                            key_index,
+                            self._key_rotator.key_count,
+                            self._current_api_key[:8],
+                            usage_stats.get(key_index - 1, 0),
+                        )
                 return response
 
             if attempt < self._max_retries and self._retry_backoff > 0:
@@ -251,15 +277,38 @@ class GeminiClient:
         api_key = self._select_api_key(rotate=True)
 
         if self._client is None or self._client_api_key != api_key:
+            old_key_preview = self._client_api_key[:8] if self._client_api_key else None
+            old_key_index = None
+            if old_key_preview and self._key_rotator is not None:
+                old_key_index = self._key_rotator.get_key_index(self._client_api_key)
+            
             try:
                 self._client = genai.Client(api_key=api_key)
             except Exception as exc:
-                logger.warning("切换 Gemini API key 失败: %s", exc)
+                key_index = self._key_rotator.get_key_index(api_key) if self._key_rotator is not None else None
+                logger.warning(
+                    "切换 Gemini API key 失败: %s[key[%s]] → %s[key[%s]]: %s",
+                    old_key_preview or "none",
+                    old_key_index if old_key_index else "?",
+                    api_key[:8],
+                    key_index if key_index else "?",
+                    exc,
+                )
                 if self._key_rotator is not None:
                     self._key_rotator.mark_key_failed(api_key)
                 raise
             else:
                 self._client_api_key = api_key
+                key_index = self._key_rotator.get_key_index(api_key) if self._key_rotator is not None else None
+                if key_index:
+                    logger.info(
+                        "✅ Gemini API key 切换成功: %s[key[%s]] → %s[key[%d/%d]]",
+                        old_key_preview or "none",
+                        old_key_index if old_key_index else "?",
+                        api_key[:8],
+                        key_index,
+                        self._key_rotator.key_count if self._key_rotator else 1,
+                    )
 
         contents = self._prepare_contents_native(prompt, images)
 
@@ -267,6 +316,20 @@ class GeminiClient:
             model=self._model_name,
             contents=contents,
         )
+        
+        # 成功调用后记录使用的 key 信息
+        if self._key_rotator is not None and self._client_api_key:
+            key_index = self._key_rotator.get_key_index(self._client_api_key)
+            usage_stats = self._key_rotator.get_usage_stats()
+            if key_index:
+                logger.debug(
+                    "✅ Gemini Native 调用成功，使用 key[%d/%d] %s... (总计使用: %s)",
+                    key_index,
+                    self._key_rotator.key_count,
+                    self._client_api_key[:8],
+                    usage_stats.get(key_index - 1, 0),
+                )
+        
         return self._build_response(response)
 
     def _call_model_http(
@@ -310,6 +373,19 @@ class GeminiClient:
             data = response.json()
         except json.JSONDecodeError as exc:  # pragma: no cover - unexpected response format
             raise AiServiceError("Gemini 返回了无法解析的 JSON 响应") from exc
+
+        # 成功调用后记录使用的 key 信息
+        if self._key_rotator is not None and api_key:
+            key_index = self._key_rotator.get_key_index(api_key)
+            usage_stats = self._key_rotator.get_usage_stats()
+            if key_index:
+                logger.debug(
+                    "✅ Gemini HTTP Fallback 调用成功，使用 key[%d/%d] %s... (总计使用: %s)",
+                    key_index,
+                    self._key_rotator.key_count,
+                    api_key[:8],
+                    usage_stats.get(key_index - 1, 0),
+                )
 
         return self._build_response(data)
 

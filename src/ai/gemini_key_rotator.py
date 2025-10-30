@@ -41,11 +41,21 @@ class GeminiKeyRotator:
             The next API key to use
         """
         with self._lock:
-            key = self._keys[self._current_index]
-            self._usage_counter[self._current_index] += 1
+            current_idx = self._current_index
+            key = self._keys[current_idx]
+            self._usage_counter[current_idx] += 1
+            usage_count = self._usage_counter[current_idx]
 
             # Move to next key for next call
             self._current_index = (self._current_index + 1) % len(self._keys)
+
+            logger.debug(
+                "🔑 Gemini API Key 轮换: 使用 key[%d/%d] (使用次数: %d) %s...",
+                current_idx + 1,
+                len(self._keys),
+                usage_count,
+                key[:8],
+            )
 
             return key
 
@@ -64,7 +74,22 @@ class GeminiKeyRotator:
         Args:
             key: The API key that failed
         """
-        logger.warning(f"⚠️ Gemini API key 调用失败: {key[:8]}...")
+        key_index = None
+        with self._lock:
+            try:
+                key_index = self._keys.index(key) + 1
+            except ValueError:
+                pass
+
+        if key_index:
+            logger.warning(
+                "⚠️ Gemini API key[%d/%d] 调用失败: %s... (已标记失败)",
+                key_index,
+                len(self._keys),
+                key[:8],
+            )
+        else:
+            logger.warning(f"⚠️ Gemini API key 调用失败: {key[:8]}... (已标记失败)")
 
     def get_usage_stats(self) -> dict[int, int]:
         """Get usage statistics for all keys.
@@ -74,6 +99,21 @@ class GeminiKeyRotator:
         """
         with self._lock:
             return dict(self._usage_counter)
+
+    def get_key_index(self, key: str) -> int | None:
+        """Get the index of a key.
+
+        Args:
+            key: The API key to find
+
+        Returns:
+            The 1-based index of the key, or None if not found
+        """
+        with self._lock:
+            try:
+                return self._keys.index(key) + 1
+            except ValueError:
+                return None
 
     def reset_stats(self) -> None:
         """Reset usage statistics."""
