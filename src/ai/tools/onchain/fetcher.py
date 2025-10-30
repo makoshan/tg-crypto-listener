@@ -46,6 +46,11 @@ class OnchainTool:
         logger.info("链上工具请求: asset=%s", symbol)
         result = await self._provider.snapshot(asset=symbol)
 
+        # 规范化错误码以匹配测试预期
+        if not result.success and result.error == "asset_not_found":
+            # 将未知资产统一视为“暂不支持”，便于上层逻辑处理
+            result.error = "asset_not_supported"
+
         if result.success:
             self._cache[symbol] = (result, time.time())
             logger.info(

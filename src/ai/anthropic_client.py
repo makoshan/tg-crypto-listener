@@ -103,9 +103,11 @@ class AnthropicClient:
             if self._context_management_config:
                 create_kwargs["context_management"] = self._context_management_config
             
-            # Send beta header when using tools (Memory Tool) or context management
-            # In newer Anthropic SDK versions, betas are passed via extra_headers
+            # Send betas when using tools or context management
             if tools or self._context_management_config:
+                # Preferred: pass betas parameter for SDKs that support it
+                create_kwargs["betas"] = self._betas
+                # Also set header for compatibility with older SDKs
                 extra_headers = create_kwargs.get("extra_headers", {})
                 # Multiple betas should be comma-separated in the header value
                 extra_headers["anthropic-beta"] = ",".join(self._betas)

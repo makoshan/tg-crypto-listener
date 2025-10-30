@@ -11,6 +11,7 @@ from openai import AsyncOpenAI, AsyncStream
 from openai.types.chat import ChatCompletion, ChatCompletionChunk
 
 from .base import DeepAnalysisEngine, DeepAnalysisError, build_deep_analysis_messages
+from src.memory.coordinator import fetch_memory_evidence
 
 if TYPE_CHECKING:
     from src.ai.signal_engine import EventPayload, SignalResult
@@ -157,13 +158,36 @@ class OpenAICompatibleEngine(DeepAnalysisEngine):
             "notes": "OpenAI 兼容引擎，可使用 Function Calling 工具" if self._has_tools() else "OpenAI 兼容引擎，当前未启用任何工具",
         }
 
-        # 1. 构建分析消息（复用 Gemini 的提示词逻辑）
+        # 0. 获取记忆证据（Supabase 优先，空/异常走本地关键词）
+        try:
+            # 仅使用初步资产与事件类型作为关键词线索，避免增加外部依赖
+            kw_list = []
+            if preliminary.asset:
+                kw_list.append(str(preliminary.asset).strip())
+            if preliminary.event_type:
+                kw_list.append(str(preliminary.event_type).strip())
+
+            memory_evidence = await fetch_memory_evidence(
+                config=self._config,
+                embedding_1536=None,  # 如需向量检索，可在此接入 embedding 生成
+                keywords=[k for k in kw_list if k],
+                asset_codes=[preliminary.asset] if preliminary.asset else None,
+                match_threshold=float(getattr(self._config, "MEMORY_MATCH_THRESHOLD", 0.85)),
+                min_confidence=float(getattr(self._config, "MEMORY_MIN_CONFIDENCE", 0.6)),
+                time_window_hours=int(getattr(self._config, "MEMORY_TIME_WINDOW_HOURS", 72)),
+                match_count=int(getattr(self._config, "MEMORY_MATCH_COUNT", 5)),
+            )
+        except Exception:
+            memory_evidence = {}
+
+        # 1. 构建分析消息（复用 Gemini 的提示词逻辑），注入 memory_evidence
         messages = build_deep_analysis_messages(
             payload=payload,
             preliminary=preliminary,
             history_limit=2,
             additional_context={
                 "analysis_capabilities": capabilities,
+                "memory_evidence": memory_evidence,
             },
         )
 

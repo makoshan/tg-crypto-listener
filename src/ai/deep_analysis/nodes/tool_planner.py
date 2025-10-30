@@ -1,6 +1,7 @@
 """Tool Planner node for deciding which tools to call."""
 import logging
 from typing import Any, Dict, Optional
+from types import SimpleNamespace
 
 from .base import BaseNode
 from ..planners import BasePlanner, create_planner
@@ -19,15 +20,12 @@ class ToolPlannerNode(BaseNode):
     def _get_planner(self) -> BasePlanner:
         """Lazy initialization of planner."""
         if self._planner is None:
-            planner_type = getattr(
-                self.engine._config,
-                "DEEP_ANALYSIS_PLANNER",
-                "gemini"
-            )
+            engine_config = getattr(self.engine, "_config", SimpleNamespace())
+            planner_type = getattr(engine_config, "DEEP_ANALYSIS_PLANNER", "gemini")
             self._planner = create_planner(
                 planner_type,
                 self.engine,
-                self.engine._config
+                engine_config
             )
         return self._planner
 

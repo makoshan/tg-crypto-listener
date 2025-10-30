@@ -51,6 +51,9 @@ async def fetch_memory_evidence(
 - 建议结合视图 `v_news_events` / `v_ai_signals` 以标准化列名。
 
 ```sql
+-- 需要先启用 pgvector 扩展：
+-- create extension if not exists vector;
+-- 余弦相似度写法：similarity = 1 - (embedding <=> query_embedding)
 -- 单函数：向量优先，自动降级 TSV 关键词
 create or replace function search_memory(
   query_embedding vector(1536) default null,
@@ -81,6 +84,11 @@ as $$
   ),
   kw_available as (
     select coalesce(array_length(kws, 1), 0) > 0 as has_kw from norm_kw
+  ),
+  kw_ts as (
+    select
+      string_agg(plainto_tsquery('simple', k)::text, ' | ')::tsquery as q
+    from unnest((select kws from norm_kw)) as k
   ),
   ts_doc as (
     select
@@ -114,12 +122,12 @@ as $$
       b.created_at,
       b.content_text,
       b.translated_text,
-      similarity(b.embedding, query_embedding)::double precision as similarity,
+      (1 - (b.embedding <=> query_embedding))::double precision as similarity,
       null::double precision as keyword_score,
-      similarity(b.embedding, query_embedding)::double precision as combined_score
+      (1 - (b.embedding <=> query_embedding))::double precision as combined_score
     from base b
     where query_embedding is not null
-      and similarity(b.embedding, query_embedding) >= match_threshold
+      and (1 - (b.embedding <=> query_embedding)) >= match_threshold
       and (asset_filter is null or (b.asset_arr is not null and b.asset_arr && asset_filter))
     order by similarity desc, created_at desc
     limit match_count
@@ -132,18 +140,15 @@ as $$
       b.content_text,
       b.translated_text,
       null::double precision as similarity,
-      ts_rank(b.docvec, (select string_agg(plainto_tsquery('simple', kw)::text, ' | ')::tsquery from norm_kw), 1) as keyword_score,
+      ts_rank(b.docvec, (select q from kw_ts), 1) as keyword_score,
       (
-        0.6 * ts_rank(b.docvec, (select string_agg(plainto_tsquery('simple', kw)::text, ' | ')::tsquery from norm_kw), 1)
+        0.6 * ts_rank(b.docvec, (select q from kw_ts), 1)
         + 0.3 * exp(- greatest(extract(epoch from (now() - b.created_at)) / 3600.0, 0) / 48.0)
         + 0.1 * coalesce(b.confidence, 0.0)
       )::double precision as combined_score
     from base b
     where (select has_kw from kw_available)
-      and (
-        select string_agg(plainto_tsquery('simple', kw)::text, ' | ')::tsquery
-        from norm_kw
-      ) @@ b.docvec
+      and (select q from kw_ts) @@ b.docvec
       and (asset_filter is null or (b.asset_arr is not null and b.asset_arr && asset_filter))
     order by combined_score desc, created_at desc
     limit match_count

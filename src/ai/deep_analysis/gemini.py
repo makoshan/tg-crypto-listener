@@ -20,6 +20,7 @@ from src.memory.factory import MemoryBackendBundle
 from src.memory.types import MemoryContext, MemoryEntry
 
 from .base import DeepAnalysisEngine, DeepAnalysisError, build_deep_analysis_messages
+from src.memory.coordinator import fetch_memory_evidence
 
 logger = logging.getLogger(__name__)
 
@@ -266,6 +267,27 @@ class GeminiDeepAnalysisEngine(DeepAnalysisEngine):
             self._protocol_tool,
         ])
 
+        # Fetch memory evidence (Supabase priority; fallback to local keywords)
+        try:
+            kw_list: list[str] = []
+            if preliminary.asset:
+                kw_list.append(str(preliminary.asset).strip())
+            if preliminary.event_type:
+                kw_list.append(str(preliminary.event_type).strip())
+
+            memory_evidence = await fetch_memory_evidence(
+                config=self._config,
+                embedding_1536=None,
+                keywords=[k for k in kw_list if k],
+                asset_codes=[preliminary.asset] if preliminary.asset else None,
+                match_threshold=float(getattr(self._config, "MEMORY_MATCH_THRESHOLD", 0.85)),
+                min_confidence=float(getattr(self._config, "MEMORY_MIN_CONFIDENCE", 0.6)),
+                time_window_hours=int(getattr(self._config, "MEMORY_TIME_WINDOW_HOURS", 72)),
+                match_count=int(getattr(self._config, "MEMORY_MATCH_COUNT", 5)),
+            )
+        except Exception:
+            memory_evidence = {}
+
         conversation = build_deep_analysis_messages(
             payload,
             preliminary,
@@ -279,7 +301,8 @@ class GeminiDeepAnalysisEngine(DeepAnalysisEngine):
                     "onchain_enabled": bool(self._onchain_tool),
                     "protocol_enabled": bool(self._protocol_tool),
                     "notes": "Gemini Function Calling 深度分析" + ("，可触发外部工具" if tool_enabled else "，当前仅文本复核"),
-                }
+                },
+                "memory_evidence": memory_evidence,
             },
         )
         try:

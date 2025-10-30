@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
+from src.utils import setup_logger
+
 from .models import AiSignalPayload, NewsEventPayload, StrategyInsightPayload
 from .supabase_client import SupabaseClient, SupabaseError
 
@@ -148,3 +150,89 @@ class StrategyInsightRepository:
         if record and "id" in record:
             return int(record["id"])
         return None
+
+
+class MemoryRepository:
+    """Unified memory search wrapper over Supabase RPC search_memory."""
+
+    def __init__(self, client: SupabaseClient) -> None:
+        self._client = client
+        self._logger = setup_logger(__name__)
+
+    async def search_memory(
+        self,
+        *,
+        embedding_1536: Optional[List[float]] = None,
+        keywords: Optional[List[str]] = None,
+        asset_codes: Optional[List[str]] = None,
+        match_threshold: float = 0.85,
+        min_confidence: float = 0.6,
+        time_window_hours: int = 72,
+        match_count: int = 5,
+    ) -> Dict[str, Any]:
+        """Call RPC search_memory and normalize results.
+
+        Returns a dict with keys:
+          - hits: list[dict]
+          - stats: { total, vector, keyword }
+          - notes: str (optional)
+        """
+
+        params: Dict[str, Any] = {
+            "query_embedding": embedding_1536,
+            "query_keywords": keywords or [],
+            "match_threshold": float(match_threshold),
+            "match_count": int(max(match_count, 1)),
+            "min_confidence": float(min_confidence),
+            "time_window_hours": int(max(time_window_hours, 1)),
+            "asset_filter": asset_codes or None,
+        }
+
+        try:
+            response = await self._client.rpc("search_memory", params)
+        except SupabaseError as exc:
+            self._logger.info("memory.search: RPC failed, will degrade to local. error=%s", exc)
+            return {"hits": [], "stats": {"total": 0, "vector": 0, "keyword": 0}, "notes": str(exc)}
+        except Exception as exc:  # pragma: no cover - safety net
+            self._logger.info("memory.search: unexpected error, will degrade to local. error=%s", exc)
+            return {"hits": [], "stats": {"total": 0, "vector": 0, "keyword": 0}, "notes": str(exc)}
+
+        if not isinstance(response, list):
+            self._logger.info("memory.search: empty/non-list response, degrade to local. type=%s", type(response))
+            return {"hits": [], "stats": {"total": 0, "vector": 0, "keyword": 0}, "notes": "empty response"}
+
+        hits: List[Dict[str, Any]] = []
+        num_vector = 0
+        num_keyword = 0
+        for row in response:
+            match_type = (row.get("match_type") or "").lower()
+            if match_type == "vector":
+                num_vector += 1
+            elif match_type == "keyword":
+                num_keyword += 1
+
+            hits.append(
+                {
+                    "match_type": match_type,
+                    "news_event_id": int(row.get("news_event_id")) if row.get("news_event_id") is not None else None,
+                    "created_at": row.get("created_at"),
+                    "content_text": row.get("content_text"),
+                    "translated_text": row.get("translated_text"),
+                    "similarity": (float(row.get("similarity")) if row.get("similarity") is not None else None),
+                    "keyword_score": (float(row.get("keyword_score")) if row.get("keyword_score") is not None else None),
+                    "combined_score": (float(row.get("combined_score")) if row.get("combined_score") is not None else None),
+                }
+            )
+
+        total = len(hits)
+        self._logger.info(
+            "memory.search: supabase hits → total=%s, vector=%s, keyword=%s",
+            total,
+            num_vector,
+            num_keyword,
+        )
+
+        return {
+            "hits": hits,
+            "stats": {"total": total, "vector": num_vector, "keyword": num_keyword},
+        }

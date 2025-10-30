@@ -172,6 +172,9 @@ class CodexCliPlanner(BasePlanner):
                 f"Codex CLI not found at '{self.cli_path}'. "
                 f"Set CODEX_CLI_PATH environment variable."
             ) from exc
+        except asyncio.TimeoutError:
+            # 透传 TimeoutError，便于测试精确断言
+            raise
         except Exception as exc:
             logger.error("Codex CLI 执行失败: %s", exc)
             raise RuntimeError(f"Codex CLI execution failed: {exc}") from exc
