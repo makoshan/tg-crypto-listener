@@ -42,19 +42,13 @@ NO_ASSET_TOKENS = {
     "MARKET",
     "MACRO",
 }
-FORBIDDEN_ASSET_PREFIXES = {"SP", "DJ", "ND", "HSI", "CSI", "FTSE"}
-FORBIDDEN_ASSET_CODES = {
-    "SPX",
-    "SP500",
-    "S&P500",
-    "TSLA",
-    "AAPL",
-    "MSFT",
-    "META",
-    "AMZN",
-    "NVDA",
-    "BABA",
-}
+# FORBIDDEN_ASSET_PREFIXES and FORBIDDEN_ASSET_CODES have been removed
+# Stock codes are now allowed to be recognized as assets if AI identifies them
+
+# BLOCKED_LOW_MARKETCAP_TOKENS has been removed
+# These tokens (TRUMP, MAGA, PEPE2, FLOKI2, SHIB2, DOGE2) are now filtered
+# at message level via BLOCK_KEYWORDS, so they won't reach AI analysis stage.
+
 ASSET_CODE_REGEX = re.compile(r"^[A-Z0-9]{2,10}$")
 ALLOWED_EVENT_TYPES = {
     "listing",
@@ -743,25 +737,37 @@ class AiSignalEngine:
             timeframe = str(data.get("timeframe", "medium")).lower()
 
             # Handle confidence - should be float but AI sometimes returns string like "high"
-            confidence_raw = data.get("confidence", 1.0)
-            if isinstance(confidence_raw, str):
+            confidence_raw = data.get("confidence")
+            if confidence_raw is None:
+                # No confidence field provided - use conservative default
+                confidence = 0.5
+                logger.warning(
+                    "AI 未返回 confidence 字段，使用默认值 0.5 (中等置信度)"
+                )
+            elif isinstance(confidence_raw, str):
                 # Map string values to numeric confidence
                 confidence_map = {"high": 0.8, "medium": 0.5, "low": 0.3}
-                confidence = confidence_map.get(confidence_raw.lower(), 0.0)
-                logger.warning(
-                    "AI 返回了字符串 confidence '%s'，已转换为数字 %.2f",
-                    confidence_raw,
-                    confidence,
-                )
+                confidence = confidence_map.get(confidence_raw.lower(), 0.5)
+                if confidence_raw.lower() not in confidence_map:
+                    logger.warning(
+                        "AI 返回了未知的字符串 confidence '%s'，使用默认值 0.5",
+                        confidence_raw,
+                    )
+                else:
+                    logger.debug(
+                        "AI 返回了字符串 confidence '%s'，已转换为数字 %.2f",
+                        confidence_raw,
+                        confidence,
+                    )
             else:
                 try:
                     confidence = float(confidence_raw)
                 except (ValueError, TypeError):
                     logger.warning(
-                        "无法解析 confidence 值 '%s'，使用默认值 1.0",
+                        "无法解析 confidence 值 '%s'，使用默认值 0.5",
                         confidence_raw,
                     )
-                    confidence = 1.0
+                    confidence = 0.5
             risk_flags = data.get("risk_flags", []) or []
             if not isinstance(risk_flags, list):
                 risk_flags = [str(risk_flags)]
@@ -786,10 +792,15 @@ class AiSignalEngine:
                 )
             else:
                 asset_names = str(asset_name_field).strip()
-        except json.JSONDecodeError:
+        except json.JSONDecodeError as e:
+            logger.warning(
+                "⚠️ AI 返回无法解析为 JSON: %s (原始内容预览: %s)",
+                str(e)[:100],
+                normalized_text[:200].replace("\n", " "),
+            )
             logger.debug(
-                "AI 返回无法解析为 JSON，使用纯文本摘要: %s",
-                normalized_text[:120].replace("\n", " "),
+                "完整原始响应 (前500字符): %s",
+                raw_text[:500] if len(raw_text) > 500 else raw_text
             )
             summary = "AI 返回格式异常，已忽略原始内容"
             event_type = "other"
@@ -799,8 +810,8 @@ class AiSignalEngine:
             direction = "neutral"
             strength = "low"
             timeframe = "medium"
-            confidence = 1.0
-            risk_flags = ["confidence_low"]
+            confidence = 0.0  # 修复 BUG: JSON 解析失败应该是零置信度，而非 1.0
+            risk_flags = ["confidence_low", "parse_error"]
             notes = ""
             links = []
 
@@ -820,11 +831,9 @@ class AiSignalEngine:
                 continue
             if not ASSET_CODE_REGEX.match(token):
                 continue
-            if any(token.startswith(prefix) for prefix in FORBIDDEN_ASSET_PREFIXES):
-                continue
-            if token in FORBIDDEN_ASSET_CODES:
-                continue
             normalized_assets.append(token)
+
+        # Check asset_names for invalid values
         if asset_names:
             canonical_name = asset_names.strip()
             upper_name = canonical_name.upper()
@@ -886,11 +895,37 @@ class AiSignalEngine:
         """Strip Markdown/code fences, thinking tags, and return best-effort JSON payload."""
         candidate = text.strip()
         
-        # Remove <think>...</think> tags (Claude thinking process)
-        # Handle both single-line and multi-line cases
+        # Handle unclosed <think> tags (e.g., minimax sometimes returns <think> without </think>)
+        # First, try to remove properly closed tags
         candidate = re.sub(r'<think>.*?</think>', '', candidate, flags=re.DOTALL | re.IGNORECASE)
-        # Also handle <thinking>...</thinking> variants
         candidate = re.sub(r'<thinking>.*?</thinking>', '', candidate, flags=re.DOTALL | re.IGNORECASE)
+        
+        # Then handle unclosed <think> tags - remove everything from <think> to end if no closing tag
+        if '<think>' in candidate.lower() and '</think>' not in candidate.lower():
+            # Find the position of <think> tag (case-insensitive)
+            think_pos = candidate.lower().find('<think>')
+            if think_pos >= 0:
+                # Try to find content after <think> that might be JSON
+                # Look for { or [ after <think> tag
+                after_think = candidate[think_pos + 6:].lstrip()  # Skip "<think>"
+                json_start = re.search(r'[\{\[]', after_think)
+                if json_start:
+                    # Found JSON after <think>, extract it
+                    candidate = after_think[json_start.start():].strip()
+                else:
+                    # No JSON found, remove the entire <think> tag and everything after
+                    candidate = candidate[:think_pos].strip()
+        
+        # Also handle unclosed <thinking> tags
+        if '<thinking>' in candidate.lower() and '</thinking>' not in candidate.lower():
+            thinking_pos = candidate.lower().find('<thinking>')
+            if thinking_pos >= 0:
+                after_thinking = candidate[thinking_pos + 10:].lstrip()  # Skip "<thinking>"
+                json_start = re.search(r'[\{\[]', after_thinking)
+                if json_start:
+                    candidate = after_thinking[json_start.start():].strip()
+                else:
+                    candidate = candidate[:thinking_pos].strip()
         
         # Remove Markdown code fences
         if candidate.startswith("```") and candidate.endswith("```"):
@@ -1155,6 +1190,17 @@ def build_signal_prompt(payload: EventPayload) -> list[dict[str, str]]:
         "action 为 buy、sell、observe；direction 为 long、short、neutral；strength 仅取 high、medium、low；timeframe 仅取 short、medium、long。\n"
         "如事件涉及多个币种，asset 可为数组（如 [\"BTC\",\"ETH\"]），asset_name 用简体中文名以顿号或逗号分隔；若无法确认币种则 asset=NONE、asset_name=无，并在 notes 解释原因。\n"
         "**黄金映射规则**：当消息涉及黄金（Gold/XAU/黄金期货）时，使用 asset=XAUT（Tether Gold 代币）来查询价格和分析。\n"
+        "**Ondo 美股代币化映射规则**：当消息涉及以下美股或指数时，必须识别为对应的 Ondo 代币化资产（仅限以下标的）：\n"
+        "- Google/谷歌/Alphabet → GOOGLON\n"
+        "- Tesla/特斯拉 → TSLAON\n"
+        "- CrowdStrike/CRWD → CRCLON\n"
+        "- 纳斯达克100指数/QQQ ETF → QQQON\n"
+        "- Nvidia/英伟达 → NVDAON\n"
+        "- MicroStrategy/MSTR → MSTRON\n"
+        "- Coinbase/COIN → COINON\n"
+        "- 苹果/Apple → AAPLON\n"
+        "- 标普500指数/SPY ETF → SPYON\n"
+        "仅限上述9只标的可识别为代币化资产，其他美股/指数仍返回 asset=NONE。在 summary 和 notes 中需明确标注这是'美股代币化资产'，并说明与传统股市的关联性。\n"
         "你需要自主判断该信号的机会大小，并在 notes 中用清晰的自然语言给出买/卖/观察的核心依据，"
         "优先引用三类证据支撑判断：1) 宏观（日程/政策/地缘，含未来24-48小时关键安排）；2) 价格（多时间周期，示例：BTC +5%）；3) 历史记忆（该项目最近动作/相似案例）；如缺失请明确待补充项。"
         "notes 表达方式完全自由，只需确保信息清晰可追溯、买卖依据明确即可。\n"
@@ -1239,11 +1285,17 @@ def build_signal_prompt(payload: EventPayload) -> list[dict[str, str]]:
         "   - 稳定币总供应量/总市值类消息，除非明确说明资金流入具体链（ETH/SOL）、协议（Aave/Curve）或配合链上数据（DEX交易量激增），否则 confidence ≤0.4\n"
         "   - 机构采用、DeFi能力、长期趋势等笼统观察，无时间节点和可执行标的 → action=observe，confidence ≤0.5，添加 vague_timeline\n"
         '   - event_type=macro + action=observe 组合时，必须有明确交易催化剂（如"X机构宣布本周买入Y亿美元BTC"）才能 confidence >0.6\n'
-        "9. **低市值代币风险控制**：\n"
-        "   - 市值 < 5000万美元的代币，默认视为高风险投机标的 → confidence 自动 -0.15 到 -0.25\n"
-        "   - 市值 < 1000万美元的代币，极高风险 → confidence 自动 -0.25 到 -0.35，必须添加 liquidity_risk\n"
-        "   - 未上线主流交易所（仅在 DEX 或小型 CEX）的代币 → confidence 降低 0.1-0.2，添加 liquidity_risk\n"
-        "   - 低市值 + 无明确催化剂（如仅空投、仅上线小交易所） → confidence ≤0.4，action=observe\n"
+        "9. **低市值代币风险控制与主动过滤**：\n"
+        "   - **优先策略：主动识别并过滤低市值垃圾代币**，包括但不限于：\n"
+        "     * 表情包/政治主题代币（如纯 meme 驱动的代币，无实际应用场景）\n"
+        "     * 分叉代币/仿盘代币（如 PEPE2、DOGE2、SHIB2、FLOKI2 等，仅通过命名蹭热度的仿制品）\n"
+        "     * 缺乏明确价值主张、仅靠营销文案推动的低市值代币\n"
+        "   - **过滤规则执行**：\n"
+        "     * 识别到上述垃圾代币特征时 → action=observe，confidence ≤0.3，必须添加 speculative 和 liquidity_risk\n"
+        "     * 市值 < 5000万美元的代币，默认视为高风险投机标的 → confidence 自动 -0.15 到 -0.25\n"
+        "     * 市值 < 1000万美元的代币，极高风险 → confidence 自动 -0.25 到 -0.35，必须添加 liquidity_risk\n"
+        "     * 未上线主流交易所（仅在 DEX 或小型 CEX）的代币 → confidence 降低 0.1-0.2，添加 liquidity_risk\n"
+        "     * 低市值 + 无明确催化剂（如仅空投、仅上线小交易所） → confidence ≤0.4，action=observe\n"
         "10. **Binance Alpha 特殊处理**：\n"
         "   - Binance Alpha 平台上线的代币通常市值较小、投机性强 → 自动降低 confidence 0.2-0.3\n"
         "   - Binance Alpha 空投活动，除非有明确的交易机会和时间节点 → action=observe，confidence ≤0.5\n"

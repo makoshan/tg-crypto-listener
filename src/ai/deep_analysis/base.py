@@ -208,7 +208,9 @@ def build_deep_analysis_messages(
 
     user_prompt = (
         "分析以下事件并返回优化后的 JSON：\n"
-        f"```json\n{context_json}\n```"
+        f"```json\n{context_json}\n```\n\n"
+        "**重要：必须直接返回有效的 JSON 对象，不要包含任何思考过程、<think> 标签或其他格式标记。"
+        "仅返回 JSON 格式的响应，以 { 开头，} 结尾。**"
     )
 
     return [

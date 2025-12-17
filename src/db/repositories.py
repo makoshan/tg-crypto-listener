@@ -28,7 +28,7 @@ class NewsEventRepository:
             filters={"hash_raw": hash_raw},
             columns="id",
         )
-        if record and "id" in record:
+        if record and "id" in record and record["id"] is not None:
             return int(record["id"])
         return None
 
@@ -71,17 +71,25 @@ class NewsEventRepository:
             if vector_hits:
                 result = vector_hits[0]
                 similarity = result.get("similarity")
-                # search_memory 的 vector hits 应该总是有 similarity，但为了安全处理 None
+                # search_memory 的 vector hits 应该总是有 similarity，但为了安全仍需判空
                 if similarity is None:
                     return None
+
+                # 有些情况下 RPC 返回的 news_event_id 可能为 None（例如清理历史或视图不一致），
+                # 此时不应强制转换为 int(None)
+                news_event_id_raw = result.get("news_event_id")
+                if news_event_id_raw is None:
+                    return None
+
                 return {
-                    "id": int(result.get("news_event_id", 0)),
+                    "id": int(news_event_id_raw),
                     "content_text": result.get("content_text", ""),
                     "similarity": float(similarity),
                 }
         return None
 
     async def insert_event(self, payload: NewsEventPayload) -> Optional[int]:
+        logger = setup_logger(__name__)
         embedding_str = None
         if payload.embedding:
             embedding_str = "[" + ",".join(str(v) for v in payload.embedding) + "]"
@@ -103,9 +111,52 @@ class NewsEventRepository:
             "metadata": payload.metadata or {},
             "price_snapshot": payload.price_snapshot,
         }
-        record = await self._client.insert("news_events", _strip_none(data))
-        if record and "id" in record:
-            return int(record["id"])
+        
+        logger.debug(
+            "🗄️ 准备插入 news_events - source=%s, content_len=%d, has_embedding=%s",
+            payload.source,
+            len(payload.content_text),
+            payload.embedding is not None,
+        )
+        
+        try:
+            record = await self._client.insert("news_events", _strip_none(data))
+        except SupabaseError as exc:
+            logger.error(
+                "❌ insert_event Supabase 错误 - source=%s, error=%s, data_keys=%s",
+                payload.source,
+                str(exc),
+                list(data.keys()),
+            )
+            return None
+        except Exception as exc:
+            logger.error(
+                "❌ insert_event 未预期的错误 - source=%s, error=%s, error_type=%s",
+                payload.source,
+                str(exc),
+                type(exc).__name__,
+            )
+            return None
+        
+        if record and "id" in record and record["id"] is not None:
+            event_id = int(record["id"])
+            logger.debug(
+                "✅ insert_event 成功 - source=%s, event_id=%d",
+                payload.source,
+                event_id,
+            )
+            return event_id
+
+        # Log diagnostic info when insert fails to return an ID
+        logger.warning(
+            "📊 insert_event 返回空 ID - source=%s, record_type=%s, has_id_key=%s, id_value=%s, record_keys=%s, record_sample=%s",
+            payload.source,
+            type(record).__name__ if record else "None",
+            "id" in record if record else False,
+            record.get("id") if record else None,
+            list(record.keys()) if isinstance(record, dict) else None,
+            {k: (str(v)[:50] if v is not None else None) for k, v in record.items()} if isinstance(record, dict) else None,
+        )
         return None
 
 
@@ -137,7 +188,7 @@ class AiSignalRepository:
             "price_snapshot": payload.price_snapshot,
         }
         record = await self._client.insert("ai_signals", _strip_none(data))
-        if record and "id" in record:
+        if record and "id" in record and record["id"] is not None:
             return int(record["id"])
         return None
 
@@ -162,7 +213,7 @@ class StrategyInsightRepository:
             "tags": payload.tags,
         }
         record = await self._client.insert("strategy_insights", _strip_none(data))
-        if record and "id" in record:
+        if record and "id" in record and record["id"] is not None:
             return int(record["id"])
         return None
 

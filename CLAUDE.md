@@ -139,7 +139,7 @@ All configuration is in `.env` (see README.md for comprehensive list). Key varia
 
 ### Deduplication Strategy (4-tier) ✨
 
-1. **In-memory window**: `MessageDeduplicator` checks last N hours of messages (`DEDUP_WINDOW_HOURS`)
+1. **In-memory window**: `MessageDeduplicator` checks last N hours of messages (`DEDUP_WINDOW_HOURS`, default: 24 hours, can be set to 4 for 4-hour window)
 2. **Hash-based**: `compute_sha256(text)` → check `news_events.hash_raw`
 3. **Semantic vector**: `compute_embedding()` → PostgreSQL RPC `find_similar_events()` with cosine similarity threshold
 4. **Signal-level** ✨: `SignalMessageDeduplicator` detects similar AI-generated signals based on:

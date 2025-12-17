@@ -284,3 +284,40 @@ class TestSignalMessageDeduplicator:
             asset="BTC",
             asset_names="比特币",
         )
+
+    def test_balancer_hack_near_duplicates_across_sources(self):
+        """Two Balancer hack alerts from different sources should dedup despite direction/asset_names differences."""
+        dedup = SignalMessageDeduplicator(
+            window_minutes=360,
+            similarity_threshold=0.68,
+            min_common_chars=10,
+        )
+
+        summary1 = (
+            "BlockBeats：Balancer协议遭受史诗级黑客攻击，被盗资产已超9800万美元且攻击仍在持续，"
+            "涉及以太坊、Base、Polygon、Sonic、Arbitrum、Optimism等多条链。事件对DeFi生态造成系统性冲击，BAL代币价格大幅下跌8.124%（1h），ETH同步下挫5.246%（24h）。"
+        )
+        summary2 = (
+            "Lookonchain：Balancer协议遭受史诗级黑客攻击，被盗资金从7000万美元飙升至1.166亿美元，"
+            "涉及以太坊、Base、Polygon等多条链。BAL代币价格剧烈下跌8.07%（1h）、6.986%（24h）。"
+        )
+
+        # First source
+        assert not dedup.is_duplicate(
+            summary=summary1,
+            action="observe",
+            direction="",  # possibly empty
+            event_type="hack",
+            asset="BAL",
+            asset_names="Balancer",
+        )
+
+        # Second source with slightly different metadata that should no longer block dedup
+        assert dedup.is_duplicate(
+            summary=summary2,
+            action="observe",
+            direction="neutral",  # benign difference
+            event_type="hack",
+            asset="BAL",
+            asset_names="",  # benign difference
+        )

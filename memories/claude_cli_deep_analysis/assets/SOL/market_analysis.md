@@ -278,3 +278,209 @@
 - **关键洞察**: 补充: 搜索工具验证失败(API 432错误)，无法独立验证金色财经报道的Galaxy观点真实性；价格工具数据为空(confidence=0.55)，无法量化市场即时反应。历史记忆确认Solana近期多重利好：生态活跃度创新高、机构化进程加速(BSOL ETF首日5600万美元成交)、巨鲸大额加仓、技术升级推进。| 风险: 工具验证失败导致数据可追溯性不足；机构观点≠交易信号，缺乏具体产品发布、合
 - **改进建议**: 继续改进分析流程
 
+
+## 2025-11-25T16:18:56.057283+00:00: Solana 生态新代币 $MON 即将上线交易，Solana 官方发文推广并与 Melee Markets 合作，鼓励用户预测交易量，显示生态对该新资产的关注。
+- **初步分析**: confidence=0.65, action=observe
+- **深度分析调整**: confidence=0.35, reason="confidence 0.65 → 0.35"
+- **验证结果**: 工具验证已完成
+- **关键洞察**: 补充：工具调用受限（搜索API超频、价格数据缺失），基于历史记忆与现有信息分析。历史记忆显示 MON 在 24 小时前已部署 Meteora 流动性池并可通过 Jupiter 交易，但本次消息仅为 Melee Markets 上的【交易量预测市场】活动，而非新的交易所上线或流动性事件。关键问题：(1) 预测市场本身不产生实际交易需求，(2) 消息未提供 MON 代币的价格、成交量、资金费率等可执行
+- **改进建议**: 继续改进分析流程
+
+
+## 2025-12-01T18:15:15.115500+00:00: 最大的 Solana 生态财库在持股价值暴跌超过40%后，招募了 ParaFi Capital 的高管，表明该财库正寻求在价值大幅缩水后进行重组和战略调整。
+- **初步分析**: confidence=0.65, action=observe
+- **深度分析调整**: confidence=0.52, reason="confidence 0.65 → 0.52"
+- **验证结果**: 工具验证已完成
+- **关键洞察**: 补充：搜索工具验证成功（6 个来源，confidence=0.80，multi_source=true，official_confirmed=true），核心事实已确认——Forward Industries（纳斯达克上市公司 FWDI）任命前 ParaFi Capital 董事总经理 Ryan Navi 为 CIO，负责管理其 Solana 财库。AMBCrypto 报道标题明确提及【Solan
+- **改进建议**: 继续改进分析流程
+
+
+## 2025-12-01T20:26:08.534641+00:00: Kalshi 在 Solana 区块链上推出了代币化事件投注，CNBC 报道确认此合作，标志着预测市场业务正式进军加密领域，可能为 Solana 生态带来新的交易机会。
+- **初步分析**: confidence=0.70, action=observe
+- **深度分析调整**: confidence=0.58, reason="confidence 0.70 → 0.58"
+- **验证结果**: 工具验证已完成
+- **关键洞察**: 补充：搜索工具验证事件真实性，找到 6 条独立来源（CNBC、ValueTheMarkets、CoinDesk、CoinTelegraph 等），多源确认 = true，confidence = 0.70。CNBC 官方报道【Kalshi makes move to court crypto traders with tokenized betting contracts】确认 Kalshi 推出
+- **改进建议**: 继续改进分析流程
+
+
+## 2025-12-01T20:29:40.869535+00:00: Kalshi 在 Solana 区块链上正式推出代币化事件合约，标志着美国合规预测市场平台首次进军链上交易，为 Solana 生态引入新的金融产品品类。
+- **初步分析**: confidence=0.65, action=observe
+- **深度分析调整**: confidence=0.45, reason="confidence 0.65 → 0.45"
+- **验证结果**: 工具验证已完成
+- **关键洞察**: 补充：通过搜索工具验证，找到6个独立来源（包括 CNBC 官方、ValueTheMarkets、CryptoBriefing 等），多源确认=true，confidence=0.70。事件真实性高，但属于产品上线公告，缺少关键执行数据（用户增长、交易量、资金流入）。
+
+价格数据验证失败（工具返回 price=null），无法评估市场实际反应。历史记忆显示0.6小时前已有相同事件记录（ID: 404
+- **改进建议**: 继续改进分析流程
+
+
+## 2025-12-02T04:37:28.864604+00:00: Solana 生态系统即将迎来大规模代币化事件，包括超过80项公告将在SolanaConf阿布扎比大会上发布，预示着Solana在RWA代币化领域的巨大发展潜力。
+- **初步分析**: confidence=0.70, action=observe
+- **深度分析调整**: confidence=0.55, reason="confidence 0.70 → 0.55"
+- **验证结果**: 工具验证已完成
+- **关键洞察**: 补充：通过搜索工具验证（6个来源，5个独特域名，置信度0.70），包括 Solana 官方网站和 Phemex、SolanaFloor 等多源报道，确认 Solana Breakpoint 2025 将于12月11-13日在阿布扎比举行，主题聚焦 DeFi 和代币化。历史记忆显示7.9小时前 Solana 与 Kalshi 合作代币化预测市场，59.9小时前官方强调500万亿美元代币化机遇，形成连
+- **改进建议**: 继续改进分析流程
+
+
+## 2025-12-02T06:10:36.932309+00:00: Solana 官方预告 SolanaConf Abu Dhabi（12月11-13日）将发布超80项公告，聚焦 DeFi 和代币化（tokenization）主题，显示生态系统在现实世界资产（RWA）
+- **初步分析**: confidence=0.65, action=observe
+- **深度分析调整**: confidence=0.45, reason="confidence 0.65 → 0.45"
+- **验证结果**: 工具验证已完成
+- **关键洞察**: 补充：通过搜索工具验证，找到6条来源（Phemex、KuCoin、Solana 官网、SolanaFloor、X 官方账号等），多源确认 Breakpoint 2025 确实将于12月11-13日在阿布扎比举办，官网已开放（solana.com/breakpoint），主题确为 DeFi、Tokenization、DePIN，但未披露具体80项公告的详细内容。搜索情绪显示 panic/neutra
+- **改进建议**: 继续改进分析流程
+
+
+## 2025-12-02T08:30:07.718114+00:00: 巨鲸在 HyperLiquid 平台上以 126.202 的价格对 SOL/USDC 进行了 20 倍杠杆的开空操作，仓位价值高达 126 万美元，是看跌信号。
+- **初步分析**: confidence=0.90, action=sell
+- **深度分析调整**: confidence=0.72, reason="confidence 0.90 → 0.72"
+- **验证结果**: 工具验证已完成
+- **关键洞察**: 补充：通过搜索工具验证 Hyperliquid 巨鲸监控体系存在（CoinGlass、CoinAnk 等多平台提供实时追踪），该地址操作可追溯，信号来源可信度较高（confidence=0.70）。市场情绪搜索显示 SOL 在 12 月初呈现分化态势，部分报道提及价格回落至 $127 区间且 ETF 资金流入与看跌情绪交织。
+
+关键矛盾：该地址历史标签为【多头战神】【波段之王】，过往以多头操作为主
+- **改进建议**: 继续改进分析流程
+
+
+## 2025-12-02T09:14:35.449435+00:00: x402 生态系统扩展，Solana 成为支付领域的主导网络，预示着链上支付和金融服务的进一步融合，对 SOL 价格构成积极影响。
+- **初步分析**: confidence=0.75, action=observe
+- **深度分析调整**: confidence=0.42, reason="confidence 0.75 → 0.42"
+- **验证结果**: 工具验证已完成
+- **关键洞察**: 补充：搜索工具验证发现 x402 为 Solana 官方支持的 AI Agent 支付协议，已有官方文档（solana.com/x402）、开发指南和黑客松项目，生态基础设施完整；历史记忆显示 11/30 曾报道 x402 黑客松获奖项目（涵盖 AI 模型交易、IoT 支付、电商集成等），证实生态确在扩展。但原文【第一大支付网络】为营销性表述，未提供链上支付量、活跃用户数、与 Visa/Maste
+- **改进建议**: 继续改进分析流程
+
+
+## 2025-12-11T08:53:12.289684+00:00: Coinbase 在其 App 端上线了基于 Solana 的 DEX 交易功能，允许用户直接交易 Solana 链上代币，并整合了多种支付方式，此举将进一步拓展 Solana 生态的用户触达和流动性
+- **初步分析**: confidence=0.75, action=observe
+- **深度分析调整**: confidence=0.72, reason="confidence 0.75 → 0.72"
+- **验证结果**: 工具验证已完成
+- **关键洞察**: **补充验证**
+搜索工具确认事件真实性：找到 6 条独立来源（包括 Coinbase 官方博客、Decrypt、CoinDesk、Yahoo Finance 等），多源确认=true，confidence=0.70。官方博客标题为【Coinbase unlocks millions of assets with DEX trading】，证实该功能已正式上线。
+
+**事件评估**
+1. 产品成熟
+- **改进建议**: 继续改进分析流程
+
+
+## 2025-12-11T10:38:13.158551+00:00: Solana现货ETF在市场疲软的情况下逆市获得近10亿美元净流入，显示机构对Solana生态的强劲需求，DAT公司将作为桥梁连接Solana与公开市场，进一步巩固其长期价值。
+- **初步分析**: confidence=0.85, action=buy
+- **深度分析调整**: confidence=0.78, reason="confidence 0.85 → 0.78"
+- **验证结果**: 工具验证已完成
+- **关键洞察**: 补充：通过搜索工具验证，找到 6 条来源（5 个独特域名），多源确认=true，confidence=0.70，搜索结果显示 SOL ETF 在 12 月初确实保持资金净流入趋势，与消息一致。价格工具获取失败（返回 null），无法量化当前价格表现，标记 data_incomplete。
+
+核心要点：
+1. 资金流向验证：6 周内 ETF 净流入近 10 亿美元，即使在市场整体疲软情况下仍连续 3
+- **改进建议**: 继续改进分析流程
+
+
+## 2025-12-11T11:23:13.511302+00:00: Solana 网络宣布明年初区块计算上限将翻倍至 1 亿计算单元，显示其在速度竞争中取得优势，有望吸引更多开发者和应用，进一步巩固其高性能公链地位。
+- **初步分析**: confidence=0.72, action=observe
+- **深度分析调整**: confidence=0.62, reason="confidence 0.72 → 0.62"
+- **验证结果**: 工具验证已完成
+- **关键洞察**: **补充**
+多源搜索验证（6 个来源，4 个独特域名，包括 solana.com 官方域名），确认 Solana Breakpoint 2024 大会真实举办且有多方报道性能突破内容，官方确认 confidence=0.80。Jito 联创 buffalu 在大会上披露的技术路线图显示，Solana 计算上限从年初 4800 万 → 当前 6000 万 → 明年初 1 亿计算单元，TPS 增长 
+- **改进建议**: 继续改进分析流程
+
+
+## 2025-12-11T12:08:13.896201+00:00: Solana网络上SOL的交易量已是Binance的三倍，竞争激烈，显示其市场活跃度和发展潜力，但需关注宏观和技术面的进一步确认。
+- **初步分析**: confidence=0.65, action=observe
+- **深度分析调整**: confidence=0.58, reason="confidence 0.65 → 0.58"
+- **验证结果**: 工具验证已完成
+- **关键洞察**: 【补充】多源搜索验证（confidence=0.70）：找到 6 条独立来源确认 Solana 在 2025 年 5 月主网实现 10 万 TPS 里程碑（ForkLog、CoinCodex、CryptoSlate 等权威媒体报道），Breakpoint 大会为官方年度技术会议；历史记忆 ID 47352 显示 Jito 联创刚于 0.7 小时前宣布明年初计算上限将升至 1 亿单元（+67%），两
+- **改进建议**: 继续改进分析流程
+
+
+## 2025-12-12T08:01:34.060264+00:00: Solana生态内的Dflow宣布已集成75+应用，累计交易额达330亿美元，新预测市场API由Kalshi驱动，显示Solana生态的活跃度和开发者吸引力。
+- **初步分析**: confidence=0.65, action=observe
+- **深度分析调整**: confidence=0.50, reason="confidence 0.65 → 0.50"
+- **验证结果**: 工具验证已完成
+- **关键洞察**: 补充：搜索工具验证发现 6 条独立来源（包括 Solana 官网、Blockhead、Blockchain.news 等），多源确认=true，confidence=0.70，证实 dFlow-Kalshi 集成真实性；历史记忆显示 11 小时前（ID 47697）Solana 资产达 20 亿美元，14 小时前（ID 47516）JP Morgan 在 Solana 完成债务交易，印证机构采用趋
+- **改进建议**: 继续改进分析流程
+
+
+## 2025-12-12T08:07:40.120527+00:00: Solana联合创始人Raj Gokal表示，近期营收破亿的初创公司多数基于Solana构建，显示其生态扩张加速，并强调了Solana在吸引开发者和探索区块空间价值方面的潜力。
+- **初步分析**: confidence=0.70, action=observe
+- **深度分析调整**: confidence=0.58, reason="confidence 0.70 → 0.58"
+- **验证结果**: 工具验证已完成
+- **关键洞察**: 补充: 搜索工具验证到 6 条来源（4 个独立域名，包括 solanacompass.com、inc42.com、solana.com 官方站点），多源确认=true，confidence=0.70；验证 Breakpoint 2024 会议真实性及 Raj Gokal 相关发言存在，但未检索到【营收破亿的 20 家公司中多数构建于 Solana】这一具体数据的独立验证源，仅能确认 Raj 在会议
+- **改进建议**: 继续改进分析流程
+
+
+## 2025-12-12T08:17:55.215314+00:00: Solana 生态中的 Ranger Finance 宣布将在 MetaDAO Project 上完成一笔不低于 600 万美元的融资，这是该平台迄今为止最大的融资额，预示着 Solana 生态项目融
+- **初步分析**: confidence=0.65, action=observe
+- **深度分析调整**: confidence=0.38, reason="confidence 0.65 → 0.38"
+- **验证结果**: 工具验证已完成
+- **关键洞察**: 补充：通过搜索工具验证，发现 6 个来源但均为项目介绍或历史融资（Ranger Labs 2024年完成 190 万美元种子轮），未找到本次 600 万美元融资的独立报道或官方公告（confidence=0.70, triggered=true）。MetaDAO 平台定位为 Solana 上的 futarchy 治理与预测市场项目（已获 Paradigm 投资），而非专门融资平台；原文提及的【ow
+- **改进建议**: 继续改进分析流程
+
+
+## 2025-12-12T08:22:28.518661+00:00: “内幕哥”地址在 Hyperliquid 上大幅加仓 SOL 多头头寸，显示强烈的看涨信号，其历史交易记录也高度吻合其“聪明钱”标签。
+- **初步分析**: confidence=0.95, action=buy
+- **深度分析调整**: confidence=0.88, reason="confidence 0.95 → 0.88"
+- **验证结果**: 工具验证已完成
+- **关键洞察**: 补充：通过搜索工具验证 SOL 市场环境，发现多家媒体（CoinGape、AMBCrypto、Live Bitcoin News）报道巨鲸持续积累 SOL 并看涨至 200 美元目标，市场情绪 100% 乐观（sentiment: optimistic=1.0），多源确认=true，confidence=0.70。价格工具因 CoinMarketCap API 限制返回空数据，但消息本身显示 SO
+- **改进建议**: 继续改进分析流程
+
+
+## 2025-12-12T08:25:12.182656+00:00: Hyperliquid 上的“Trump Family Insider Whale”（内幕哥）在 138.60 美元价位显著增持 SOL 多头头寸，显示出对 SOL 的强烈看涨信心，20倍杠杆的重仓操
+- **初步分析**: confidence=0.95, action=buy
+- **深度分析调整**: confidence=0.87, reason="confidence 0.95 → 0.87"
+- **验证结果**: 工具验证已完成
+- **关键洞察**: **核心信号**：来自 Hyperliquid 平台监测的【Trump Family Insider Whale】（地址 0xb317d2bc2d3d2df5fa441b5bae0ab9d8b07283ae）在 138.60 美元加仓 SOL 多头，20倍杠杆，总仓位达 232.8K SOL（3226万美元），开仓价 137.4527 美元，当前浮盈 +26.47 万美元，资金费率支出 2.6 万
+- **改进建议**: 继续改进分析流程
+
+
+## 2025-12-12T08:25:55.336659+00:00: Hyperliquid 上的“Trump Family Insider Whale”地址（0xb317d2bc2d3d2df5fa441b5bae0ab9d8b07283ae）在 SOL 上以 137
+- **初步分析**: confidence=0.95, action=buy
+- **深度分析调整**: confidence=0.87, reason="confidence 0.95 → 0.87"
+- **验证结果**: 工具验证已完成
+- **关键洞察**: 【补充证据】
+1. 巨鲸身份确认：地址 0xb317d2bc2d3d2df5fa441b5bae0ab9d8b07283ae 标记为【Trump Family Insider Whale】/【内幕哥】，属于 Hyperliquid 平台知名度最高的聪明钱地址之一，历史记录显示其操作胜率 100%，是顶级跟单信号来源。
+
+2. 交易细节：
+   - 开仓均价：137.48 美元
+   - 当前价格：
+- **改进建议**: 继续改进分析流程
+
+
+## 2025-12-12T08:26:44.526209+00:00: Hyperliquid“内幕哥”地址（0xb317d2bc2d3d2df5fa441b5bae0ab9d8b07283ae）在 SOL 上大幅开仓 20 倍杠杆的多头头寸，显示其对 SOL 的强烈看涨
+- **初步分析**: confidence=0.95, action=buy
+- **深度分析调整**: confidence=0.82, reason="confidence 0.95 → 0.82"
+- **验证结果**: 工具验证已完成
+- **关键洞察**: 补充：(1) 价格工具获取失败，无法确认 SOL 实时涨跌幅与宏观市场环境，标记 data_incomplete；(2) 搜索工具返回 6 条来源，但均为价格预测类内容，未获取到当日市场事件或宏观背景；(3) 历史记忆显示 0.1 小时前（ID: 12365, 12366）有两条高度相似信号（similarity 0.997-0.998），说明该地址短时间内多次加仓同一方向，强化看涨判断。
+
+风险
+- **改进建议**: 继续改进分析流程
+
+
+## 2025-12-12T08:44:07.765438+00:00: Solana Firedancer 升级已在主网上线并稳定运行100天，成功处理5万个区块，标志着其技术成熟度大幅提升，有望增强网络性能和可扩展性。
+- **初步分析**: confidence=0.70, action=observe
+- **深度分析调整**: confidence=0.55, reason="confidence 0.70 → 0.55"
+- **验证结果**: 工具验证已完成
+- **关键洞察**: 补充：通过搜索工具验证 Firedancer 为 Jump Crypto 开发的高性能验证器客户端，多源确认项目真实性（GitHub 官方仓库、Blockdaemon/Helius 技术分析、Solana Compass 项目追踪），confidence=0.70。Firedancer 旨在通过 C 语言重写优化 TPS、降低延迟、提升网络稳定性，属于 Solana 基础设施重大升级。
+
+风险：价
+- **改进建议**: 继续改进分析流程
+
+
+## 2025-12-12T08:52:40.492620+00:00: Solana 生态 DEX Bulk 联合创始人表示 Solana 是当前最适合构建的生态，原因在于其优秀的团队、高净资产流入、多元社区及丰富产品，但该链一直缺乏专业的交易体验；Solana 基金会主
+- **初步分析**: confidence=0.65, action=observe
+- **深度分析调整**: confidence=0.42, reason="confidence 0.65 → 0.42"
+- **验证结果**: 工具验证已完成
+- **关键洞察**: **补充**: 搜索工具验证发现 Bulk 是 Solana 生态永续合约 DEX，已于近期完成 800 万美元种子轮融资（多源确认：Bitget、PANews、Phemex、VentureBurn 等 5 家媒体报道），投资方包括 Hypersphere、Coinbase Ventures、Wintermute Ventures 等知名机构。联创 Jun 在 Breakpoint 2024 大会
+- **改进建议**: 继续改进分析流程
+
+
+## 2025-12-12T10:07:41.624679+00:00: Kamino将推出固定利率和期限的借贷产品，旨在实现链上真正的利率价格发现，并吸引机构资金。此举将提升Solana生态的金融产品成熟度。
+- **初步分析**: confidence=0.70, action=observe
+- **深度分析调整**: confidence=0.45, reason="confidence 0.70 → 0.45"
+- **验证结果**: 工具验证已完成
+- **关键洞察**: 补充：通过搜索工具验证了 Kamino 作为 Solana 主流 DeFi 协议的地位（6 个来源，包括 app.kamino.finance 官网、Backpack Exchange DeFi 指南、Crypto Economy 深度评测），多篇报道提到 Solana 借贷市场进入新时代，验证事件背景真实性（confidence=0.70）。但搜索未发现此次 Breakpoint 大会具体公告的
+- **改进建议**: 继续改进分析流程
+
+
+## 2025-12-12T10:45:35.590397+00:00: Figure已第二次向SEC提交IPO申请，意图成为首个在Solana链上直接发行股票的公司，此举将加密货币基础设施与传统证券市场深度融合，可能预示着股票代币化的新时代。
+- **初步分析**: confidence=0.70, action=observe
+- **深度分析调整**: confidence=0.65, reason="confidence 0.70 → 0.65"
+- **验证结果**: 工具验证已完成
+- **关键洞察**: 补充：通过搜索工具验证（6个来源，5个独特域名，多源确认=true，官方确认=true，confidence=0.80），在SEC官方档案中发现Figure Technology Solutions, Inc.的IPO申请文件（sec.gov存档），确认事件真实性。但主流新闻报道（CoinDesk、Yahoo Finance）主要聚焦Superstate于2025年12月10日推出的类似产品（支持
+- **改进建
+
+[truncated]

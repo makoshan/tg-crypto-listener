@@ -23,10 +23,12 @@ from .forwarder import MessageForwarder
 from .email_sender import EmailSender
 from .bot_sender import BotSender
 from .utils import (
+    MessageIdDeduplicator,
     MessageDeduplicator,
     SignalMessageDeduplicator,
     analyze_event_intensity,
     contains_keywords,
+    contains_block_keywords,
     format_forwarded_message,
     compute_canonical_hash,
     compute_sha256,
@@ -57,6 +59,8 @@ class TelegramListener:
         self.config = Config()
         self.client: TelegramClient | None = None
         self.forwarder: MessageForwarder | None = None
+        # Immediate deduplication by message ID (prevents same message processed multiple times in 1 second)
+        self.message_id_deduplicator = MessageIdDeduplicator(window_minutes=60)
         self.deduplicator = MessageDeduplicator(self.config.DEDUP_WINDOW_HOURS)
         self.signal_deduplicator: SignalMessageDeduplicator | None = None
         self.translator: Translator | None = None
@@ -71,7 +75,8 @@ class TelegramListener:
             "dup_memory": 0,
             "dup_hash": 0,
             "dup_semantic": 0,
-             "dup_signal": 0,
+            "dup_signal": 0,
+            "dup_message_id": 0,  # Immediate deduplication by message ID
             "forwarded": 0,
             "errors": 0,
             "ai_processed": 0,
@@ -323,6 +328,21 @@ class TelegramListener:
             await self._cleanup()
 
     async def _handle_new_message(self, event) -> None:
+        # Immediate message ID deduplication (prevents same message processed multiple times in 1 second)
+        # This check happens before both LangGraph pipeline and legacy flow
+        try:
+            source_chat = await event.get_chat()
+            source_message_id = str(getattr(event.message, "id", ""))
+            channel_id = str(getattr(source_chat, "id", "")) or getattr(source_chat, "username", None) or "unknown"
+            
+            if source_message_id and self.message_id_deduplicator.is_duplicate(channel_id, source_message_id):
+                self.stats["duplicates"] += 1
+                self.stats["dup_message_id"] += 1
+                logger.debug("🔄 消息ID重复，已跳过 (channel=%s, msg_id=%s)", channel_id, source_message_id)
+                return
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.debug("消息ID去重检查失败，继续处理: %s", exc)
+        
         if self.pipeline_enabled and self.pipeline:
             try:
                 result = await self.pipeline.run(event)
@@ -369,6 +389,10 @@ class TelegramListener:
             source_message_id = str(getattr(event.message, "id", ""))
             published_at = getattr(event.message, "date", None) or datetime.now(timezone.utc)
             channel_username = getattr(source_chat, "username", None)
+            
+            # Get channel ID for message ID deduplication
+            channel_id = str(getattr(source_chat, "id", "")) or channel_username or source_name
+            
             source_url = (
                 f"https://t.me/{channel_username}/{source_message_id}"
                 if channel_username and source_message_id
@@ -376,6 +400,19 @@ class TelegramListener:
             )
 
             logger.debug("📨 收到消息来自 %s (长度: %d): %.300s...", source_name, len(message_text), message_text)
+
+            # Immediate deduplication by message ID (prevents same message processed multiple times in 1 second)
+            if source_message_id and self.message_id_deduplicator.is_duplicate(channel_id, source_message_id):
+                self.stats["duplicates"] += 1
+                self.stats["dup_message_id"] += 1
+                logger.debug("🔄 消息ID重复，已跳过 (channel=%s, msg_id=%s)", channel_id, source_message_id)
+                return
+
+            # Check blacklist keywords (filter out messages containing blocked keywords)
+            if contains_block_keywords(message_text, self.config.BLOCK_KEYWORDS):
+                self.stats["filtered_out"] += 1
+                logger.debug("🚫 消息包含黑名单关键词，已过滤")
+                return
 
             # Check if source is KOL whitelist (priority processing, skip keyword filter)
             is_priority_kol = self._is_priority_kol(source_name, channel_username)
@@ -681,9 +718,18 @@ class TelegramListener:
                             price_snapshot = price_result.data
                             metrics = price_snapshot.get("metrics", {})
                             price_usd = metrics.get("price_usd")
-                            logger.info("💰 价格获取成功: asset=%s price=$%s",
-                                       signal_result.asset,
-                                       price_usd)
+
+                            # Price consistency validation
+                            if price_usd is not None and self._validate_price_consistency(
+                                signal_result.asset, price_usd, text
+                            ):
+                                logger.info("💰 价格获取成功: asset=%s price=$%s",
+                                           signal_result.asset,
+                                           price_usd)
+                            else:
+                                logger.warning("⚠️ 价格一致性验证失败，清除价格数据: asset=%s price=$%s",
+                                             signal_result.asset, price_usd)
+                                price_snapshot = None
                         else:
                             logger.warning("💰 价格获取返回失败: asset=%s error=%s",
                                          signal_result.asset, price_result.error if price_result else "unknown")
@@ -1197,13 +1243,15 @@ class TelegramListener:
                 time_window_hours = self.config.EMBEDDING_TIME_WINDOW_HOURS
                 if intensity["has_high_impact"]:
                     threshold = max(threshold, 0.95)
-                    time_window_hours = min(time_window_hours, 3)
+                    time_window_hours = min(time_window_hours, 3) if time_window_hours is not None else 3
                     logger.info(
                         "⚠️ 高影响事件启用宽松语义去重: threshold=%.2f window=%sh",
                         threshold,
                         time_window_hours,
                     )
                 threshold = max(0.0, min(1.0, threshold))
+                if time_window_hours is None:
+                    time_window_hours = 72  # 默认值
                 time_window_hours = max(1, int(time_window_hours))
                 similar = await self.news_repository.check_duplicate_by_embedding(
                     embedding=embedding_vector,
@@ -1250,6 +1298,12 @@ class TelegramListener:
                 return
 
             if not signal_result or signal_result.status != "success" or not self.signal_repository:
+                logger.debug(
+                    "🗄️ 跳过 AI signal 持久化: signal_result=%s status=%s has_repo=%s",
+                    signal_result is not None,
+                    signal_result.status if signal_result else "N/A",
+                    self.signal_repository is not None,
+                )
                 return
 
             model_name = self.config.AI_MODEL_NAME or "unknown"
@@ -1380,6 +1434,86 @@ class TelegramListener:
                     break
         return hits
 
+    def _validate_price_consistency(self, asset: str, price_usd: float, message_text: str) -> bool:
+        """
+        Validate price consistency between AI-identified asset and fetched price.
+
+        This helps catch cases where AI misidentifies a low-cap token as a major asset.
+        For example: "币安人生" (0.22 USDT) being identified as "BNB" ($1089).
+
+        Args:
+            asset: Asset symbol (e.g., "BNB")
+            price_usd: Fetched price in USD
+            message_text: Original message text
+
+        Returns:
+            True if price appears consistent, False otherwise
+        """
+        import re
+
+        # Known major assets and their expected price ranges (min, max)
+        # This helps detect obvious mismatches
+        MAJOR_ASSET_PRICE_RANGES = {
+            "BTC": (10000, 200000),      # Bitcoin
+            "ETH": (1000, 10000),        # Ethereum
+            "BNB": (200, 2000),          # Binance Coin
+            "SOL": (10, 500),            # Solana
+            "ADA": (0.2, 5),             # Cardano
+            "AVAX": (10, 200),           # Avalanche
+            "DOT": (5, 100),             # Polkadot
+            "MATIC": (0.5, 10),          # Polygon
+            "LINK": (5, 100),            # Chainlink
+            "UNI": (5, 50),              # Uniswap
+            "ATOM": (5, 100),            # Cosmos
+            "XRP": (0.3, 5),             # Ripple
+            "DOGE": (0.05, 1),           # Dogecoin
+            "SHIB": (0.000005, 0.0001),  # Shiba Inu
+        }
+
+        # Check if asset is a known major asset
+        if asset in MAJOR_ASSET_PRICE_RANGES:
+            min_price, max_price = MAJOR_ASSET_PRICE_RANGES[asset]
+            if not (min_price <= price_usd <= max_price):
+                logger.warning(
+                    "❌ 价格范围异常: asset=%s price=$%s 预期范围 $%s-$%s",
+                    asset, price_usd, min_price, max_price
+                )
+                return False
+
+        # Check for price mentions in message text that drastically differ
+        # Look for patterns like "0.22 USDT", "$0.22", "价格 0.22"
+        price_patterns = [
+            r'(\d+\.?\d*)\s*(?:USDT|USD|美元|刀)',
+            r'\$\s*(\d+\.?\d*)',
+            r'价格.*?(\d+\.?\d*)',
+            r'突破.*?(\d+\.?\d*)',
+        ]
+
+        mentioned_prices = []
+        for pattern in price_patterns:
+            matches = re.findall(pattern, message_text, re.IGNORECASE)
+            for match in matches:
+                try:
+                    mentioned_price = float(match)
+                    mentioned_prices.append(mentioned_price)
+                except ValueError:
+                    continue
+
+        if mentioned_prices:
+            # Check if any mentioned price drastically differs from fetched price
+            # Allow 50x difference as threshold (to account for volatility and different contexts)
+            for mentioned_price in mentioned_prices:
+                if mentioned_price > 0:
+                    ratio = max(price_usd, mentioned_price) / min(price_usd, mentioned_price)
+                    if ratio > 50:
+                        logger.warning(
+                            "❌ 消息中的价格与获取的价格差异过大: asset=%s 获取价格=$%s 消息价格=$%s 差异=%.1fx",
+                            asset, price_usd, mentioned_price, ratio
+                        )
+                        return False
+
+        return True
+
     async def _extract_media(self, message) -> list[dict[str, Any]]:
         """Download image-like media as base64 for AI prompt consumption."""
         media_payload: list[dict[str, Any]] = []
@@ -1457,7 +1591,7 @@ class TelegramListener:
                 "   • 总接收: %s\n"
                 "   • 已转发: %s\n"
                 "   • 关键词过滤: %s\n"
-                "   • 重复消息: %s (内存: %s / 哈希: %s / 语义: %s / 信号: %s)\n"
+                "   • 重复消息: %s (消息ID: %s / 内存: %s / 哈希: %s / 语义: %s / 信号: %s)\n"
                 "   • 错误次数: %s\n"
                 "   • 翻译成功: %s\n"
                 "   • 翻译错误: %s\n"
@@ -1470,6 +1604,7 @@ class TelegramListener:
                 self.stats["forwarded"],
                 self.stats["filtered_out"],
                 self.stats["duplicates"],
+                self.stats["dup_message_id"],
                 self.stats["dup_memory"],
                 self.stats["dup_hash"],
                 self.stats["dup_semantic"],

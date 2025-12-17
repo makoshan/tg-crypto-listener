@@ -121,6 +121,15 @@ def _load_keywords_from_env() -> Set[str]:
     }
 
 
+def _load_block_keywords_from_env() -> Set[str]:
+    """Load block keywords from environment variable."""
+    return {
+        _normalize_keyword(keyword)
+        for keyword in os.getenv("BLOCK_KEYWORDS", "").split(",")
+        if keyword.strip()
+    }
+
+
 def _resolve_keywords_file(path: str) -> Path:
     candidate = Path(path).expanduser()
     if not candidate.is_absolute():
@@ -180,6 +189,11 @@ class Config:
         if (_FILE_FILTER_KEYWORDS or _ENV_FILTER_KEYWORDS)
         else set()
     )
+
+    # Block keywords (blacklist) - messages containing these will be filtered out
+    # Load from BLOCK_KEYWORDS environment variable (comma-separated)
+    # Default values can be set in .env file
+    BLOCK_KEYWORDS: Set[str] = _load_block_keywords_from_env()
 
     DEDUP_WINDOW_HOURS: int = int(os.getenv("DEDUP_WINDOW_HOURS", "24"))
     SIGNAL_DEDUP_ENABLED: bool = _as_bool(os.getenv("SIGNAL_DEDUP_ENABLED", "true"))
@@ -359,6 +373,15 @@ class Config:
     DEEPSEEK_DEEP_MODEL: str = os.getenv("DEEPSEEK_DEEP_MODEL", "deepseek-chat")
     DEEPSEEK_DEEP_TIMEOUT_SECONDS: float = float(os.getenv("DEEPSEEK_DEEP_TIMEOUT_SECONDS", "30"))
     DEEPSEEK_DEEP_MAX_FUNCTION_TURNS: int = int(os.getenv("DEEPSEEK_DEEP_MAX_FUNCTION_TURNS", "6"))
+
+    # ==============================================
+    # Kimi Deep Analysis Configuration
+    # ==============================================
+    MOONSHOT_API_KEY: str = os.getenv("MOONSHOT_API_KEY", "")
+    MOONSHOT_BASE_URL: str = os.getenv("MOONSHOT_BASE_URL", "https://api.moonshot.cn/v1")
+    KIMI_DEEP_MODEL: str = os.getenv("KIMI_DEEP_MODEL", "kimi-k2-turbo-preview")
+    KIMI_DEEP_TIMEOUT_SECONDS: float = float(os.getenv("KIMI_DEEP_TIMEOUT_SECONDS", "30"))
+    KIMI_DEEP_MAX_FUNCTION_TURNS: int = int(os.getenv("KIMI_DEEP_MAX_FUNCTION_TURNS", "6"))
 
     # Context Editing configuration (Claude Memory Tool)
     MEMORY_CONTEXT_TRIGGER_TOKENS: int = int(os.getenv("MEMORY_CONTEXT_TRIGGER_TOKENS", "6000"))
@@ -596,6 +619,7 @@ class Config:
             "qwen",
             "openai",
             "deepseek",
+            "kimi",
         }
         if provider not in allowed_providers:
             if provider:
@@ -685,6 +709,13 @@ class Config:
                 "model": cls.DEEPSEEK_DEEP_MODEL,
                 "timeout": cls.DEEPSEEK_DEEP_TIMEOUT_SECONDS,
                 "max_function_turns": cls.DEEPSEEK_DEEP_MAX_FUNCTION_TURNS,
+            },
+            "kimi": {
+                "api_key": cls.MOONSHOT_API_KEY,
+                "base_url": cls.MOONSHOT_BASE_URL,
+                "model": cls.KIMI_DEEP_MODEL,
+                "timeout": cls.KIMI_DEEP_TIMEOUT_SECONDS,
+                "max_function_turns": cls.KIMI_DEEP_MAX_FUNCTION_TURNS,
             },
         }
         return config

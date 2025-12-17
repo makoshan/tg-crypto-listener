@@ -255,7 +255,28 @@ class OpenAICompatibleEngine(DeepAnalysisEngine):
                     request_kwargs["tools"] = tools
 
                 # 调用 API
-                response = await self.client.chat.completions.create(**request_kwargs)
+                logger.debug(f"🔄 调用 {self.provider.upper()} API: model={self.model}, messages={len(messages)}, tools={'有' if tools else '无'}")
+
+                try:
+                    response = await self.client.chat.completions.create(**request_kwargs)
+                except Exception as api_exc:
+                    logger.error(f"❌ {self.provider.upper()} API 调用异常: {type(api_exc).__name__}: {api_exc}")
+                    raise
+
+                logger.debug(f"✅ {self.provider.upper()} API 响应: response={type(response).__name__}, choices={len(response.choices) if response and hasattr(response, 'choices') else 'N/A'}")
+
+                # 验证响应
+                if not response:
+                    logger.error(f"❌ {self.provider.upper()} 返回 None 响应")
+                    raise DeepAnalysisError(f"{self.provider.upper()} 返回 None 响应")
+
+                if not hasattr(response, 'choices'):
+                    logger.error(f"❌ {self.provider.upper()} 响应对象缺少 'choices' 属性: {dir(response)}")
+                    raise DeepAnalysisError(f"{self.provider.upper()} 响应格式无效")
+
+                if not response.choices:
+                    logger.error(f"❌ {self.provider.upper()} 返回空 choices 列表")
+                    raise DeepAnalysisError(f"{self.provider.upper()} 返回空 choices")
 
                 message = response.choices[0].message
 
@@ -306,16 +327,46 @@ class OpenAICompatibleEngine(DeepAnalysisEngine):
                     planning_complete = True
                     final_content = message.content or ""
 
-                    logger.debug(f"✅ {self.provider.upper()} 深度分析完成，总回合数: {turn}")
+                    logger.debug(
+                        f"✅ {self.provider.upper()} 深度分析完成，总回合数: {turn}, "
+                        f"响应长度: {len(final_content)}, 预览: {final_content[:100]}"
+                    )
+
+                    # 验证响应包含 JSON 格式
+                    if not (final_content.strip().startswith("{") or "{" in final_content):
+                        logger.warning(
+                            f"⚠️ {self.provider.upper()} 返回内容可能不包含 JSON，"
+                            f"内容预览: {final_content[:200]}"
+                        )
+
+                    # 记录完整响应用于调试 JSON 解析问题
+                    if len(final_content) < 2000:
+                        logger.debug(
+                            f"📄 {self.provider.upper()} 完整响应:\n{final_content}"
+                        )
+                    else:
+                        logger.debug(
+                            f"📄 {self.provider.upper()} 响应过长 ({len(final_content)} 字符)，"
+                            f"仅记录前1500和后500字符:\n"
+                            f"===== 开头 =====\n{final_content[:1500]}\n"
+                            f"===== 结尾 =====\n{final_content[-500:]}"
+                        )
 
                     # 解析 JSON 信号
                     return self._parse_json(final_content)
 
             except Exception as exc:
-                logger.error(f"❌ {self.provider.upper()} API 调用失败 (回合 {turn}): {exc}")
+                import traceback
+                error_details = traceback.format_exc()
+                logger.error(
+                    f"❌ {self.provider.upper()} API 调用失败 (回合 {turn}): {exc}\n"
+                    f"错误类型: {type(exc).__name__}\n"
+                    f"完整堆栈:\n{error_details}"
+                )
                 if turn >= self.max_function_turns:
                     raise DeepAnalysisError(f"{self.provider.upper()} 深度分析失败: {exc}") from exc
                 # 继续下一回合
+                await asyncio.sleep(1)  # 避免立即重试
 
         # 超过最大回合数
         raise DeepAnalysisError(

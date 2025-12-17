@@ -28,16 +28,82 @@ class SupabaseClient:
             raise SupabaseError("Supabase service key is required")
 
     async def insert(self, table: str, payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        response = await self._request(
-            "POST",
+        import logging
+        import json
+        logger = logging.getLogger(__name__)
+
+        # Log the full payload for debugging (truncated)
+        payload_preview = {k: (str(v)[:100] if isinstance(v, str) else v) for k, v in payload.items()}
+        logger.debug(
+            "🔍 Supabase insert 请求 - table=%s, payload_keys=%s, payload_preview=%s",
             table,
-            json=[payload],
-            headers={"Prefer": "return=representation"},
+            list(payload.keys()),
+            json.dumps(payload_preview, ensure_ascii=False, default=str)[:500],
         )
+
+        try:
+            response = await self._request(
+                "POST",
+                table,
+                json=[payload],
+                headers={"Prefer": "return=representation"},
+            )
+        except SupabaseError as exc:
+            logger.error(
+                "❌ Supabase insert 请求失败 - table=%s, error=%s, payload_keys=%s",
+                table,
+                str(exc),
+                list(payload.keys()),
+            )
+            raise
+
+        # Log the full response for debugging
+        logger.debug(
+            "🔍 Supabase insert 响应 - table=%s, response_type=%s, response_length=%s",
+            table,
+            type(response).__name__,
+            len(response) if isinstance(response, (list, dict)) else 0,
+        )
+
         if isinstance(response, list) and response:
-            return response[0]
+            record = response[0]
+            # 检查返回的 record 是否包含有效的 id
+            if isinstance(record, dict):
+                record_id = record.get("id")
+                if record_id is None:
+                    logger.error(
+                        "❌ Supabase insert 返回 id=None (list[0]) - table=%s, record_keys=%s, payload_keys=%s, record_values=%s",
+                        table,
+                        list(record.keys()) if record else None,
+                        list(payload.keys()),
+                        json.dumps({k: (str(v)[:100] if isinstance(v, str) else v) for k, v in record.items()}, ensure_ascii=False, default=str)[:1000],
+                    )
+                else:
+                    logger.debug("✅ Supabase insert 成功 - table=%s, id=%s", table, record_id)
+                return record
+            return record
         if isinstance(response, dict):
+            record_id = response.get("id")
+            if record_id is None:
+                logger.error(
+                    "❌ Supabase insert 返回 id=None (dict) - table=%s, record_keys=%s, payload_keys=%s, record_values=%s",
+                    table,
+                    list(response.keys()) if response else None,
+                    list(payload.keys()),
+                    json.dumps({k: (str(v)[:100] if isinstance(v, str) else v) for k, v in response.items()}, ensure_ascii=False, default=str)[:1000],
+                )
+            else:
+                logger.debug("✅ Supabase insert 成功 - table=%s, id=%s", table, record_id)
             return response
+
+        # Log unexpected response format
+        logger.error(
+            "❌ Supabase insert 返回意外格式 - table=%s, response_type=%s, response=%s, payload_keys=%s",
+            table,
+            type(response).__name__,
+            str(response)[:500] if response else None,
+            list(payload.keys()),
+        )
         return None
 
     async def upsert(self, table: str, payload: Dict[str, Any], *, on_conflict: str) -> Optional[Dict[str, Any]]:
@@ -90,6 +156,9 @@ class SupabaseClient:
         headers: Optional[Dict[str, str]] = None,
         **kwargs: Any,
     ) -> Any:
+        import logging
+        logger = logging.getLogger(__name__)
+        
         url = f"{self.rest_url}/{path.lstrip('/')}"
         request_headers = {
             "apikey": self.service_key,
@@ -108,12 +177,33 @@ class SupabaseClient:
                 raise SupabaseError(f"Supabase request failed: {exc}") from exc
 
         if response.status_code >= 400:
+            error_text = response.text.strip()
+            logger.error(
+                "❌ Supabase HTTP 错误 - method=%s, path=%s, status=%d, error=%s",
+                method,
+                path,
+                response.status_code,
+                error_text[:500] if error_text else "空响应",
+            )
             raise SupabaseError(
-                f"Supabase error {response.status_code}: {response.text.strip()}"
+                f"Supabase error {response.status_code}: {error_text}"
             )
 
         if response.headers.get("Content-Type", "").startswith("application/json"):
-            return response.json()
+            json_response = response.json()
+            # 检查响应中是否包含错误信息（某些情况下 Supabase 可能在 200 响应中返回错误）
+            if isinstance(json_response, dict):
+                # 检查常见的错误字段
+                if "error" in json_response or "message" in json_response:
+                    error_msg = json_response.get("error") or json_response.get("message", "")
+                    if error_msg:
+                        logger.warning(
+                            "⚠️ Supabase 响应包含错误信息 - method=%s, path=%s, error=%s",
+                            method,
+                            path,
+                            str(error_msg)[:200],
+                        )
+            return json_response
         return None
 
 

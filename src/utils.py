@@ -134,6 +134,52 @@ def setup_logger(name: str, level: str = None) -> logging.Logger:
     return logger
 
 
+class MessageIdDeduplicator:
+    """Immediate deduplication by message ID + channel ID (prevents same message processed multiple times)."""
+
+    def __init__(self, window_minutes: int = 60):
+        """Initialize with a time window (default 60 minutes).
+        
+        Args:
+            window_minutes: Time window in minutes for cleanup (default 60).
+                          Messages older than this will be removed from memory.
+        """
+        self.seen_message_ids: Dict[Tuple[str, str], datetime] = {}
+        self.window = timedelta(minutes=max(window_minutes, 1))
+
+    def is_duplicate(self, channel_id: str, message_id: str) -> bool:
+        """Return True if this message ID from this channel was seen recently.
+        
+        Args:
+            channel_id: Channel identifier (username or ID string)
+            message_id: Message ID string
+            
+        Returns:
+            True if duplicate, False otherwise
+        """
+        self._cleanup_expired()
+        
+        key = (str(channel_id), str(message_id))
+        now = datetime.now()
+        
+        if key in self.seen_message_ids:
+            return True
+        
+        # Record immediately to prevent race conditions
+        self.seen_message_ids[key] = now
+        return False
+
+    def _cleanup_expired(self) -> None:
+        """Remove expired entries from memory."""
+        cutoff = datetime.now() - self.window
+        expired = [
+            key for key, timestamp in self.seen_message_ids.items() 
+            if timestamp < cutoff
+        ]
+        for key in expired:
+            del self.seen_message_ids[key]
+
+
 class MessageDeduplicator:
     """Deduplicate messages by hash within a time window."""
 
@@ -169,7 +215,8 @@ class SignalDedupEntry:
 
     normalized_summary: str
     char_set: Set[str]
-    metadata: Tuple[str, str, str, str, str]
+    # Relaxed metadata key: (action, event_type, asset)
+    metadata: Tuple[str, str, str]
     timestamp: datetime
 
 
@@ -215,12 +262,31 @@ class SignalMessageDeduplicator:
         self._cleanup(now)
 
         for entry in self.entries:
-            if entry.metadata != metadata:
+            if not self._metadata_matches(entry.metadata, metadata):
                 continue
 
             ratio = SequenceMatcher(None, normalized_summary, entry.normalized_summary).ratio()
             if ratio < self.similarity_threshold:
-                continue
+                # Fallback: allow near-miss when salient prefix overlaps strongly
+                # Compute common prefix length after normalization
+                def _common_prefix_len(a: str, b: str) -> int:
+                    i = 0
+                    max_len = min(len(a), len(b))
+                    while i < max_len and a[i] == b[i]:
+                        i += 1
+                    return i
+
+                prefix_len = _common_prefix_len(normalized_summary, entry.normalized_summary)
+                # Accept when ratio is close and prefix overlap is significant
+                # e.g., both start with the same event description but differ in later details
+                close_enough = ratio >= max(0.5, self.similarity_threshold - 0.12) and prefix_len >= 15
+                if not close_enough:
+                    # Secondary fallback: ratio slightly below threshold but character overlap is strong
+                    entry_char_set = entry.char_set
+                    overlap_chars = len(char_set & entry_char_set)
+                    close_enough = ratio >= (self.similarity_threshold - 0.05) and overlap_chars >= (self.min_common_chars + 10)
+                    if not close_enough:
+                        continue
 
             common_chars = len(char_set & entry.char_set)
             if common_chars < self.min_common_chars:
@@ -246,12 +312,43 @@ class SignalMessageDeduplicator:
             self.entries.popleft()
 
     @staticmethod
+    def _metadata_matches(entry_meta: tuple[str, str, str], current_meta: tuple[str, str, str]) -> bool:
+        """Return True if two metadata keys should be considered same bucket.
+
+        Key is (action, event_type, asset_norm). For most events we require exact
+        equality. For hack-like security incidents, allow asset-set intersection
+        (e.g., BAL vs. ETH,WETH,BAL) to reduce duplicate alerts from multi-asset listings.
+        """
+        action_a, type_a, asset_a = entry_meta
+        action_b, type_b, asset_b = current_meta
+
+        if action_a != action_b:
+            return False
+        if type_a != type_b:
+            return False
+
+        # For security/hack events, accept overlap on assets
+        if type_a in {"hack", "security", "scam_alert"}:
+            set_a = {t for t in asset_a.split(",") if t}
+            set_b = {t for t in asset_b.split(",") if t}
+            if not set_a and not set_b:
+                return True
+            return bool(set_a & set_b)
+
+        # Default: exact asset match
+        return asset_a == asset_b
+
+    @staticmethod
     def _normalize_text(text: str) -> str:
         normalized = unicodedata.normalize("NFKC", text or "")
         normalized = normalized.lower()
         normalized = re.sub(r"https?://\S+", "", normalized)
         normalized = re.sub(r"[0-9]+(?:\.[0-9]+)?", "", normalized)
-        normalized = re.sub(r"[，,。.!？?：:；;\"'""''()（）\[\]{}<>《》•—\-·…~`_]+", "", normalized)
+        # Drop leading source prefixes like "blockbeats：" / "lookonchain:" to avoid
+        # benign differences across channels impacting similarity
+        # Strip only very short leading source prefixes (e.g., "blockbeats：")
+        normalized = re.sub(r"^[^：:]{1,12}[：:]", "", normalized)
+        normalized = re.sub(r"""[]，,。.!？?：:；;"'"''()（）\\[{}<>《》•—·\-…~`_\-]+""", "", normalized)
         normalized = re.sub(r"\s+", "", normalized)
         return normalized
 
@@ -263,17 +360,40 @@ class SignalMessageDeduplicator:
         event_type: str,
         asset: str,
         asset_names: str,
-    ) -> Tuple[str, str, str, str, str]:
-        def _norm(value: str) -> str:
+    ) -> Tuple[str, str, str]:
+        """Normalize and compress metadata used for deduplication.
+
+        We intentionally drop direction and asset_names from the key to avoid
+        missing duplicates due to benign differences (e.g., empty vs. neutral,
+        localized names). The effective key is (action, event_type, asset).
+        """
+
+        def _norm_lower(value: str) -> str:
             normalized = unicodedata.normalize("NFKC", (value or "").strip())
             return normalized.lower()
 
+        # Normalize action: default unknown/empty to "observe"
+        action_norm = _norm_lower(action)
+        if not action_norm or action_norm in {"", "none", "unknown", "n/a", "na"}:
+            action_norm = "observe"
+
+        # Normalize event type
+        event_type_norm = _norm_lower(event_type)
+
+        # Normalize asset: uppercase codes, collapse whitespace, keep order for stability
+        raw_asset = unicodedata.normalize("NFKC", (asset or "").strip())
+        if not raw_asset:
+            asset_norm = "none"
+        else:
+            # Split by comma, normalize each token
+            tokens = [t.strip().upper() for t in raw_asset.split(",") if t.strip()]
+            # Keep stable deterministic representation
+            asset_norm = ",".join(tokens) if tokens else "none"
+
         return (
-            _norm(action),
-            _norm(direction),
-            _norm(event_type),
-            _norm(asset),
-            _norm(asset_names),
+            action_norm,
+            event_type_norm,
+            asset_norm,
         )
 
 
@@ -291,6 +411,15 @@ def contains_keywords(text: str, keywords: Set[str]) -> bool:
 
     normalized_text = _normalize_text(text)
     return any(keyword in normalized_text for keyword in keywords)
+
+
+def contains_block_keywords(text: str, block_keywords: Set[str]) -> bool:
+    """Check if text contains any block keyword (blacklist, case-insensitive, unicode-normalized)."""
+    if not block_keywords:
+        return False
+
+    normalized_text = _normalize_text(text)
+    return any(keyword in normalized_text for keyword in block_keywords)
 
 
 HIGH_IMPACT_TERMS: Set[str] = {

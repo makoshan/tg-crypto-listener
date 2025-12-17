@@ -27,6 +27,7 @@ from ..utils import (
     compute_embedding,
     compute_sha256,
     contains_keywords,
+    contains_block_keywords,
     format_forwarded_message,
 )
 
@@ -371,6 +372,18 @@ class LangGraphMessagePipeline:
         routing = state.get("routing") or RoutingState()
         content = state.get("content") or ContentState()
         raw_event = state.get("raw_event")
+
+        # Check blacklist keywords first (filter out messages containing blocked keywords)
+        if contains_block_keywords(content.original_text, deps.config.BLOCK_KEYWORDS):
+            deps.stats["filtered_out"] = deps.stats.get("filtered_out", 0) + 1
+            routing.drop_reason = "block_keyword_filter"
+            control.drop = True
+            control.status = "dropped"
+            deps.logger.debug("🚫 消息包含黑名单关键词，已过滤")
+            return {
+                "control": control,
+                "routing": routing,
+            }
 
         is_priority_kol = self._is_priority_kol(raw_event)
         if is_priority_kol:
@@ -993,6 +1006,45 @@ class LangGraphMessagePipeline:
                     "routing": routing,
                 }
 
+        # Semantic deduplication check (database) before forwarding
+        embedding_vector = state.get("embedding")
+        if (
+            embedding_vector
+            and deps.news_repository
+            and deps.db_enabled
+            and not is_priority_kol  # Skip for priority KOLs
+        ):
+            try:
+                threshold = float(getattr(deps.config, "SEMANTIC_DEDUP_THRESHOLD", 0.85))
+                time_window_hours = float(getattr(deps.config, "SEMANTIC_DEDUP_WINDOW_HOURS", 72.0))
+                similar = await deps.news_repository.check_duplicate_by_embedding(
+                    embedding=embedding_vector,
+                    threshold=threshold,
+                    time_window_hours=int(time_window_hours),
+                )
+                if similar:
+                    deps.stats["duplicates"] = deps.stats.get("duplicates", 0) + 1
+                    deps.stats["dup_embedding"] = deps.stats.get("dup_embedding", 0) + 1
+                    deps.logger.info(
+                        "🔄 语义去重命中（转发前）: event_id=%s similarity=%.3f source=%s",
+                        similar["id"],
+                        similar["similarity"],
+                        raw_event.source_name,
+                    )
+                    routing.forwarded = False
+                    routing.drop_reason = "duplicate_semantic"
+                    # Still persist but don't forward
+                    return {
+                        "control": control,
+                        "routing": routing,
+                    }
+            except Exception as exc:  # pylint: disable=broad-except
+                deps.logger.warning(
+                    "⚠️ 语义去重检查失败: source=%s error=%s",
+                    raw_event.source_name,
+                    exc,
+                )
+
         price_snapshot: Optional[Dict[str, Any]] = None
         asset_for_price = (signal_result.asset if signal_result else "") or ""
         normalized_asset = asset_for_price.strip().upper()
@@ -1135,6 +1187,12 @@ class LangGraphMessagePipeline:
         )
 
         try:
+            deps.logger.info(
+                "🗄️ 调用 persist_event: source=%s forwarded=%s signal_status=%s",
+                raw_event.source_name,
+                routing.forwarded,
+                signal_result.status if signal_result else "N/A",
+            )
             await deps.persist_event(
                 raw_event.source_name,
                 content.original_text,
@@ -1155,8 +1213,11 @@ class LangGraphMessagePipeline:
                 is_priority_kol=routing.is_priority_kol,
                 price_snapshot=price_snapshot,
             )
+            deps.logger.info("🗄️ persist_event 调用完成")
         except Exception as exc:  # pylint: disable=broad-except
             deps.logger.warning("持久化流程异常: %s", exc)
+            import traceback
+            deps.logger.debug("持久化异常详情:\n%s", traceback.format_exc())
 
         return {
             "control": control,

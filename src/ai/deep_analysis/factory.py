@@ -324,15 +324,21 @@ def create_deep_analysis_engine(
             config=config,
         )
 
-    # OpenAI Compatible API (Qwen, OpenAI, DeepSeek)
-    if provider in ["qwen", "openai", "deepseek"]:
+    # OpenAI Compatible API (Qwen, OpenAI, DeepSeek, Kimi)
+    if provider in ["qwen", "openai", "deepseek", "kimi"]:
         logger.info(f"🔧 开始初始化 {provider.upper()} 深度分析引擎...")
 
         # Get provider-specific config
         provider_cfg = deep_config.get(provider, {})
 
         # API Key
-        api_key_attr = f"{provider.upper()}_API_KEY" if provider != "qwen" else "DASHSCOPE_API_KEY"
+        if provider == "qwen":
+            api_key_attr = "DASHSCOPE_API_KEY"
+        elif provider == "kimi":
+            api_key_attr = "MOONSHOT_API_KEY"
+        else:
+            api_key_attr = f"{provider.upper()}_API_KEY"
+        
         api_key = provider_cfg.get("api_key") or getattr(config, api_key_attr, "")
         if not api_key:
             raise DeepAnalysisError(f"{provider.upper()} API key 未配置，无法启用深度分析")
@@ -342,6 +348,7 @@ def create_deep_analysis_engine(
             "qwen": "https://dashscope.aliyuncs.com/compatible-mode/v1",
             "openai": "https://api.openai.com/v1",
             "deepseek": "https://api.deepseek.com/v1",
+            "kimi": "https://api.moonshot.cn/v1",
         }
         base_url_attr = f"{provider.upper()}_BASE_URL"
         base_url = provider_cfg.get("base_url") or getattr(config, base_url_attr, base_url_map[provider])
@@ -351,6 +358,7 @@ def create_deep_analysis_engine(
             "qwen": "qwen-plus",
             "openai": "gpt-4-turbo",
             "deepseek": "deepseek-chat",
+            "kimi": "kimi-k2-turbo-preview",
         }
         model_attr = f"{provider.upper()}_DEEP_MODEL"
         model = provider_cfg.get("model") or getattr(config, model_attr, model_map[provider])
