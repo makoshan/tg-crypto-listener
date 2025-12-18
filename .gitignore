@@ -20,6 +20,31 @@ logs/
 # Telethon session
 session/
 
+# Runtime memories / local state
+memories/
+
+# Local caches / temp
+.cache/
+.pytest_cache/
+.tmp/
+.claude/
+
+# uv / tooling caches
+.uv*/
+.uv-cache*/
+.uv_cache*/
+.uvcache*/
+.uvtmp*/
+.uvtools*/
+.uv-tool*/
+.uv_tool*/
+.uv-tools*/
+.uv_tools*/
+.uv-home*/
+.uv_home*/
+.uv-data*/
+.uv_data*/
+
 # Node.js
 node_modules/
 .npm/

@@ -25,7 +25,7 @@ DEEP_ANALYSIS_ENABLED=true
 DEEP_ANALYSIS_PROVIDER=kimi
 
 # Kimi API 配置（使用你提供的 API key）
-MOONSHOT_API_KEY=sk-GMkkv7YuGUR1n8Yh4y6dPW1vvPvMfW3pzuKejJxSkJICl327
+MOONSHOT_API_KEY=sk-REPLACE_ME
 MOONSHOT_BASE_URL=https://api.moonshot.cn/v1
 KIMI_DEEP_MODEL=kimi-k2-turbo-preview
 
